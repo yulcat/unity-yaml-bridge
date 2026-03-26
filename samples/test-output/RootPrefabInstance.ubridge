@@ -1,0 +1,273 @@
+# ubridge v1 | variant | base-guid:1f8fbf0ce1db62d40a7badbbf65dec4d
+--- STRUCTURE
+(variant of 1f8fbf0ce1db62d40a7badbbf65dec4d)
+--- DETAILS
+
+[&1563025524782122625]
+m_Controller = {9100000, bae46526598a3644984895fcd0482fee, 2}
+
+[&2163799987917362756]
+m_SortingLayer = 0
+
+[&3272503143686945590]
+m_SortingLayer = 0
+
+[&3600524388661024867:GameObject]
+m_IsActive = 1
+
+[DungeonClearReward]
+m_Name = DungeonClearReward
+
+[&7600539325018814728]
+m_SortingLayer = 0
+
+[&8395409843983819010]
+m_SortingLayer = 0
+
+[Btns:RectTransform]
+anchor = (0, 0)-(1, 0)
+size = (0, 628)
+pivot = (0.5, 0)
+
+[Btns:CanvasGroup]
+m_Alpha = 1
+m_Interactable = 1
+m_BlocksRaycasts = 1
+m_IgnoreParentGroups = 0
+
+[NoStage:RectTransform]
+pos = (0, 494)
+anchor = (0, 0)-(1, 0)
+size = (0, 100)
+pivot = (0.5, 0)
+
+[NoStage:Text]
+m_Color = (0, 0, 0, 0.29803923)
+m_RaycastPadding = (0, 0, 0, 0)
+m_Maskable = 1
+m_Sprite = {21300000, d53898fb58cb45e4796d0969725b962f}
+m_Type = 0
+m_FillCenter = 1
+m_PixelsPerUnitMultiplier = 1
+
+[NoStage:0921f83142d681c4aa95961733cf8fcb]
+StateDefs:
+  - Active = 0
+  - Active = 1
+_target = ->NoStage
+
+[Text:RectTransform]
+pos = (0, 4)
+anchor = (0.5, 0)-(0.5, 0)
+size = (995.6558, 90.3548)
+pivot = (0.5, 0)
+
+[Text:5f7201a12d95ffc409449d95f23cf332]
+m_Color = (0.7924528, 0.6284607, 0.433, 1)
+m_RaycastPadding = (0, 0, 0, 0)
+m_Maskable = 1
+m_FontData:
+  m_Font = {12800000, 9d2db129a37804fe5afe7165acdcf0f4}
+  m_FontSize = 32
+  m_FontStyle = 0
+  m_BestFit = 1
+  m_MinSize = 22
+  m_MaxSize = 32
+  m_Alignment = 4
+  m_AlignByGeometry = 0
+  m_RichText = 1
+  m_HorizontalOverflow = 0
+  m_VerticalOverflow = 0
+  m_LineSpacing = 1
+m_Text = "\uB2E4\uC74C \uC2A4\uD14C\uC774\uC9C0\uAC00 \uC5C6\uC2B5\uB2C8\uB2E4."
+
+[Text:0848bff101191904ead4bb831f7084db]
+m_BlurFactor = 1
+m_Style = 1
+m_EffectColor = (0, 0, 0, 0.29803923)
+m_EffectDistance = (0, -3)
+m_UseGraphicAlpha = 1
+
+[Text:04920f53550349ebb4fb322ed19a5651]
+Key:
+  _value = DailyDungeon.ClearPopup.LastStageStr
+
+[TextBg:RectTransform]
+pos = (0, 190)
+anchor = (0, 0)-(1, 0)
+size = (0, 100)
+pivot = (0.5, 0)
+
+[TextBg:Text]
+m_Color = (0, 0, 0, 0.29803923)
+m_RaycastPadding = (0, 0, 0, 0)
+m_Maskable = 1
+m_Sprite = {21300000, d53898fb58cb45e4796d0969725b962f}
+m_Type = 0
+m_FillCenter = 1
+m_PixelsPerUnitMultiplier = 1
+
+[Text:RectTransform]
+pos = (0, 4)
+anchor = (0.5, 0)-(0.5, 0)
+size = (995.6558, 90.3548)
+pivot = (0.5, 0)
+
+[Text:5f7201a12d95ffc409449d95f23cf332]
+m_Color = (1, 1, 1, 1)
+m_RaycastPadding = (0, 0, 0, 0)
+m_Maskable = 1
+m_FontData:
+  m_Font = {12800000, 9d2db129a37804fe5afe7165acdcf0f4}
+  m_FontSize = 32
+  m_FontStyle = 0
+  m_BestFit = 1
+  m_MinSize = 22
+  m_MaxSize = 32
+  m_Alignment = 4
+  m_AlignByGeometry = 0
+  m_RichText = 1
+  m_HorizontalOverflow = 0
+  m_VerticalOverflow = 0
+  m_LineSpacing = 1
+m_Text = "<color=#FEF41F>5\uCD08 </color>\uD6C4 \uB2E4\uC74C \uB2E8\uACC4\uC5D0
+    \uB3C4\uC804\uD569\uB2C8\uB2E4."
+
+[Text:4d0390bd8b8ffd640b34fe25065ff1df]
+updateType = 0
+isSpeedBased = 0
+hasOnStart = 0
+hasOnPlay = 0
+hasOnUpdate = 0
+hasOnStepComplete = 0
+hasOnComplete = 0
+hasOnTweenCreated = 0
+hasOnRewind = 0
+onStart:
+  m_PersistentCalls:
+    m_Calls = []
+onPlay:
+  m_PersistentCalls:
+    m_Calls = []
+onUpdate:
+  m_PersistentCalls:
+    m_Calls = []
+onStepComplete:
+  m_PersistentCalls:
+    m_Calls = []
+onComplete:
+  m_PersistentCalls:
+    m_Calls = []
+onTweenCreated:
+  m_PersistentCalls:
+    m_Calls = []
+onRewind:
+  m_PersistentCalls:
+    m_Calls = []
+targetIsSelf = 1
+targetGO = {0}
+tweenTargetIsTargetGO = 1
+delay = 0
+duration = 1
+easeType = 5
+easeCurve:
+  serializedVersion = 2
+  m_Curve:
+    - serializedVersion = 3
+      time = 0
+      value = 0
+      inSlope = 0
+      outSlope = 0
+      tangentMode = 0
+      weightedMode = 0
+      inWeight = 0
+      outWeight = 0
+    - serializedVersion = 3
+      time = 1
+      value = 1
+      inSlope = 0
+      outSlope = 0
+      tangentMode = 0
+      weightedMode = 0
+      inWeight = 0
+      outWeight = 0
+  m_PreInfinity = 2
+  m_PostInfinity = 2
+  m_RotationOrder = 4
+loopType = 1
+loops = -1
+id = 
+isRelative = 0
+isFrom = 0
+isIndependentUpdate = 0
+autoKill = 1
+autoGenerate = 1
+isActive = 1
+isValid = 1
+target = {8244468080850333906}
+animationType = 7
+targetType = 10
+forcedTargetType = 0
+autoPlay = 1
+useTargetAsV3 = 0
+endValueFloat = 0.7
+endValueV3 = (0, 0, 0)
+endValueV2 = (0, 0)
+endValueColor = (1, 1, 1, 1)
+endValueString = 
+endValueRect:
+  serializedVersion = 2
+  x = 0
+  y = 0
+  width = 0
+  height = 0
+endValueTransform = {0}
+optionalBool0 = 0
+optionalBool1 = 0
+optionalFloat0 = 0
+optionalInt0 = 0
+optionalRotationMode = 0
+optionalScrambleMode = 0
+optionalShakeRandomnessMode = 0
+optionalString = 
+--- REFS
+__instance = 4237197264789859805
+&450227173188993597 = 450227173188993597
+&1563025524782122625 = 1563025524782122625
+&1955804617911451082 = 1955804617911451082
+&2163799987917362756 = 2163799987917362756
+&2848733249613514507 = 2848733249613514507
+&3272503143686945590 = 3272503143686945590
+&3600524388661024867:GameObject = 3600524388661024867
+&5214766059946069885 = 5214766059946069885
+DungeonClearReward = 5877011176819543437
+&6229477804368418666 = 6229477804368418666
+&6969121205444743744 = 6969121205444743744
+&7600539325018814728 = 7600539325018814728
+&7637042464082841937 = 7637042464082841937
+&8395409843983819010 = 8395409843983819010
+&8738062381939999074 = 8738062381939999074
+Btns = 2215002142782984192
+Btns:RectTransform = 7962103618101709719
+Btns:CanvasGroup = 5305909328648906312
+BTN_130_Price:RectTransform = 8398122087667263935
+BTN_130_Price:__instance = 2326492243139137140
+NoStage = 2750547968636631425
+NoStage:RectTransform = 4097070970710538907
+NoStage:Text = 5315210203611168965
+NoStage:0921f83142d681c4aa95961733cf8fcb = 1681919304549113947
+Text = 1353468596463863472
+Text:RectTransform = 6205586103529131598
+Text:5f7201a12d95ffc409449d95f23cf332 = 3730931017211007990
+Text:0848bff101191904ead4bb831f7084db = 1521337304991205417
+Text:04920f53550349ebb4fb322ed19a5651 = 6598245898151355419
+TextBg = 4501916156280478017
+TextBg:RectTransform = 4909629925618063217
+TextBg:Text = 4822371324054944280
+Text = 3984327785399796732
+Text:RectTransform = 7762629750005236276
+Text:5f7201a12d95ffc409449d95f23cf332 = 8244468080850333906
+Text:4d0390bd8b8ffd640b34fe25065ff1df = 8427259870183354124
+CloseCount = 1883121903986699942
+CloseCount:RectTransform = 6470650642202529631
+CloseCount:__instance = 3467994722580735237

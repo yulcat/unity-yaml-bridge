@@ -24,12 +24,12 @@ pos = (0.0049973, -0.011566)
 size = (529, 626)
 
 [_Card_Template:CameraFacingBillboard]
-m_Camera = null
+m_Camera = {0}
 
 [_Card_Template:CardBehaviour]
-cardData = null
-cardDisplaysToHideAndShow = [{2100659746680659327}, {2276444076082895750}, {815790438873356520}]
-medalDisplayUI = {6431933051627347590}
+cardData = {0}
+cardDisplaysToHideAndShow = [->Frame, ->_Header_Text, ->Paragraph_Text]
+medalDisplayUI = ->small circle:MedalDisplayUI
 
 [Frame:RectTransform]
 anchor = (0, 0)-(1, 1)
@@ -55,3 +55,5 @@ Paragraph_Text:RectTransform = 7279466503550670669
 Paragraph_Text:__instance = 1520847364777890966
 small circle:RectTransform = 7871776933903133687
 small circle:__instance = 6409668946328506549
+small circle:ParticleSystem = 4413684578389200477
+small circle:MedalDisplayUI = 6431933051627347590

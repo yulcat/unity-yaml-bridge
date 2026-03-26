@@ -242,6 +242,7 @@ testIdentityRoundtrip(path.join(SAMPLES_DIR, 'prefabs', 'Button.prefab'), 'Simpl
 testIdentityRoundtrip(path.join(SAMPLES_DIR, 'prefabs', '_Card_Template.prefab'), 'Complex Prefab (_Card_Template)');
 testIdentityRoundtrip(path.join(SAMPLES_DIR, 'variants', 'Card_Explorer_Variant.prefab'), 'Variant (Card_Explorer)');
 testIdentityRoundtrip(path.join(SAMPLES_DIR, 'variants', 'Ellen_Variant.prefab'), 'Variant (Ellen)');
+testIdentityRoundtrip(path.join(SAMPLES_DIR, 'prefabs', 'RootPrefabInstance.prefab'), 'Variant with added objects (RootPrefabInstance)');
 // Edit tests
 testVariantEdit(path.join(SAMPLES_DIR, 'variants', 'Ellen_Variant.prefab'), 'Ellen Variant name edit');
 testVariantEdit(path.join(SAMPLES_DIR, 'variants', 'Card_Explorer_Variant.prefab'), 'Card Explorer Variant name edit');

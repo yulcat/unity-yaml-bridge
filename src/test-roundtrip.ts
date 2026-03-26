@@ -108,4 +108,7 @@ testFile(path.join(SAMPLES_DIR, 'variants', 'Card_Explorer_Variant.prefab'), 'Pr
 // Test 4: Ellen variant (3D character variant)
 testFile(path.join(SAMPLES_DIR, 'variants', 'Ellen_Variant.prefab'), 'Prefab Variant (Ellen)');
 
+// Test 5: Variant with root PrefabInstance + added objects
+testFile(path.join(SAMPLES_DIR, 'prefabs', 'RootPrefabInstance.prefab'), 'Variant with added objects (RootPrefabInstance)');
+
 console.log('\n\nAll tests complete.');

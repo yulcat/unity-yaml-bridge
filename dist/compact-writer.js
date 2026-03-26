@@ -1091,6 +1091,33 @@ function writeVariantCompact(file, lines, resolver) {
     for (const mod of mainInstance.modifications) {
         modifiedTargets.add(String(mod.target.fileID));
     }
+    // Build added objects map: base transform fileID → [added GO nodes]
+    const addedObjectsMap = new Map();
+    if (file.hierarchy) {
+        const addedRoots = file.hierarchy.name === '__added_root__'
+            ? file.hierarchy.children
+            : [file.hierarchy];
+        const docById = new Map();
+        for (const doc of file.documents) {
+            docById.set(doc.fileId, doc);
+        }
+        for (const addedRoot of addedRoots) {
+            // Find this GO's transform to determine attachment point
+            const transformDoc = file.documents.find(d => !d.stripped && (d.typeId === 4 || d.typeId === 224) &&
+                String(d.properties.m_GameObject?.fileID) === addedRoot.fileId);
+            if (!transformDoc)
+                continue;
+            const fatherId = String(transformDoc.properties.m_Father?.fileID);
+            const strippedParent = docById.get(fatherId);
+            if (!strippedParent || !strippedParent.stripped)
+                continue;
+            const baseTransformId = String(strippedParent.properties.m_CorrespondingSourceObject?.fileID);
+            if (!addedObjectsMap.has(baseTransformId)) {
+                addedObjectsMap.set(baseTransformId, []);
+            }
+            addedObjectsMap.get(baseTransformId).push(addedRoot);
+        }
+    }
     // Structure section
     lines.push('--- STRUCTURE');
     if (baseHierarchy && baseMap) {
@@ -1102,7 +1129,7 @@ function writeVariantCompact(file, lines, resolver) {
                 visited: new Set(),
             };
         }
-        writeVariantStructureTree(baseHierarchy, lines, '', true, modifiedTargets, baseMap, resolver, variantExpansionCtx);
+        writeVariantStructureTree(baseHierarchy, lines, '', true, modifiedTargets, baseMap, resolver, variantExpansionCtx, addedObjectsMap);
     }
     else {
         lines.push(`(variant of ${baseGuid || 'unknown'})`);
@@ -1110,14 +1137,33 @@ function writeVariantCompact(file, lines, resolver) {
     // Details section — group modifications by resolved path
     lines.push('--- DETAILS');
     writeVariantDetails(mainInstance, lines, baseMap, resolver, nestedResolved);
+    // Write details for added objects
+    if (file.hierarchy) {
+        const addedRoots = file.hierarchy.name === '__added_root__'
+            ? file.hierarchy.children
+            : [file.hierarchy];
+        const refMap = buildInternalRefMap(file, resolver);
+        for (const addedRoot of addedRoots) {
+            writeDetails(addedRoot, lines, '', resolver, true, refMap);
+        }
+    }
     // REFS section
     lines.push('--- REFS');
     lines.push(`__instance = ${mainInstance.fileId}`);
     writeVariantRefs(mainInstance, lines, baseMap, nestedResolved);
+    // Write refs for added objects
+    if (file.hierarchy) {
+        const addedRoots = file.hierarchy.name === '__added_root__'
+            ? file.hierarchy.children
+            : [file.hierarchy];
+        for (const addedRoot of addedRoots) {
+            writeRefsSection(addedRoot, lines, resolver);
+        }
+    }
     return lines.join('\n') + '\n';
 }
 /** Write the variant structure tree from the base prefab hierarchy with modification markers */
-function writeVariantStructureTree(node, lines, prefix, isRoot, modifiedTargets, baseMap, resolver, expansionCtx) {
+function writeVariantStructureTree(node, lines, prefix, isRoot, modifiedTargets, baseMap, resolver, expansionCtx, addedObjectsMap) {
     const componentNames = buildComponentNames(node.components, resolver, modifiedTargets);
     let line = node.name;
     if (node.nestedPrefab) {
@@ -1131,9 +1177,14 @@ function writeVariantStructureTree(node, lines, prefix, isRoot, modifiedTargets,
     if (isRoot) {
         lines.push(line);
     }
+    // Collect added objects for this node's transform
+    const addedNodes = addedObjectsMap?.get(node.transform.fileId) || [];
+    const totalChildren = node.children.length + addedNodes.length;
+    let childIdx = 0;
     for (let i = 0; i < node.children.length; i++) {
         const child = node.children[i];
-        const isLast = i === node.children.length - 1;
+        childIdx++;
+        const isLast = childIdx === totalChildren;
         const connector = isLast ? '└─' : '├─';
         const childPrefix = isLast ? '   ' : '│  ';
         // Try expanding nested prefab
@@ -1160,7 +1211,7 @@ function writeVariantStructureTree(node, lines, prefix, isRoot, modifiedTargets,
                         prefabInstances: expanded.sourcePrefabInstances,
                         visited: expansionCtx.visited,
                     };
-                    writeVariantStructureTree(sourceRoot, lines, prefix + childPrefix, false, mergedMods, baseMap, resolver, sourceCtx);
+                    writeVariantStructureTree(sourceRoot, lines, prefix + childPrefix, false, mergedMods, baseMap, resolver, sourceCtx, addedObjectsMap);
                 }
                 continue;
             }
@@ -1176,7 +1227,50 @@ function writeVariantStructureTree(node, lines, prefix, isRoot, modifiedTargets,
             childLine += ` [${childComps.join(', ')}]`;
         lines.push(childLine);
         if (child.children.length > 0) {
-            writeVariantStructureTree(child, lines, prefix + childPrefix, false, modifiedTargets, baseMap, resolver, expansionCtx);
+            writeVariantStructureTree(child, lines, prefix + childPrefix, false, modifiedTargets, baseMap, resolver, expansionCtx, addedObjectsMap);
+        }
+    }
+    // Write added objects with + prefix
+    for (let i = 0; i < addedNodes.length; i++) {
+        const added = addedNodes[i];
+        childIdx++;
+        const isLast = childIdx === totalChildren;
+        const connector = isLast ? '└─' : '├─';
+        const childPrefix = isLast ? '   ' : '│  ';
+        const addedComps = buildComponentNames(added.components, resolver);
+        let childLine = `${prefix}${connector} +${added.name}`;
+        if (added.nestedPrefab) {
+            const sourceName = resolveSourceName(added, resolver);
+            if (sourceName)
+                childLine += ` {${sourceName}}`;
+        }
+        if (addedComps.length > 0)
+            childLine += ` [${addedComps.join(', ')}]`;
+        lines.push(childLine);
+        if (added.children.length > 0) {
+            writeAddedObjectsTree(added, lines, prefix + childPrefix, resolver);
+        }
+    }
+}
+/** Write the structure tree for added objects (all descendants get + prefix) */
+function writeAddedObjectsTree(node, lines, prefix, resolver) {
+    for (let i = 0; i < node.children.length; i++) {
+        const child = node.children[i];
+        const isLast = i === node.children.length - 1;
+        const connector = isLast ? '└─' : '├─';
+        const childPrefix = isLast ? '   ' : '│  ';
+        const compNames = buildComponentNames(child.components, resolver);
+        let childLine = `${prefix}${connector} +${child.name}`;
+        if (child.nestedPrefab) {
+            const sourceName = resolveSourceName(child, resolver);
+            if (sourceName)
+                childLine += ` {${sourceName}}`;
+        }
+        if (compNames.length > 0)
+            childLine += ` [${compNames.join(', ')}]`;
+        lines.push(childLine);
+        if (child.children.length > 0) {
+            writeAddedObjectsTree(child, lines, prefix + childPrefix, resolver);
         }
     }
 }

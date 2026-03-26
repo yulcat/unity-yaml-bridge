@@ -22,10 +22,14 @@ function parseUnityYaml(content) {
     let hierarchy;
     let variantSource;
     if (fileType === 'variant') {
-        // Pure variant: only PrefabInstance document(s)
         const mainInstance = prefabInstances.find(pi => String(pi.transformParent.fileID) === '0');
         if (mainInstance) {
             variantSource = mainInstance.sourcePrefab;
+        }
+        // Check for added (non-stripped, non-PI) documents — variant with added objects
+        const hasAddedObjects = parsed.some(d => !d.stripped && d.typeId !== 1001);
+        if (hasAddedObjects) {
+            hierarchy = buildHierarchy(parsed, { findStrippedRoots: true });
         }
     }
     else {
@@ -613,15 +617,15 @@ function detectFileType(docs, prefabInstances) {
     const hasSceneObjects = docs.some(d => [29, 104, 157, 196].includes(d.typeId));
     if (hasSceneObjects)
         return 'scene';
-    // Pure variant: only PrefabInstance documents and stripped objects
-    const nonStrippedNonPrefab = docs.filter(d => !d.stripped && d.typeId !== 1001);
-    if (nonStrippedNonPrefab.length === 0 && prefabInstances.length > 0) {
+    // Variant: has a root PrefabInstance (transformParent == 0).
+    // This includes both pure variants AND variants with added objects.
+    const hasRootPI = prefabInstances.some(pi => String(pi.transformParent.fileID) === '0');
+    if (hasRootPI)
         return 'variant';
-    }
     return 'prefab';
 }
 /** Build the GameObject hierarchy from parsed documents */
-function buildHierarchy(docs) {
+function buildHierarchy(docs, options) {
     // Index documents by fileId
     const byId = new Map();
     for (const doc of docs) {
@@ -810,7 +814,20 @@ function buildHierarchy(docs) {
     }
     // Find root GameObjects
     const roots = [];
-    if (explicitRootId) {
+    if (options?.findStrippedRoots) {
+        // Variant added objects: roots are GOs whose transform m_Father points to a stripped transform
+        const strippedTransformIds = new Set(docs.filter(d => d.stripped && (d.typeId === 4 || d.typeId === 224)).map(d => d.fileId));
+        for (const go of gameObjects) {
+            const transformDoc = goToTransform.get(go.fileId);
+            if (transformDoc) {
+                const father = transformDoc.properties.m_Father;
+                if (father && strippedTransformIds.has(String(father.fileID))) {
+                    roots.push(buildNode(go));
+                }
+            }
+        }
+    }
+    else if (explicitRootId) {
         // Old format: explicit root
         const rootGo = byId.get(explicitRootId);
         if (rootGo) {
@@ -832,10 +849,10 @@ function buildHierarchy(docs) {
     // For prefabs, there should be exactly one root
     if (roots.length === 1)
         return roots[0];
-    // For scenes or multiple roots, create a virtual root
+    // For scenes or multiple roots / multiple added roots, create a virtual root
     if (roots.length > 1) {
         return {
-            name: '__scene_root__',
+            name: '__added_root__',
             fileId: '0',
             components: [],
             transform: { fileId: '0', isRect: false, properties: {} },

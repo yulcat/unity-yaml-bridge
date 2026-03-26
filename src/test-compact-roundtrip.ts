@@ -255,6 +255,11 @@ testIdentityRoundtrip(
   'Variant (Ellen)'
 );
 
+testIdentityRoundtrip(
+  path.join(SAMPLES_DIR, 'prefabs', 'RootPrefabInstance.prefab'),
+  'Variant with added objects (RootPrefabInstance)'
+);
+
 // Edit tests
 testVariantEdit(
   path.join(SAMPLES_DIR, 'variants', 'Ellen_Variant.prefab'),

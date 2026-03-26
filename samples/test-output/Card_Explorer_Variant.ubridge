@@ -37,7 +37,7 @@ m_Sprite = {21300000, 54141271f16af47a1be81e646cda9698}
 m_Color.a = -0.044181824
 
 [_Card_Template:CardBehaviour]
-cardData = {11400000, 1fe163de0e6ff604d9ba3bd3b6228a5b}
+cardData = {11400000, 1fe163de0e6ff604d9ba3bd3b6228a5b, 2}
 
 [small circle:MedalDisplayUI]
 enableAlphaFading = 1

@@ -520,6 +520,72 @@ console.log('='.repeat(60));
 }
 
 // ============================================================
+// Test 11: Variant with added objects (RootPrefabInstance)
+// ============================================================
+
+console.log('\n' + '='.repeat(60));
+console.log('TEST: Variant with added objects (RootPrefabInstance)');
+console.log('='.repeat(60));
+
+{
+  const content = fs.readFileSync(path.join(SAMPLES_DIR, 'prefabs', 'RootPrefabInstance.prefab'), 'utf-8');
+  const ast = parseUnityYaml(content);
+
+  // Should be detected as variant
+  if (ast.type === 'variant') {
+    pass('Detected as variant (not prefab)');
+  } else {
+    fail('File type detection', `Expected variant, got ${ast.type}`);
+  }
+
+  // Should have variantSource
+  if (ast.variantSource?.guid === '1f8fbf0ce1db62d40a7badbbf65dec4d') {
+    pass('variantSource GUID correct');
+  } else {
+    fail('variantSource GUID', `Got: ${ast.variantSource?.guid}`);
+  }
+
+  // Should have hierarchy (added objects)
+  if (ast.hierarchy) {
+    pass(`Hierarchy present: ${ast.hierarchy.name}`);
+  } else {
+    fail('Hierarchy present', 'hierarchy is undefined');
+  }
+
+  // Compact output should be non-empty (has STRUCTURE + DETAILS + REFS)
+  const compactStr = writeCompact(ast, { guidResolver: resolver });
+  const hasStructure = compactStr.includes('--- STRUCTURE');
+  const hasDetails = compactStr.includes('--- DETAILS');
+  const hasRefs = compactStr.includes('--- REFS');
+  if (hasStructure && hasDetails && hasRefs) {
+    pass('Compact output has all sections');
+  } else {
+    fail('Compact sections', `STRUCTURE:${hasStructure} DETAILS:${hasDetails} REFS:${hasRefs}`);
+  }
+
+  // Added GOs should appear in compact output
+  if (compactStr.includes('Btns') && compactStr.includes('NoStage') && compactStr.includes('Text')) {
+    pass('Added GOs appear in compact output');
+  } else {
+    fail('Added GOs in output', 'Missing Btns/NoStage/Text');
+  }
+
+  // YAML roundtrip
+  const output = writeUnityYaml(ast);
+  const origLines = content.split('\n').map(l => l.trimEnd());
+  const outLines = output.split('\n').map(l => l.trimEnd());
+  let diffs = 0;
+  for (let i = 0; i < Math.max(origLines.length, outLines.length); i++) {
+    if ((origLines[i] || '') !== (outLines[i] || '')) diffs++;
+  }
+  if (diffs === 0) {
+    pass(`YAML roundtrip: 0 diffs (${origLines.length} lines)`);
+  } else {
+    fail(`YAML roundtrip: ${diffs} diffs`);
+  }
+}
+
+// ============================================================
 // Summary
 // ============================================================
 

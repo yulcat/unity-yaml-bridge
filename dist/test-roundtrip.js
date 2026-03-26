@@ -125,5 +125,7 @@ testFile(path.join(SAMPLES_DIR, 'prefabs', '_Card_Template.prefab'), 'Complex Pr
 testFile(path.join(SAMPLES_DIR, 'variants', 'Card_Explorer_Variant.prefab'), 'Prefab Variant (Card_Explorer)');
 // Test 4: Ellen variant (3D character variant)
 testFile(path.join(SAMPLES_DIR, 'variants', 'Ellen_Variant.prefab'), 'Prefab Variant (Ellen)');
+// Test 5: Variant with root PrefabInstance + added objects
+testFile(path.join(SAMPLES_DIR, 'prefabs', 'RootPrefabInstance.prefab'), 'Variant with added objects (RootPrefabInstance)');
 console.log('\n\nAll tests complete.');
 //# sourceMappingURL=test-roundtrip.js.map

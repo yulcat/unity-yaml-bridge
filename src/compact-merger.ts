@@ -78,7 +78,7 @@ export function mergeCompactChanges(original: UnityFile, compact: CompactFile): 
 // ============================================================
 
 /** Merge sections for a regular prefab */
-function mergePrefabSections(file: UnityFile, sections: CompactSection[], refs: Map<string, string>): void {
+function mergePrefabSections(file: UnityFile, sections: CompactSection[], refs: Map<string, string[]>): void {
   if (!file.hierarchy) return;
 
   // Build a map: document fileId → document (for fast lookup)
@@ -91,48 +91,51 @@ function mergePrefabSections(file: UnityFile, sections: CompactSection[], refs: 
   const goMap = new Map<string, GameObjectNode[]>();
   flattenHierarchy(file.hierarchy, goMap);
 
+  // Track which REFS fileIDs have been used (for duplicate key handling)
+  const usedRefs = new Set<string>();
+
   for (const section of sections) {
     const goPath = section.goPath;
     const compType = section.componentType;
     const refsKey = compType ? `${goPath}:${compType}` : goPath;
 
-    // Try REFS lookup first for precise matching
-    const refsFileId = refs.get(refsKey);
-    if (refsFileId) {
-      const doc = docMap.get(refsFileId);
-      if (doc) {
-        if (compType === 'Transform' || compType === 'RectTransform') {
-          applyTransformProperties(section.properties, doc, compType === 'RectTransform');
-        } else {
-          applyComponentProperties(section.properties, doc);
+    // Try REFS lookup — find the best matching document for this section
+    const refsFileIds = refs.get(refsKey);
+    if (refsFileIds && refsFileIds.length > 0) {
+      const refsFileId = refsFileIds.length === 1
+        ? refsFileIds[0]
+        : findBestRefsMatch(refsFileIds, section, docMap, usedRefs);
+      if (refsFileId) {
+        usedRefs.add(refsFileId);
+        const doc = docMap.get(refsFileId);
+        if (doc) {
+          if (compType === 'Transform' || compType === 'RectTransform') {
+            applyTransformProperties(section.properties, doc, compType === 'RectTransform');
+          } else {
+            applyComponentProperties(section.properties, doc);
+          }
+          continue;
         }
-        continue;
       }
     }
 
     // Fallback: name-based matching
     const candidates = goMap.get(goPath) || [];
     if (candidates.length === 0) {
-      // New GO — check if this section represents a new element
-      // For now, skip (new element creation handled separately)
       continue;
     }
 
-    // Use the first match (name collision handling would use path/index)
     const go = candidates[0];
 
     if (compType === 'Transform' || compType === 'RectTransform') {
-      // Transform section — apply to the transform document
       const transformDoc = docMap.get(go.transform.fileId);
       if (transformDoc) {
         applyTransformProperties(section.properties, transformDoc, compType === 'RectTransform');
       }
     } else {
-      // Component section — find the matching component
       const comp = go.components.find(c => {
         if (c.typeName === compType) return true;
         if (c.scriptName === compType) return true;
-        // For MonoBehaviour with GUID name
         if (c.scriptGuid === compType) return true;
         return false;
       });
@@ -145,6 +148,88 @@ function mergePrefabSections(file: UnityFile, sections: CompactSection[], refs: 
       }
     }
   }
+}
+
+/**
+ * Find the best matching REFS fileID for a section when there are duplicates.
+ * Compares section properties against each candidate document's existing values.
+ * For a zero-edit roundtrip, the correct document already has matching values.
+ */
+function findBestRefsMatch(
+  fileIds: string[],
+  section: CompactSection,
+  docMap: Map<string, UnityDocument>,
+  usedRefs: Set<string>
+): string | undefined {
+  const unused = fileIds.filter(id => !usedRefs.has(id));
+  if (unused.length === 0) return fileIds[0]; // All used, fallback to first
+  if (unused.length === 1) return unused[0];
+
+  // Score each candidate by how many section properties match the document's values
+  let bestId = unused[0];
+  let bestScore = -1;
+
+  for (const id of unused) {
+    const doc = docMap.get(id);
+    if (!doc) continue;
+
+    let score = 0;
+    for (const prop of section.properties) {
+      if (typeof prop.value !== 'string') continue;
+      const parsed = parseCompactValue(prop.value);
+      const docVal = getDocValueForProp(prop.key, doc.properties, section.componentType);
+      if (docVal !== undefined && valuesMatch(parsed, docVal)) {
+        score++;
+      }
+    }
+    if (score > bestScore) {
+      bestScore = score;
+      bestId = id;
+    }
+  }
+
+  return bestId;
+}
+
+/** Get the document property value for a compact property key (handles transform shorthands) */
+function getDocValueForProp(key: string, props: Record<string, any>, compType: string): any {
+  // Transform shorthand mappings
+  if (compType === 'RectTransform' || compType === 'Transform') {
+    switch (key) {
+      case 'pos': return compType === 'RectTransform' ? props.m_AnchoredPosition : props.m_LocalPosition;
+      case 'rot': return props.m_LocalRotation;
+      case 'scale': return props.m_LocalScale;
+      case 'size': return props.m_SizeDelta;
+      case 'pivot': return props.m_Pivot;
+      case 'anchor': {
+        const min = props.m_AnchorMin;
+        const max = props.m_AnchorMax;
+        return min && max ? { min, max } : undefined;
+      }
+    }
+  }
+  return props[key];
+}
+
+/** Check if two values match (deep comparison for vectors, shallow for scalars) */
+function valuesMatch(a: any, b: any): boolean {
+  if (a === b) return true;
+  if (a == null || b == null) return false;
+  if (typeof a === 'object' && typeof b === 'object') {
+    // For anchor: {min, max} comparison
+    if ('min' in a && 'min' in b) {
+      return valuesMatch(a.min, b.min) && valuesMatch(a.max, b.max);
+    }
+    // Vector/color comparison: compare values by position
+    const aKeys = Object.keys(a).filter(k => !k.startsWith('__'));
+    const bKeys = Object.keys(b).filter(k => !k.startsWith('__'));
+    if (aKeys.length !== bKeys.length) return false;
+    for (let i = 0; i < aKeys.length; i++) {
+      if (String(a[aKeys[i]]) !== String(b[bKeys[i]])) return false;
+    }
+    return true;
+  }
+  return String(a) === String(b);
 }
 
 /** Flatten hierarchy into a map of name → nodes */
@@ -354,7 +439,7 @@ function remapWithOriginal(parsed: any, original: any): any {
 // ============================================================
 
 /** Merge sections for a variant file */
-function mergeVariantSections(file: UnityFile, sections: CompactSection[], refs: Map<string, string>): void {
+function mergeVariantSections(file: UnityFile, sections: CompactSection[], refs: Map<string, string[]>): void {
   // Find the main PrefabInstance (the one with transformParent = {fileID: 0})
   const mainInstance = file.prefabInstances.find(pi =>
     String(pi.transformParent.fileID) === '0'
@@ -372,11 +457,16 @@ function mergeVariantSections(file: UnityFile, sections: CompactSection[], refs:
 
   // Build reverse REFS map: fileID → key (for lookup)
   const reverseRefs = new Map<string, string>();
-  for (const [key, fileId] of refs) {
+  for (const [key, fileIds] of refs) {
     if (key !== '__instance') {
-      reverseRefs.set(fileId, key);
+      for (const fileId of fileIds) {
+        reverseRefs.set(fileId, key);
+      }
     }
   }
+
+  // Track per-key index for cycling through duplicate REFS entries
+  const refsIndexMap = new Map<string, number>();
 
   for (const section of sections) {
     // Resolve target fileID from REFS or section header
@@ -390,7 +480,12 @@ function mergeVariantSections(file: UnityFile, sections: CompactSection[], refs:
       const refsKey = section.componentType
         ? `${section.goPath}:${section.componentType}`
         : section.goPath;
-      targetFileId = refs.get(refsKey);
+      const refsFileIds = refs.get(refsKey);
+      if (refsFileIds && refsFileIds.length > 0) {
+        const idx = refsIndexMap.get(refsKey) || 0;
+        targetFileId = refsFileIds[idx];
+        refsIndexMap.set(refsKey, idx + 1);
+      }
     }
 
     if (!targetFileId) continue;

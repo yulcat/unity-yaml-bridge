@@ -12,8 +12,8 @@ export interface CompactFile {
   baseGuid?: string;
   structure: CompactStructureNode | null;
   sections: CompactSection[];
-  /** REFS map: "GOName:ComponentType" → fileID string */
-  refs: Map<string, string>;
+  /** REFS map: "GOName:ComponentType" → fileID strings (supports duplicate keys) */
+  refs: Map<string, string[]>;
 }
 
 export interface CompactStructureNode {
@@ -88,7 +88,7 @@ export function readCompact(content: string): CompactFile {
   }
 
   // Parse REFS section
-  const refs = new Map<string, string>();
+  const refs = new Map<string, string[]>();
   if (refsStart >= 0) {
     const refsLines = lines.slice(refsStart);
     parseRefsSection(refsLines, refs);
@@ -539,8 +539,8 @@ function smartSplit(str: string, delimiter: string): string[] {
   return parts;
 }
 
-/** Parse the REFS section: "key = fileID" lines into a Map */
-function parseRefsSection(lines: string[], refs: Map<string, string>): void {
+/** Parse the REFS section: "key = fileID" lines into a Map (supports duplicate keys) */
+function parseRefsSection(lines: string[], refs: Map<string, string[]>): void {
   for (const line of lines) {
     const trimmed = line.trim();
     if (trimmed === '' || trimmed.startsWith('#')) continue;
@@ -550,7 +550,8 @@ function parseRefsSection(lines: string[], refs: Map<string, string>): void {
 
     const key = trimmed.substring(0, eqIdx);
     const value = trimmed.substring(eqIdx + 3);
-    refs.set(key, value);
+    if (!refs.has(key)) refs.set(key, []);
+    refs.get(key)!.push(value);
   }
 }
 

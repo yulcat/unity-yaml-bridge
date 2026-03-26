@@ -230,8 +230,8 @@ function applyPropertiesToTarget(properties: CompactProperty[], target: Record<s
         // Recursively apply nested properties into existing object
         applyPropertiesToTarget(prop.value, existing);
       } else {
-        // Reconstruct as new object or array
-        target[prop.key] = reconstructNestedValue(prop.value);
+        // Reconstruct as new object or array, passing original for key remapping
+        target[prop.key] = reconstructNestedValue(prop.value, existing);
       }
     } else {
       const parsed = parseCompactValue(prop.value);
@@ -305,26 +305,48 @@ function remapVectorKeys(parsed: Record<string, any>, original: Record<string, a
   return remapped;
 }
 
-/** Reconstruct a nested value from CompactProperty children */
-function reconstructNestedValue(children: CompactProperty[]): any {
+/** Reconstruct a nested value from CompactProperty children, using original for key remapping */
+function reconstructNestedValue(children: CompactProperty[], original?: any): any {
   // Check if this is an array (items have __item__ key) or an object
   const isArray = children.some(c => c.key === '__item__');
   if (isArray) {
-    return children.map(c =>
-      typeof c.value === 'string' ? parseCompactValue(c.value) : reconstructNestedValue(c.value as CompactProperty[])
-    );
+    const origArray = Array.isArray(original) ? original : undefined;
+    return children.map((c, idx) => {
+      const origItem = origArray?.[idx];
+      if (typeof c.value === 'string') {
+        const parsed = parseCompactValue(c.value);
+        return remapWithOriginal(parsed, origItem);
+      }
+      return reconstructNestedValue(c.value as CompactProperty[], origItem);
+    });
   }
 
   // Object
+  const origObj = isPlainObject(original) ? original : undefined;
   const result: Record<string, any> = {};
   for (const child of children) {
+    const origVal = origObj?.[child.key];
     if (Array.isArray(child.value)) {
-      result[child.key] = reconstructNestedValue(child.value);
+      result[child.key] = reconstructNestedValue(child.value, origVal);
     } else {
-      result[child.key] = parseCompactValue(child.value);
+      const parsed = parseCompactValue(child.value);
+      result[child.key] = remapWithOriginal(parsed, origVal);
     }
   }
   return result;
+}
+
+/** Remap a parsed value using the original for vector key preservation and flow markers */
+function remapWithOriginal(parsed: any, original: any): any {
+  if (isPlainObject(parsed) && isPlainObject(original)) {
+    const remapped = remapVectorKeys(parsed, original);
+    if (remapped) {
+      preserveFlowMarker(original, remapped);
+      return remapped;
+    }
+    preserveFlowMarker(original, parsed);
+  }
+  return parsed;
 }
 
 // ============================================================

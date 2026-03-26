@@ -12,9 +12,6 @@
 
 import { UnityDocument, UnityFile, UNITY_TYPE_MAP } from './types';
 
-/** Max line length before breaking a flow mapping across lines */
-const MAX_LINE_LENGTH = 90;
-
 /** Write a UnityFile back to Unity YAML string */
 export function writeUnityYaml(file: UnityFile): string {
   const lines: string[] = [];
@@ -102,8 +99,8 @@ function writeYamlValue(key: string, value: any, lines: string[], indent: number
       const flow = formatFlowMapping(value);
       const lineStr = `${indentStr}${key}: ${flow}`;
       const wasMultiLine = value.__multiLine === true;
-      if (wasMultiLine || (lineStr.length >= MAX_LINE_LENGTH && !isVectorOrColor(value))) {
-        // Break multi-line flow mapping (preserve original format or break long refs)
+      if (wasMultiLine) {
+        // Break multi-line flow mapping (preserve original format)
         writeMultiLineFlowMapping(key, value, lines, indent);
       } else {
         lines.push(lineStr);
@@ -129,7 +126,7 @@ function writeYamlArrayItem(item: any, lines: string[], indent: number): void {
       const flow = formatFlowMapping(item);
       const lineStr = `${indentStr}- ${flow}`;
       const wasMultiLine = item.__multiLine === true;
-      if (wasMultiLine || (lineStr.length >= MAX_LINE_LENGTH && !isVectorOrColor(item))) {
+      if (wasMultiLine) {
         writeMultiLineFlowMappingArrayItem(item, lines, indent);
       } else {
         lines.push(lineStr);
@@ -166,8 +163,8 @@ function writeYamlArrayItem(item: any, lines: string[], indent: number): void {
       const flow = formatFlowMapping(firstVal);
       const lineStr = `${indentStr}- ${firstKey}: ${flow}`;
       const firstValWasMultiLine = (firstVal as any).__multiLine === true;
-      if (firstValWasMultiLine || lineStr.length >= MAX_LINE_LENGTH) {
-        // Break multi-line for long flow mappings in array items
+      if (firstValWasMultiLine) {
+        // Break multi-line flow mapping (preserve original format)
         const flowParts = splitFlowMapping(firstVal);
         lines.push(`${indentStr}- ${firstKey}: ${flowParts.first}`);
         lines.push(`${' '.repeat(indent + 4)}${flowParts.rest}`);

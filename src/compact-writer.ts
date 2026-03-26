@@ -520,9 +520,11 @@ function formatValue(value: any): string {
 
 /** Format a file reference */
 function formatReference(ref: any): string {
-  if (!ref || String(ref.fileID) === '0') return 'null';
+  if (!ref) return 'null';
+  if (String(ref.fileID) === '0') return '{0}';
   if (ref.guid) {
-    return `{${ref.fileID}, ${ref.guid}}`;
+    const type = ref.type !== undefined && ref.type !== 3 ? `, ${ref.type}` : '';
+    return `{${ref.fileID}, ${ref.guid}${type}}`;
   }
   return `{${ref.fileID}}`;
 }

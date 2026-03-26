@@ -2,7 +2,7 @@
 --- STRUCTURE
 Button [ActivatePanelUI]
 ├─ Background9Slice_Image [Image]
-└─ Button_Text {Button_Text}
+└─ Button_Text {Button_Text} [TextMeshProUGUI*]
 --- DETAILS
 
 [Button:RectTransform]

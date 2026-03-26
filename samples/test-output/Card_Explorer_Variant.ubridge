@@ -2,9 +2,21 @@
 --- STRUCTURE
 _Card_Template [CameraFacingBillboard, CardBehaviour*]
 ├─ Frame [Image]
-├─ NestedPrefab {_Header_Text}
-├─ NestedPrefab {Paragraph_Text}
-└─ small circle {Medal_Template}
+├─ _Header_Text {_Header_Text}
+│  └─ Text [TextMeshProUGUI*]
+├─ Paragraph_Text {Paragraph_Text}
+│  └─ Text [TextMeshProUGUI*]
+└─ small circle {Medal_Template} [MedalDisplayUI*, Animator]
+   ├─ Circle_Image [Image*]
+   ├─ Small_Circle_Image [Image*]
+   ├─ ActivationParticles_Template {ActivationParticles_Template}
+   │  ├─ ParticleReferences
+   │  │  ├─ Burst_ParticleSystem [ParticleSystem*, ParticleSystemRenderer*]
+   │  │  └─ Activated_ParticleSystem [ParticleSystem*, ParticleSystemRenderer*]
+   │  ├─ Activated_UIParticles [UIParticles*]
+   │  └─ Burst_UIParticles [UIParticles*]
+   └─ ProfileIcon_Image {ProfileIcon_Image}
+      └─ Image [Image*]
 --- DETAILS
 
 [_Card_Template]

@@ -81,7 +81,15 @@ export function writeCompact(file: UnityFile, options: CompactWriterOptions = {}
 
   // Structure section
   lines.push('--- STRUCTURE');
-  writeStructureTree(file.hierarchy, lines, '', true, resolver);
+  let expansionCtx: NestedExpansionContext | undefined;
+  if (resolver) {
+    expansionCtx = {
+      resolver,
+      prefabInstances: file.prefabInstances,
+      visited: new Set(),
+    };
+  }
+  writeStructureTree(file.hierarchy, lines, '', true, resolver, expansionCtx);
 
   // Details section
   lines.push('--- DETAILS');
@@ -94,31 +102,101 @@ export function writeCompact(file: UnityFile, options: CompactWriterOptions = {}
   return lines.join('\n') + '\n';
 }
 
+/** Context for nested prefab tree expansion */
+interface NestedExpansionContext {
+  resolver: GuidResolver;
+  prefabInstances: PrefabInstanceInfo[];
+  visited: Set<string>; // GUIDs currently being expanded (cycle detection)
+}
+
+/** Result of expanding a nested prefab */
+interface ExpandedNestedPrefab {
+  hierarchy: GameObjectNode;
+  modifiedFileIds: Set<string>;
+  sourcePrefabInstances: PrefabInstanceInfo[];
+}
+
+/** Try to expand a nested prefab by loading and parsing its source */
+function expandNestedPrefab(
+  node: GameObjectNode,
+  ctx: NestedExpansionContext
+): ExpandedNestedPrefab | null {
+  if (!node.nestedPrefab) return null;
+
+  const sourceGuid = node.nestedPrefab.sourceGuid;
+  if (!sourceGuid || ctx.visited.has(sourceGuid)) return null;
+
+  const sourcePath = ctx.resolver.resolveFilePath(sourceGuid);
+  if (!sourcePath || !fs.existsSync(sourcePath)) return null;
+
+  ctx.visited.add(sourceGuid);
+  try {
+    const sourceContent = fs.readFileSync(sourcePath, 'utf-8');
+    const sourceFile = parseUnityYaml(sourceContent);
+    if (!sourceFile.hierarchy) return null;
+
+    const pi = ctx.prefabInstances.find(p => p.fileId === node.nestedPrefab!.instanceId);
+    const modifiedFileIds = new Set<string>();
+    if (pi) {
+      for (const mod of pi.modifications) {
+        modifiedFileIds.add(String(mod.target.fileID));
+      }
+    }
+
+    return {
+      hierarchy: sourceFile.hierarchy,
+      modifiedFileIds,
+      sourcePrefabInstances: sourceFile.prefabInstances,
+    };
+  } catch {
+    return null;
+  } finally {
+    ctx.visited.delete(sourceGuid);
+  }
+}
+
+/** Resolve the display name for a nested prefab source */
+function resolveSourceName(node: GameObjectNode, resolver?: GuidResolver): string {
+  if (!node.nestedPrefab) return '';
+  return node.nestedPrefab.sourceName ||
+    (resolver ? resolver.resolve(node.nestedPrefab.sourceGuid) : undefined) ||
+    node.nestedPrefab.sourceGuid;
+}
+
+/** Build a component name list with optional * markers for modified components */
+function buildComponentNames(
+  components: ComponentInfo[],
+  resolver?: GuidResolver,
+  modifiedFileIds?: Set<string>
+): string[] {
+  return components
+    .filter(c => !OMIT_COMPONENTS.has(c.typeName))
+    .map(c => {
+      const name = resolveComponentName(c, resolver);
+      if (modifiedFileIds?.has(c.fileId)) return name + '*';
+      return name;
+    });
+}
+
 /** Write the structure tree for a GO node */
 function writeStructureTree(
   node: GameObjectNode,
   lines: string[],
   prefix: string,
   isRoot: boolean,
-  resolver?: GuidResolver
+  resolver?: GuidResolver,
+  expansionCtx?: NestedExpansionContext,
+  modifiedFileIds?: Set<string>
 ): void {
-  const componentNames = node.components
-    .filter(c => !OMIT_COMPONENTS.has(c.typeName))
-    .map(c => resolveComponentName(c, resolver));
+  const componentNames = buildComponentNames(node.components, resolver, modifiedFileIds);
 
   let line = node.name;
 
-  // Add nested prefab indicator
   if (node.nestedPrefab) {
-    const sourceName = node.nestedPrefab.sourceName ||
-      (resolver ? resolver.resolve(node.nestedPrefab.sourceGuid) : undefined) ||
-      node.nestedPrefab.sourceGuid;
-    if (sourceName) {
-      line += ` {${sourceName}}`;
-    }
+    const sourceName = resolveSourceName(node, resolver);
+    if (sourceName) line += ` {${sourceName}}`;
   }
 
-  // Add components
   if (componentNames.length > 0) {
     line += ` [${componentNames.join(', ')}]`;
   }
@@ -134,30 +212,51 @@ function writeStructureTree(
     const connector = isLast ? '└─' : '├─';
     const childPrefix = isLast ? '   ' : '│  ';
 
-    const childComponents = child.components
-      .filter(c => !OMIT_COMPONENTS.has(c.typeName))
-      .map(c => resolveComponentName(c, resolver));
+    // Try expanding nested prefab
+    if (child.nestedPrefab && expansionCtx) {
+      const expanded = expandNestedPrefab(child, expansionCtx);
+      if (expanded) {
+        const sourceRoot = expanded.hierarchy;
+        // Use source root name if instance name wasn't overridden
+        const instanceName = child.name === 'NestedPrefab' ? sourceRoot.name : child.name;
+        const childComps = buildComponentNames(sourceRoot.components, resolver, expanded.modifiedFileIds);
 
-    let childLine = `${prefix}${connector} ${child.name}`;
+        let childLine = `${prefix}${connector} ${instanceName}`;
+        const sourceName = resolveSourceName(child, resolver);
+        if (sourceName) childLine += ` {${sourceName}}`;
+        if (childComps.length > 0) childLine += ` [${childComps.join(', ')}]`;
+        lines.push(childLine);
 
-    if (child.nestedPrefab) {
-      const sourceName = child.nestedPrefab.sourceName ||
-        (resolver ? resolver.resolve(child.nestedPrefab.sourceGuid) : undefined) ||
-        child.nestedPrefab.sourceGuid;
-      if (sourceName) {
-        childLine += ` {${sourceName}}`;
+        // Recurse into source children with the source file's PIs
+        if (sourceRoot.children.length > 0) {
+          const sourceCtx: NestedExpansionContext = {
+            resolver: expansionCtx.resolver,
+            prefabInstances: expanded.sourcePrefabInstances,
+            visited: expansionCtx.visited,
+          };
+          writeStructureTree(
+            sourceRoot, lines, prefix + childPrefix, false,
+            resolver, sourceCtx, expanded.modifiedFileIds
+          );
+        }
+        continue;
       }
     }
 
-    if (childComponents.length > 0) {
-      childLine += ` [${childComponents.join(', ')}]`;
+    // Normal child (not expanded or expansion failed)
+    const childComps = buildComponentNames(child.components, resolver, modifiedFileIds);
+    let childLine = `${prefix}${connector} ${child.name}`;
+
+    if (child.nestedPrefab) {
+      const sourceName = resolveSourceName(child, resolver);
+      if (sourceName) childLine += ` {${sourceName}}`;
     }
 
+    if (childComps.length > 0) childLine += ` [${childComps.join(', ')}]`;
     lines.push(childLine);
 
-    // Recurse for grandchildren
     if (child.children.length > 0) {
-      writeStructureTree(child, lines, prefix + childPrefix, false, resolver);
+      writeStructureTree(child, lines, prefix + childPrefix, false, resolver, expansionCtx, modifiedFileIds);
     }
   }
 }
@@ -799,6 +898,7 @@ function writeVariantCompact(file: UnityFile, lines: string[], resolver?: GuidRe
   // Try to load and parse the base prefab for full resolution
   let baseMap: Map<string, BaseDocInfo> | null = null;
   let baseHierarchy: GameObjectNode | undefined;
+  let basePrefabInstances: PrefabInstanceInfo[] = [];
   let nestedResolved: Map<string, string> | null = null;
 
   if (resolver && baseGuid) {
@@ -808,6 +908,7 @@ function writeVariantCompact(file: UnityFile, lines: string[], resolver?: GuidRe
         const baseContent = fs.readFileSync(basePath, 'utf-8');
         const baseFile = parseUnityYaml(baseContent);
         baseHierarchy = baseFile.hierarchy;
+        basePrefabInstances = baseFile.prefabInstances;
         baseMap = buildBaseDocMap(baseFile.documents, resolver, baseHierarchy);
 
         // Resolve nested prefab targets that aren't in baseMap
@@ -841,7 +942,15 @@ function writeVariantCompact(file: UnityFile, lines: string[], resolver?: GuidRe
   // Structure section
   lines.push('--- STRUCTURE');
   if (baseHierarchy && baseMap) {
-    writeVariantStructureTree(baseHierarchy, lines, '', true, modifiedTargets, baseMap, resolver);
+    let variantExpansionCtx: NestedExpansionContext | undefined;
+    if (resolver) {
+      variantExpansionCtx = {
+        resolver,
+        prefabInstances: basePrefabInstances,
+        visited: new Set(),
+      };
+    }
+    writeVariantStructureTree(baseHierarchy, lines, '', true, modifiedTargets, baseMap, resolver, variantExpansionCtx);
   } else {
     lines.push(`(variant of ${baseGuid || 'unknown'})`);
   }
@@ -866,28 +975,16 @@ function writeVariantStructureTree(
   isRoot: boolean,
   modifiedTargets: Set<string>,
   baseMap: Map<string, BaseDocInfo>,
-  resolver?: GuidResolver
+  resolver?: GuidResolver,
+  expansionCtx?: NestedExpansionContext
 ): void {
-  const componentNames = node.components
-    .filter(c => !OMIT_COMPONENTS.has(c.typeName))
-    .map(c => {
-      const name = resolveComponentName(c, resolver);
-      // Mark modified components with *
-      if (modifiedTargets.has(c.fileId)) {
-        return name + '*';
-      }
-      return name;
-    });
+  const componentNames = buildComponentNames(node.components, resolver, modifiedTargets);
 
   let line = node.name;
 
   if (node.nestedPrefab) {
-    const sourceName = node.nestedPrefab.sourceName ||
-      (resolver ? resolver.resolve(node.nestedPrefab.sourceGuid) : undefined) ||
-      node.nestedPrefab.sourceGuid;
-    if (sourceName) {
-      line += ` {${sourceName}}`;
-    }
+    const sourceName = resolveSourceName(node, resolver);
+    if (sourceName) line += ` {${sourceName}}`;
   }
 
   if (componentNames.length > 0) {
@@ -904,35 +1001,51 @@ function writeVariantStructureTree(
     const connector = isLast ? '└─' : '├─';
     const childPrefix = isLast ? '   ' : '│  ';
 
-    const childComponents = child.components
-      .filter(c => !OMIT_COMPONENTS.has(c.typeName))
-      .map(c => {
-        const name = resolveComponentName(c, resolver);
-        if (modifiedTargets.has(c.fileId)) {
-          return name + '*';
+    // Try expanding nested prefab
+    if (child.nestedPrefab && expansionCtx) {
+      const expanded = expandNestedPrefab(child, expansionCtx);
+      if (expanded) {
+        const sourceRoot = expanded.hierarchy;
+        const instanceName = child.name === 'NestedPrefab' ? sourceRoot.name : child.name;
+        // Merge modification markers: base PI modifications + variant modifications
+        const mergedMods = new Set(expanded.modifiedFileIds);
+        for (const id of modifiedTargets) mergedMods.add(id);
+        const childComps = buildComponentNames(sourceRoot.components, resolver, mergedMods);
+
+        let childLine = `${prefix}${connector} ${instanceName}`;
+        const sourceName = resolveSourceName(child, resolver);
+        if (sourceName) childLine += ` {${sourceName}}`;
+        if (childComps.length > 0) childLine += ` [${childComps.join(', ')}]`;
+        lines.push(childLine);
+
+        if (sourceRoot.children.length > 0) {
+          const sourceCtx: NestedExpansionContext = {
+            resolver: expansionCtx.resolver,
+            prefabInstances: expanded.sourcePrefabInstances,
+            visited: expansionCtx.visited,
+          };
+          writeVariantStructureTree(
+            sourceRoot, lines, prefix + childPrefix, false,
+            mergedMods, baseMap, resolver, sourceCtx
+          );
         }
-        return name;
-      });
-
-    let childLine = `${prefix}${connector} ${child.name}`;
-
-    if (child.nestedPrefab) {
-      const sourceName = child.nestedPrefab.sourceName ||
-        (resolver ? resolver.resolve(child.nestedPrefab.sourceGuid) : undefined) ||
-        child.nestedPrefab.sourceGuid;
-      if (sourceName) {
-        childLine += ` {${sourceName}}`;
+        continue;
       }
     }
 
-    if (childComponents.length > 0) {
-      childLine += ` [${childComponents.join(', ')}]`;
+    const childComps = buildComponentNames(child.components, resolver, modifiedTargets);
+    let childLine = `${prefix}${connector} ${child.name}`;
+
+    if (child.nestedPrefab) {
+      const sourceName = resolveSourceName(child, resolver);
+      if (sourceName) childLine += ` {${sourceName}}`;
     }
 
+    if (childComps.length > 0) childLine += ` [${childComps.join(', ')}]`;
     lines.push(childLine);
 
     if (child.children.length > 0) {
-      writeVariantStructureTree(child, lines, prefix + childPrefix, false, modifiedTargets, baseMap, resolver);
+      writeVariantStructureTree(child, lines, prefix + childPrefix, false, modifiedTargets, baseMap, resolver, expansionCtx);
     }
   }
 }

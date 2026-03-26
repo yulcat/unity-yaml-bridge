@@ -198,7 +198,8 @@ function parseDetailsSections(lines: string[], sections: CompactSection[]): void
   // Stack of (property, indent) for nesting — only properties with value=[] are pushed
   let stack: { prop: CompactProperty; indent: number }[] = [];
 
-  for (const line of lines) {
+  for (let li = 0; li < lines.length; li++) {
+    const line = lines[li];
     const trimmed = line.trim();
 
     // Skip empty lines and comments
@@ -264,13 +265,16 @@ function parseDetailsSections(lines: string[], sections: CompactSection[]): void
 
         if (blockProp && Array.isArray(blockProp.value)) {
           if (itemMatch) {
+            let itemValue = itemMatch[2];
+            // Collect multiline quoted strings
+            itemValue = collectMultilineValue(itemValue, lines, li, (newIdx) => { li = newIdx; });
             // key=value array item: wrap in __item__ group so continuations
             // (subsequent non-dash lines at deeper indent) get grouped together
             const itemGroup: CompactProperty = {
               key: '__item__',
               value: [{
                 key: itemMatch[1],
-                value: itemMatch[2],
+                value: itemValue,
                 indent: indent + 2,
               }],
               indent,
@@ -306,9 +310,12 @@ function parseDetailsSections(lines: string[], sections: CompactSection[]): void
         const propMatch = trimmed.match(/^(.+?)\s*=\s*(.*)$/);
 
         if (propMatch) {
+          let propValue = propMatch[2];
+          // Collect multiline quoted strings
+          propValue = collectMultilineValue(propValue, lines, li, (newIdx) => { li = newIdx; });
           const prop: CompactProperty = {
             key: propMatch[1],
-            value: propMatch[2],
+            value: propValue,
             indent,
           };
           target.push(prop);
@@ -325,6 +332,52 @@ function parseDetailsSections(lines: string[], sections: CompactSection[]): void
       }
     }
   }
+}
+
+/**
+ * Collect multiline quoted string values.
+ * If the value starts with a quote but doesn't end with it,
+ * continue reading lines until the closing quote is found.
+ */
+function collectMultilineValue(
+  value: string,
+  lines: string[],
+  currentIdx: number,
+  setIdx: (idx: number) => void
+): string {
+  // Double-quoted multiline
+  if (value.startsWith('"') && !value.endsWith('"')) {
+    let full = value;
+    let i = currentIdx + 1;
+    while (i < lines.length) {
+      const nextLine = lines[i];
+      full += '\n' + nextLine;
+      if (nextLine.trimEnd().endsWith('"') && !nextLine.trimEnd().endsWith('\\"')) {
+        setIdx(i);
+        return full;
+      }
+      i++;
+    }
+    setIdx(i - 1);
+    return full;
+  }
+  // Single-quoted multiline
+  if (value.startsWith("'") && !value.endsWith("'")) {
+    let full = value;
+    let i = currentIdx + 1;
+    while (i < lines.length) {
+      const nextLine = lines[i];
+      full += '\n' + nextLine;
+      if (nextLine.trimEnd().endsWith("'")) {
+        setIdx(i);
+        return full;
+      }
+      i++;
+    }
+    setIdx(i - 1);
+    return full;
+  }
+  return value;
 }
 
 // ============================================================

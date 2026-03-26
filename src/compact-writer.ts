@@ -498,8 +498,14 @@ function writeProperty(key: string, value: any, lines: string[], indent: string)
 /** Format a value inline */
 function formatValue(value: any): string {
   if (value === null || value === undefined) return 'null';
-  if (typeof value === 'object' && 'fileID' in value) return formatReference(value);
-  if (typeof value === 'object' && isVector(value)) return formatVector(value);
+  if (typeof value === 'object' && !Array.isArray(value)) {
+    if ('fileID' in value) return formatReference(value);
+    if (isVector(value)) return formatVector(value);
+    // Nested object — serialize as inline brace notation to avoid [object Object]
+    const entries = Object.entries(value);
+    const parts = entries.map(([k, v]) => `${k}: ${formatValue(v)}`);
+    return `{${parts.join(', ')}}`;
+  }
   if (Array.isArray(value)) return `[${value.map(formatValue).join(', ')}]`;
   return String(value);
 }

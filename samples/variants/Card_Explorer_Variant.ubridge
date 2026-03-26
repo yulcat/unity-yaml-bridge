@@ -1,0 +1,26 @@
+# ubridge v1 | variant | base:_Card_Template
+--- STRUCTURE
+Card_Explorer_Variant {_Card_Template} [Canvas*, CardDisplay*]
+├─ Frame [Image]
+├─ _Header_Text {_Header_Text} [TextMeshProUGUI*]
+├─ Paragraph_Text {Paragraph_Text} [TextMeshProUGUI*]
+└─ small circle {ActivateLabel} [Image*, ParticleSystem*, MedalDisplayUI*]
+--- DETAILS
+[Card_Explorer_Variant:RectTransform]
+pos = (-112.6, -206.9, 0)
+
+[Card_Explorer_Variant:CardDisplay]
+cardData = {11400000, 1fe163de0e6ff604d9ba3bd3b6228a5b}
+
+[_Header_Text:TextMeshProUGUI]
+m_text = Explorer
+
+[Paragraph_Text:TextMeshProUGUI]
+m_text = Agility and speed. A fast mode for exploring and reaching new heights.
+
+[small circle:Image]
+m_Sprite = {21300000, 9f8828b09c90d401b827e90566101a8e}
+m_Color = (1, 1, 1, -0.044181824)
+
+[small circle:MedalDisplayUI]
+enableAlphaFading = 1

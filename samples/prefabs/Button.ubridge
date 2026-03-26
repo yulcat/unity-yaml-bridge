@@ -1,0 +1,25 @@
+# ubridge v1 | prefab
+--- STRUCTURE
+Button [ButtonActivation]
+├─ Background9Slice_Image [Image]
+└─ Button_Text {SkillName_Text} [TextMeshProUGUI]
+--- DETAILS
+[Button:RectTransform]
+pos = (-694, 416, 0)
+scale = (1.0000385, 1.0000385, 1.0000385)
+anchor = (0.5, 0.5)-(0.5, 0.5)
+size = (187.87, 51.63)
+
+[Button:ButtonActivation]
+activatedText = Activated
+activateText = Activate
+disabledText = Disabled
+activateDisplayText = ->Button_Text:TextMeshProUGUI
+
+[Background9Slice_Image:RectTransform]
+anchor = (0, 0)-(1, 1)
+
+[Background9Slice_Image:Image]
+m_Sprite = {21300000, e197d4e89f9f4274dac4566fdd117ecf}
+m_Type = 1
+m_FillCenter = 1

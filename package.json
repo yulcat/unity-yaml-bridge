@@ -1,0 +1,21 @@
+{
+  "name": "unity-yaml-bridge",
+  "version": "1.0.0",
+  "description": "",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "tsc && node dist/test-roundtrip.js && node dist/test-compact-roundtrip.js",
+    "test:roundtrip": "tsc && node dist/test-roundtrip.js",
+    "test:compact": "tsc && node dist/test-compact-roundtrip.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "typescript": "^6.0.2"
+  }
+}

@@ -1,0 +1,6 @@
+node_modules/
+samples/unity-projects/
+src/
+tsconfig.json
+AGENTS.md
+task.md

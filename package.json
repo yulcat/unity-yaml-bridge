@@ -7,12 +7,7 @@
   "bin": {
     "ubridge": "dist/cli.js"
   },
-  "files": [
-    "dist/**/*.js",
-    "dist/**/*.d.ts",
-    "docs/FORMAT.md",
-    "README.md"
-  ],
+
   "scripts": {
     "build": "tsc",
     "prepublishOnly": "tsc",

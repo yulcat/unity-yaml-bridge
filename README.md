@@ -136,6 +136,17 @@ Full spec: [docs/FORMAT.md](docs/FORMAT.md)
 
 ## Usage
 
+## Installation
+
+```bash
+git clone https://github.com/yulcat/unity-yaml-bridge.git
+cd unity-yaml-bridge
+npm install
+npm link    # makes `ubridge` available globally
+```
+
+## Usage
+
 ```typescript
 import { parseUnityYaml, writeCompact, parseCompact, writeUnityYaml } from 'unity-yaml-bridge';
 import fs from 'fs';

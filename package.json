@@ -15,7 +15,7 @@
   ],
   "scripts": {
     "build": "tsc",
-    "prepare": "node ./node_modules/typescript/bin/tsc",
+    "prepublishOnly": "tsc",
     "test": "tsc && node dist/test-roundtrip.js && node dist/test-compact-roundtrip.js && node dist/test-refs.js",
     "test:roundtrip": "tsc && node dist/test-roundtrip.js",
     "test:compact": "tsc && node dist/test-compact-roundtrip.js",
@@ -29,10 +29,8 @@
     "url": "https://github.com/yulcat/unity-yaml-bridge.git"
   },
   "type": "commonjs",
-  "dependencies": {
-    "typescript": "^6.0.2"
-  },
   "devDependencies": {
-    "@types/node": "^25.5.0"
+    "@types/node": "^25.5.0",
+    "typescript": "^6.0.2"
   }
 }

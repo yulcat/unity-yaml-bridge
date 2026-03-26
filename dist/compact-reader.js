@@ -1,0 +1,410 @@
+"use strict";
+/**
+ * Parse a .ubridge compact file back into a structure that can be used
+ * to reconstruct Unity YAML.
+ *
+ * This module handles the reverse direction: compact → CompactFile.
+ */
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.readCompact = readCompact;
+exports.parseCompactValue = parseCompactValue;
+/** Parse a .ubridge string into a CompactFile */
+function readCompact(content) {
+    const lines = content.split('\n');
+    // Parse header
+    const headerLine = lines[0];
+    const headerMatch = headerLine.match(/^# ubridge v(\d+) \| (\w+)(?:\s*\|\s*(.+))?/);
+    if (!headerMatch) {
+        throw new Error(`Invalid .ubridge header: ${headerLine}`);
+    }
+    const version = parseInt(headerMatch[1], 10);
+    const type = headerMatch[2];
+    const extra = headerMatch[3] || '';
+    let baseGuid;
+    const guidMatch = extra.match(/base-guid:(\S+)/);
+    if (guidMatch)
+        baseGuid = guidMatch[1];
+    // Find section boundaries
+    let structureStart = -1;
+    let detailsStart = -1;
+    let refsStart = -1;
+    for (let i = 0; i < lines.length; i++) {
+        if (lines[i] === '--- STRUCTURE')
+            structureStart = i + 1;
+        if (lines[i] === '--- DETAILS')
+            detailsStart = i + 1;
+        if (lines[i] === '--- REFS')
+            refsStart = i + 1;
+    }
+    // Parse structure
+    let structure = null;
+    if (structureStart >= 0) {
+        const structureEnd = detailsStart >= 0 ? detailsStart - 1 : (refsStart >= 0 ? refsStart - 1 : lines.length);
+        const structureLines = lines.slice(structureStart, structureEnd).filter(l => l.trim() !== '');
+        if (structureLines.length > 0) {
+            structure = parseStructureTree(structureLines);
+        }
+    }
+    // Parse details sections
+    const sections = [];
+    if (detailsStart >= 0) {
+        const detailsEnd = refsStart >= 0 ? refsStart - 1 : lines.length;
+        const detailLines = lines.slice(detailsStart, detailsEnd);
+        parseDetailsSections(detailLines, sections);
+    }
+    // Parse REFS section
+    const refs = new Map();
+    if (refsStart >= 0) {
+        const refsLines = lines.slice(refsStart);
+        parseRefsSection(refsLines, refs);
+    }
+    return { version, type, baseGuid, structure, sections, refs };
+}
+/** Parse the structure tree from lines */
+function parseStructureTree(lines) {
+    if (lines.length === 0)
+        return null;
+    // Skip variant structure line like "(variant of ...)"
+    if (lines[0].trim().startsWith('(variant of')) {
+        return null;
+    }
+    // First line is the root
+    const root = parseStructureLine(lines[0]);
+    // Parse children using indentation/tree characters
+    parseChildren(lines, 1, root);
+    return root;
+}
+/** Parse a single structure line into a node */
+function parseStructureLine(line) {
+    // Remove tree characters
+    let cleaned = line.replace(/[├└│─]/g, '').trim();
+    // Check for variant markers
+    let marker;
+    if (cleaned.startsWith('+ ')) {
+        marker = '+';
+        cleaned = cleaned.substring(2);
+    }
+    else if (cleaned.startsWith('- ')) {
+        marker = '-';
+        cleaned = cleaned.substring(2);
+    }
+    // Extract components [Comp1, Comp2]
+    let components = [];
+    const compMatch = cleaned.match(/\[([^\]]*)\]$/);
+    if (compMatch) {
+        components = compMatch[1].split(',').map(s => s.trim()).filter(Boolean);
+        cleaned = cleaned.substring(0, compMatch.index).trim();
+    }
+    // Extract nested prefab {PrefabName}
+    let nestedPrefab;
+    const prefabMatch = cleaned.match(/\{([^}]+)\}$/);
+    if (prefabMatch) {
+        nestedPrefab = prefabMatch[1];
+        cleaned = cleaned.substring(0, prefabMatch.index).trim();
+    }
+    return {
+        name: cleaned,
+        nestedPrefab,
+        components,
+        children: [],
+        marker,
+    };
+}
+/** Parse children recursively based on tree structure */
+function parseChildren(lines, startIdx, parent) {
+    let i = startIdx;
+    const parentDepth = getTreeDepth(lines[startIdx - 1] || '');
+    while (i < lines.length) {
+        const line = lines[i];
+        const depth = getTreeDepth(line);
+        if (depth <= parentDepth && i > startIdx)
+            break;
+        if (depth === parentDepth + 1) {
+            const child = parseStructureLine(line);
+            parent.children.push(child);
+            i = parseChildren(lines, i + 1, child);
+        }
+        else {
+            i++;
+        }
+    }
+    return i;
+}
+/** Get the tree depth from indentation and tree characters */
+function getTreeDepth(line) {
+    // Count based on tree character positions
+    // Root = 0, first child = 1, etc.
+    let depth = 0;
+    for (let i = 0; i < line.length; i++) {
+        if (line[i] === '├' || line[i] === '└') {
+            depth = Math.floor(i / 3) + 1;
+            break;
+        }
+    }
+    return depth;
+}
+/** Parse detail sections from lines */
+function parseDetailsSections(lines, sections) {
+    let currentSection = null;
+    for (const line of lines) {
+        const trimmed = line.trim();
+        // Skip empty lines and comments
+        if (trimmed === '' || trimmed.startsWith('#'))
+            continue;
+        // Section header: [GOPath:ComponentType] or [&fileID]
+        const sectionMatch = trimmed.match(/^\[([^\]]+)\]$/);
+        if (sectionMatch) {
+            const header = sectionMatch[1];
+            if (header.startsWith('&')) {
+                // Variant section: [&fileID]
+                currentSection = { goPath: header, componentType: '', properties: [] };
+            }
+            else {
+                const colonIdx = header.indexOf(':');
+                if (colonIdx >= 0) {
+                    const goPath = header.substring(0, colonIdx);
+                    const componentType = header.substring(colonIdx + 1);
+                    currentSection = { goPath, componentType, properties: [] };
+                }
+                else {
+                    currentSection = { goPath: header, componentType: '', properties: [] };
+                }
+            }
+            sections.push(currentSection);
+            continue;
+        }
+        // Property line
+        if (currentSection) {
+            const indent = line.length - line.trimStart().length;
+            const propMatch = trimmed.match(/^(.+?)\s*=\s*(.*)$/);
+            if (propMatch) {
+                currentSection.properties.push({
+                    key: propMatch[1],
+                    value: propMatch[2],
+                    indent,
+                });
+            }
+            else if (trimmed.endsWith(':')) {
+                // Start of nested block
+                currentSection.properties.push({
+                    key: trimmed.slice(0, -1),
+                    value: [],
+                    indent,
+                });
+            }
+            else if (trimmed.startsWith('- ')) {
+                // Array item — attach to previous property that is a block
+                const lastProp = currentSection.properties[currentSection.properties.length - 1];
+                if (lastProp && Array.isArray(lastProp.value)) {
+                    const itemContent = trimmed.substring(2);
+                    const itemMatch = itemContent.match(/^(.+?)\s*=\s*(.*)$/);
+                    if (itemMatch) {
+                        lastProp.value.push({
+                            key: itemMatch[1],
+                            value: itemMatch[2],
+                            indent: indent + 2,
+                        });
+                    }
+                    else {
+                        // Simple array item
+                        lastProp.value.push({
+                            key: '__item__',
+                            value: itemContent,
+                            indent: indent + 2,
+                        });
+                    }
+                }
+            }
+        }
+    }
+}
+// ============================================================
+// Value Parsing — convert compact string values back to AST types
+// ============================================================
+/** Parse a compact value string back to its proper AST type */
+function parseCompactValue(str) {
+    if (str === undefined || str === null)
+        return '';
+    str = str.trim();
+    if (str === '')
+        return '';
+    // null
+    if (str === 'null')
+        return null;
+    // Empty array
+    if (str === '[]')
+        return [];
+    // Anchor range: (x1, y1)-(x2, y2)
+    const anchorMatch = str.match(/^\(([^)]+)\)-\(([^)]+)\)$/);
+    if (anchorMatch) {
+        return parseAnchorRange(anchorMatch[1], anchorMatch[2]);
+    }
+    // Vector/color: (x, y) or (x, y, z) or (x, y, z, w)
+    if (str.startsWith('(') && str.endsWith(')') && !str.includes('-(')) {
+        return parseVectorValue(str);
+    }
+    // Asset/file reference: {fileID, guid} or {fileID}
+    if (str.startsWith('{') && str.endsWith('}')) {
+        return parseReferenceValue(str);
+    }
+    // Array: [item1, item2, ...]
+    if (str.startsWith('[') && str.endsWith(']')) {
+        return parseArrayValue(str);
+    }
+    // Number (integer)
+    if (/^-?\d+$/.test(str)) {
+        if (str === '-0')
+            return str; // Preserve negative zero
+        if (str.length > 1 && str.startsWith('0'))
+            return str; // Preserve leading zeros
+        const n = parseInt(str, 10);
+        if (Math.abs(n) > Number.MAX_SAFE_INTEGER)
+            return str;
+        return n;
+    }
+    // Float — preserve original string if parseFloat would lose formatting
+    if (/^-?\d*\.\d+$/.test(str)) {
+        const f = parseFloat(str);
+        if (String(f) !== str)
+            return str; // Preserve formatting (e.g., "30.0000")
+        return f;
+    }
+    // Scientific notation
+    if (/^-?\d+\.\d*e[+-]?\d+$/i.test(str))
+        return parseFloat(str);
+    // String value
+    return str;
+}
+/** Parse a vector value like (x, y, z) into {x, y, z} */
+function parseVectorValue(str) {
+    const inner = str.slice(1, -1);
+    const parts = inner.split(',').map(s => s.trim());
+    if (parts.length === 2) {
+        return { x: parseNumericValue(parts[0]), y: parseNumericValue(parts[1]) };
+    }
+    if (parts.length === 3) {
+        return { x: parseNumericValue(parts[0]), y: parseNumericValue(parts[1]), z: parseNumericValue(parts[2]) };
+    }
+    if (parts.length === 4) {
+        // Could be xyzw (quaternion/vector4) or rgba (color)
+        return { x: parseNumericValue(parts[0]), y: parseNumericValue(parts[1]), z: parseNumericValue(parts[2]), w: parseNumericValue(parts[3]) };
+    }
+    // Fallback — return as object with indexed keys
+    const result = {};
+    parts.forEach((p, i) => { result[`v${i}`] = parseNumericValue(p); });
+    return result;
+}
+/** Parse an anchor range (x1,y1)-(x2,y2) into {min, max} */
+function parseAnchorRange(minStr, maxStr) {
+    const minParts = minStr.split(',').map(s => s.trim());
+    const maxParts = maxStr.split(',').map(s => s.trim());
+    return {
+        min: { x: parseNumericValue(minParts[0]), y: parseNumericValue(minParts[1]) },
+        max: { x: parseNumericValue(maxParts[0]), y: parseNumericValue(maxParts[1]) },
+    };
+}
+/** Parse a reference value like {fileID} or {fileID, guid} */
+function parseReferenceValue(str) {
+    const inner = str.slice(1, -1).trim();
+    // Null reference
+    if (inner === '0')
+        return { fileID: 0 };
+    const parts = inner.split(',').map(s => s.trim());
+    if (parts.length === 1) {
+        // Internal reference: {fileID}
+        return { fileID: parseFileId(parts[0]) };
+    }
+    if (parts.length >= 2) {
+        // Asset reference: {fileID, guid} or {fileID, guid, type}
+        const ref = {
+            fileID: parseFileId(parts[0]),
+            guid: parts[1],
+            type: parts.length >= 3 ? parseInt(parts[2], 10) : 3,
+        };
+        return ref;
+    }
+    return { fileID: parseFileId(inner) };
+}
+/** Parse a fileID value, keeping large values as strings */
+function parseFileId(str) {
+    str = str.trim();
+    if (/^-?\d+$/.test(str)) {
+        const n = parseInt(str, 10);
+        if (Math.abs(n) > Number.MAX_SAFE_INTEGER)
+            return str;
+        return n;
+    }
+    return str;
+}
+/** Parse an array value like [item1, item2, ...] */
+function parseArrayValue(str) {
+    const inner = str.slice(1, -1).trim();
+    if (!inner)
+        return [];
+    // Smart split by comma, respecting braces
+    const items = smartSplit(inner, ',');
+    return items.map(item => parseCompactValue(item.trim()));
+}
+/** Split a string by delimiter, respecting nested braces */
+function smartSplit(str, delimiter) {
+    const parts = [];
+    let depth = 0;
+    let current = '';
+    for (let i = 0; i < str.length; i++) {
+        const ch = str[i];
+        if (ch === '{' || ch === '[' || ch === '(')
+            depth++;
+        if (ch === '}' || ch === ']' || ch === ')')
+            depth--;
+        if (ch === delimiter && depth === 0) {
+            parts.push(current.trim());
+            current = '';
+        }
+        else {
+            current += ch;
+        }
+    }
+    if (current.trim())
+        parts.push(current.trim());
+    return parts;
+}
+/** Parse the REFS section: "key = fileID" lines into a Map */
+function parseRefsSection(lines, refs) {
+    for (const line of lines) {
+        const trimmed = line.trim();
+        if (trimmed === '' || trimmed.startsWith('#'))
+            continue;
+        const eqIdx = trimmed.indexOf(' = ');
+        if (eqIdx < 0)
+            continue;
+        const key = trimmed.substring(0, eqIdx);
+        const value = trimmed.substring(eqIdx + 3);
+        refs.set(key, value);
+    }
+}
+/** Parse a numeric value, preserving formatting for strings that would lose precision */
+function parseNumericValue(str) {
+    str = str.trim();
+    if (str === '-0')
+        return str;
+    if (str.length > 1 && str.startsWith('0') && !str.startsWith('0.'))
+        return str;
+    // Integer
+    if (/^-?\d+$/.test(str)) {
+        const n = parseInt(str, 10);
+        if (Math.abs(n) > Number.MAX_SAFE_INTEGER)
+            return str;
+        return n;
+    }
+    // Float — preserve original if parseFloat loses formatting
+    if (/^-?\d*\.\d+$/.test(str)) {
+        const f = parseFloat(str);
+        if (String(f) !== str)
+            return str;
+        return f;
+    }
+    if (/^-?\d+\.\d*e[+-]?\d+$/i.test(str))
+        return parseFloat(str);
+    return str;
+}
+//# sourceMappingURL=compact-reader.js.map

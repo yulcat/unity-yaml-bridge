@@ -120,6 +120,25 @@ Format: `[GOPath:ComponentType]`
 | Array (complex) | multi-line with `-` | see below |
 | LayerMask | `bits:N` | `bits:512` |
 
+### Path-Based References (`->` and `@`)
+
+Internal references (objects within the same prefab) are written as `->GOPath:Component` instead of raw `{fileID}`. This makes references human-readable and editable.
+
+```
+activateDisplayText = ->Button_Text:TextMeshProUGUI
+targetObjects = [->Frame, ->_Header_Text, ->Paragraph_Text]
+attackRoot = ->MouthEnd:Transform
+```
+
+Rules:
+- `->GOPath:Component` — internal reference (write direction, canonical form)
+- `@GOPath:Component` — alias for `->` (read direction only, convenience shorthand)
+- Both `->` and `@` resolve to `{fileID: X}` on write-back using the REFS map
+- External references (with GUIDs) still use `{fileID, guid}` format
+- Null references remain `{0}`
+- Arrays of internal references: `[->GO1, ->GO2:Component]`
+- Stripped component entries (from nested prefab instances) are included in REFS to support path references to nested prefab components
+
 ### Complex Arrays
 
 ```

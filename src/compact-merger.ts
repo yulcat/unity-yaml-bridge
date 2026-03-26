@@ -15,9 +15,27 @@ import * as crypto from 'crypto';
 import { UnityFile, GameObjectNode, UnityDocument, UNITY_TYPE_MAP } from './types';
 import { CompactFile, CompactSection, CompactProperty, parseCompactValue } from './compact-reader';
 
-/** Deep clone a UnityFile for safe mutation */
+/** Deep clone a UnityFile for safe mutation, preserving non-enumerable markers (__flow, __multiLine) */
 function cloneUnityFile(file: UnityFile): UnityFile {
-  return JSON.parse(JSON.stringify(file));
+  return deepClone(file) as UnityFile;
+}
+
+function deepClone(value: any): any {
+  if (value === null || typeof value !== 'object') return value;
+  if (Array.isArray(value)) return value.map(deepClone);
+
+  const result: Record<string, any> = {};
+  for (const key of Object.keys(value)) {
+    result[key] = deepClone(value[key]);
+  }
+  // Preserve non-enumerable markers
+  if (value.__flow === true) {
+    Object.defineProperty(result, '__flow', { value: true, enumerable: false, writable: false });
+  }
+  if (value.__multiLine === true) {
+    Object.defineProperty(result, '__multiLine', { value: true, enumerable: false, writable: false });
+  }
+  return result;
 }
 
 /**
@@ -155,33 +173,42 @@ function applyTransformProperties(
     switch (prop.key) {
       case 'pos':
         if (isRect) {
+          preserveFlowMarker(doc.properties.m_AnchoredPosition, parsed);
           doc.properties.m_AnchoredPosition = parsed;
         } else {
+          preserveFlowMarker(doc.properties.m_LocalPosition, parsed);
           doc.properties.m_LocalPosition = parsed;
         }
         break;
       case 'rot':
+        preserveFlowMarker(doc.properties.m_LocalRotation, parsed);
         doc.properties.m_LocalRotation = parsed;
         break;
       case 'scale':
+        preserveFlowMarker(doc.properties.m_LocalScale, parsed);
         doc.properties.m_LocalScale = parsed;
         break;
       case 'anchor': {
         // anchor = (x1, y1)-(x2, y2) → parsed as {min, max}
         if (parsed && parsed.min && parsed.max) {
+          preserveFlowMarker(doc.properties.m_AnchorMin, parsed.min);
+          preserveFlowMarker(doc.properties.m_AnchorMax, parsed.max);
           doc.properties.m_AnchorMin = parsed.min;
           doc.properties.m_AnchorMax = parsed.max;
         }
         break;
       }
       case 'size':
+        preserveFlowMarker(doc.properties.m_SizeDelta, parsed);
         doc.properties.m_SizeDelta = parsed;
         break;
       case 'pivot':
+        preserveFlowMarker(doc.properties.m_Pivot, parsed);
         doc.properties.m_Pivot = parsed;
         break;
       default:
         // Direct property name (m_LocalPosition, etc.)
+        preserveFlowMarker(doc.properties[prop.key], parsed);
         doc.properties[prop.key] = parsed;
         break;
     }
@@ -220,13 +247,23 @@ function applyPropertiesToTarget(properties: CompactProperty[], target: Record<s
       if (isPlainObject(parsed) && isPlainObject(original)) {
         const remapped = remapVectorKeys(parsed, original);
         if (remapped) {
+          preserveFlowMarker(original, remapped);
           target[prop.key] = remapped;
           continue;
         }
+        preserveFlowMarker(original, parsed);
       }
 
       target[prop.key] = parsed;
     }
+  }
+}
+
+/** Preserve the __flow marker from original onto target (non-enumerable) */
+function preserveFlowMarker(original: any, target: any): void {
+  if (original && typeof original === 'object' && original.__flow === true
+      && target && typeof target === 'object') {
+    Object.defineProperty(target, '__flow', { value: true, enumerable: false, writable: false });
   }
 }
 

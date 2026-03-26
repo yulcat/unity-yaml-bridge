@@ -197,12 +197,12 @@ function isFlowMapping(obj: any): boolean {
 
   const keys = Object.keys(obj);
 
-  // File references
+  // File references — always flow
   if (keys.includes('fileID')) return true;
 
-  // Small vectors/colors
+  // Vectors/colors — only flow if originally parsed from a flow mapping
   if (keys.length <= 4 && keys.every(k => ['x', 'y', 'z', 'w', 'r', 'g', 'b', 'a'].includes(k))) {
-    return true;
+    return obj.__flow === true;
   }
 
   return false;

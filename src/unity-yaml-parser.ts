@@ -518,6 +518,12 @@ function markMultiLine(obj: Record<string, any>): Record<string, any> {
   return obj;
 }
 
+/** Mark an object as originally parsed from a flow mapping (inline {}) */
+function markFlow(obj: Record<string, any>): Record<string, any> {
+  Object.defineProperty(obj, '__flow', { value: true, enumerable: false, writable: false });
+  return obj;
+}
+
 /** Parse a YAML flow mapping: {key: value, key2: value2} */
 function parseFlowMapping(str: string): Record<string, any> {
   const result: Record<string, any> = {};
@@ -538,6 +544,7 @@ function parseFlowMapping(str: string): Record<string, any> {
     result[key] = parseInlineValue(value);
   }
 
+  markFlow(result);
   return result;
 }
 

@@ -91,13 +91,17 @@ export function writeCompact(file: UnityFile, options: CompactWriterOptions = {}
   }
   writeStructureTree(file.hierarchy, lines, '', true, resolver, expansionCtx);
 
+  // Build internal reference map (fileID → GOPath:ComponentType)
+  const refMap = buildInternalRefMap(file, resolver);
+
   // Details section
   lines.push('--- DETAILS');
-  writeDetails(file.hierarchy, lines, '', resolver, !options.verbose);
+  writeDetails(file.hierarchy, lines, '', resolver, !options.verbose, refMap);
 
   // REFS section
   lines.push('--- REFS');
   writeRefsSection(file.hierarchy, lines, resolver);
+  writeStrippedComponentRefs(file, lines, resolver);
 
   return lines.join('\n') + '\n';
 }
@@ -267,7 +271,8 @@ function writeDetails(
   lines: string[],
   path: string,
   resolver?: GuidResolver,
-  filterBoilerplate: boolean = true
+  filterBoilerplate: boolean = true,
+  refMap?: Map<string, string>
 ): void {
   // Use short path (just the GO name, unless we need disambiguation)
   const currentPath = path ? `${path}/${node.name}` : node.name;
@@ -302,13 +307,139 @@ function writeDetails(
     lines.push(`[${displayPath}:${compName}]`);
 
     for (const [key, value] of propEntries) {
-      writeProperty(key, value, lines, '');
+      writeProperty(key, value, lines, '', refMap);
     }
   }
 
   // Recurse children
   for (const child of node.children) {
-    writeDetails(child, lines, currentPath, resolver, filterBoilerplate);
+    writeDetails(child, lines, currentPath, resolver, filterBoilerplate, refMap);
+  }
+}
+
+/** Build a map from fileID → "GOName:ComponentType" for resolving internal references */
+function buildInternalRefMap(
+  file: UnityFile,
+  resolver?: GuidResolver
+): Map<string, string> {
+  const map = new Map<string, string>();
+  if (!file.hierarchy) return map;
+
+  // Walk hierarchy to collect all known fileIDs
+  collectNodeFileIds(file.hierarchy, map, resolver);
+
+  // Add stripped document entries for nested prefab components
+  const piNodeNames = buildPINodeNames(file.hierarchy, resolver);
+  const SKIP_TYPES = new Set(['Transform', 'RectTransform', 'CanvasRenderer', 'GameObject']);
+
+  for (const doc of file.documents) {
+    if (!doc.stripped) continue;
+    if (map.has(doc.fileId)) continue;
+
+    const piRef = doc.properties.m_PrefabInstance;
+    if (!piRef) continue;
+    const piFileId = String(piRef.fileID);
+    const nodeName = piNodeNames.get(piFileId);
+    if (!nodeName) continue;
+
+    let typeName = doc.typeName;
+    if (doc.typeId === 114 && doc.properties.m_Script?.guid) {
+      const resolved = resolver?.resolve(doc.properties.m_Script.guid);
+      if (resolved) typeName = resolved;
+    }
+    if (SKIP_TYPES.has(typeName)) continue;
+
+    map.set(doc.fileId, `${nodeName}:${typeName}`);
+  }
+
+  return map;
+}
+
+/** Collect fileIDs from hierarchy nodes into a map */
+function collectNodeFileIds(
+  node: GameObjectNode,
+  map: Map<string, string>,
+  resolver?: GuidResolver
+): void {
+  let name = node.name;
+  if (name === 'NestedPrefab' && node.nestedPrefab) {
+    name = resolveSourceName(node, resolver) || name;
+  }
+
+  if (node.fileId && node.fileId !== '0') {
+    map.set(node.fileId, name);
+  }
+  if (node.transform.fileId) {
+    const ttype = node.transform.isRect ? 'RectTransform' : 'Transform';
+    map.set(node.transform.fileId, `${name}:${ttype}`);
+  }
+  for (const comp of node.components) {
+    const compName = resolveComponentName(comp, resolver);
+    map.set(comp.fileId, `${name}:${compName}`);
+  }
+  for (const child of node.children) {
+    collectNodeFileIds(child, map, resolver);
+  }
+}
+
+/** Build PrefabInstance fileId → node name mapping from hierarchy */
+function buildPINodeNames(node: GameObjectNode, resolver?: GuidResolver): Map<string, string> {
+  const map = new Map<string, string>();
+  function collect(n: GameObjectNode): void {
+    if (n.nestedPrefab) {
+      let name = n.name;
+      if (name === 'NestedPrefab') {
+        name = resolveSourceName(n, resolver) || name;
+      }
+      map.set(n.nestedPrefab.instanceId, name);
+    }
+    for (const child of n.children) collect(child);
+  }
+  collect(node);
+  return map;
+}
+
+/** Write REFS entries for stripped component docs not covered by the hierarchy */
+function writeStrippedComponentRefs(
+  file: UnityFile,
+  lines: string[],
+  resolver?: GuidResolver
+): void {
+  if (!file.hierarchy) return;
+
+  const piNodeNames = buildPINodeNames(file.hierarchy, resolver);
+
+  // Collect fileIDs already written by writeNodeRefs
+  const writtenIds = new Set<string>();
+  function collectWritten(node: GameObjectNode): void {
+    if (node.fileId && node.fileId !== '0') writtenIds.add(node.fileId);
+    if (node.transform.fileId) writtenIds.add(node.transform.fileId);
+    for (const comp of node.components) writtenIds.add(comp.fileId);
+    if (node.nestedPrefab) writtenIds.add(node.nestedPrefab.instanceId);
+    for (const child of node.children) collectWritten(child);
+  }
+  collectWritten(file.hierarchy);
+
+  const SKIP_TYPES = new Set(['Transform', 'RectTransform', 'CanvasRenderer', 'GameObject']);
+
+  for (const doc of file.documents) {
+    if (!doc.stripped) continue;
+    if (writtenIds.has(doc.fileId)) continue;
+
+    const piRef = doc.properties.m_PrefabInstance;
+    if (!piRef) continue;
+    const piFileId = String(piRef.fileID);
+    const nodeName = piNodeNames.get(piFileId);
+    if (!nodeName) continue;
+
+    let typeName = doc.typeName;
+    if (doc.typeId === 114 && doc.properties.m_Script?.guid) {
+      const resolved = resolver?.resolve(doc.properties.m_Script.guid);
+      if (resolved) typeName = resolved;
+    }
+    if (SKIP_TYPES.has(typeName)) continue;
+
+    lines.push(`${nodeName}:${typeName} = ${doc.fileId}`);
   }
 }
 
@@ -420,7 +551,7 @@ function writeTransformSection(transform: TransformInfo, path: string): string |
 }
 
 /** Write a property value in compact format */
-function writeProperty(key: string, value: any, lines: string[], indent: string): void {
+function writeProperty(key: string, value: any, lines: string[], indent: string, refMap?: Map<string, string>): void {
   if (value === null || value === undefined) {
     lines.push(`${indent}${key} = null`);
     return;
@@ -429,7 +560,7 @@ function writeProperty(key: string, value: any, lines: string[], indent: string)
   if (typeof value === 'object' && !Array.isArray(value)) {
     // Check if it's a file reference
     if ('fileID' in value) {
-      lines.push(`${indent}${key} = ${formatReference(value)}`);
+      lines.push(`${indent}${key} = ${formatReference(value, refMap)}`);
       return;
     }
 
@@ -442,7 +573,7 @@ function writeProperty(key: string, value: any, lines: string[], indent: string)
     // Nested object
     lines.push(`${indent}${key}:`);
     for (const [k, v] of Object.entries(value)) {
-      writeProperty(k, v, lines, indent + '  ');
+      writeProperty(k, v, lines, indent + '  ', refMap);
     }
     return;
   }
@@ -455,7 +586,7 @@ function writeProperty(key: string, value: any, lines: string[], indent: string)
 
     // Check if all items are simple references
     if (value.every((v: any) => typeof v === 'object' && 'fileID' in v)) {
-      const refs = value.map((v: any) => formatReference(v));
+      const refs = value.map((v: any) => formatReference(v, refMap));
       if (refs.join(', ').length < 80) {
         lines.push(`${indent}${key} = [${refs.join(', ')}]`);
         return;
@@ -473,7 +604,7 @@ function writeProperty(key: string, value: any, lines: string[], indent: string)
     for (const item of value) {
       if (typeof item === 'object' && !Array.isArray(item)) {
         if ('fileID' in item) {
-          lines.push(`${indent}  - ${formatReference(item)}`);
+          lines.push(`${indent}  - ${formatReference(item, refMap)}`);
         } else {
           const entries = Object.entries(item);
           if (entries.length > 0) {
@@ -482,18 +613,18 @@ function writeProperty(key: string, value: any, lines: string[], indent: string)
               // Nested object value → block format
               lines.push(`${indent}  - ${firstKey}:`);
               for (const [k, v] of Object.entries(firstVal as Record<string, any>)) {
-                writeProperty(k, v, lines, indent + '      ');
+                writeProperty(k, v, lines, indent + '      ', refMap);
               }
             } else {
-              lines.push(`${indent}  - ${firstKey} = ${formatValue(firstVal)}`);
+              lines.push(`${indent}  - ${firstKey} = ${formatValue(firstVal, refMap)}`);
             }
             for (let i = 1; i < entries.length; i++) {
-              writeProperty(entries[i][0], entries[i][1], lines, indent + '    ');
+              writeProperty(entries[i][0], entries[i][1], lines, indent + '    ', refMap);
             }
           }
         }
       } else {
-        lines.push(`${indent}  - ${formatValue(item)}`);
+        lines.push(`${indent}  - ${formatValue(item, refMap)}`);
       }
     }
     return;
@@ -504,27 +635,32 @@ function writeProperty(key: string, value: any, lines: string[], indent: string)
 }
 
 /** Format a value inline */
-function formatValue(value: any): string {
+function formatValue(value: any, refMap?: Map<string, string>): string {
   if (value === null || value === undefined) return 'null';
   if (typeof value === 'object' && !Array.isArray(value)) {
-    if ('fileID' in value) return formatReference(value);
+    if ('fileID' in value) return formatReference(value, refMap);
     if (isVector(value)) return formatVector(value);
     // Nested object — serialize as inline brace notation to avoid [object Object]
     const entries = Object.entries(value);
-    const parts = entries.map(([k, v]) => `${k}: ${formatValue(v)}`);
+    const parts = entries.map(([k, v]) => `${k}: ${formatValue(v, refMap)}`);
     return `{${parts.join(', ')}}`;
   }
-  if (Array.isArray(value)) return `[${value.map(formatValue).join(', ')}]`;
+  if (Array.isArray(value)) return `[${value.map(v => formatValue(v, refMap)).join(', ')}]`;
   return String(value);
 }
 
 /** Format a file reference */
-function formatReference(ref: any): string {
+function formatReference(ref: any, refMap?: Map<string, string>): string {
   if (!ref) return 'null';
   if (String(ref.fileID) === '0') return '{0}';
   if (ref.guid) {
     const type = ref.type !== undefined && ref.type !== 3 ? `, ${ref.type}` : '';
     return `{${ref.fileID}, ${ref.guid}${type}}`;
+  }
+  // Internal reference — try to resolve to ->GOPath:Component format
+  if (refMap) {
+    const resolved = refMap.get(String(ref.fileID));
+    if (resolved) return `->${resolved}`;
   }
   return `{${ref.fileID}}`;
 }

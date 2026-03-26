@@ -139,7 +139,7 @@ function mergePrefabSections(file, sections, refs) {
                         applyTransformProperties(section.properties, doc, compType === 'RectTransform');
                     }
                     else {
-                        applyComponentProperties(section.properties, doc);
+                        applyComponentProperties(section.properties, doc, refs);
                     }
                     continue;
                 }
@@ -170,7 +170,7 @@ function mergePrefabSections(file, sections, refs) {
             if (comp) {
                 const compDoc = docMap.get(comp.fileId);
                 if (compDoc) {
-                    applyComponentProperties(section.properties, compDoc);
+                    applyComponentProperties(section.properties, compDoc, refs);
                 }
             }
         }
@@ -316,26 +316,28 @@ function applyTransformProperties(properties, doc, isRect) {
     }
 }
 /** Apply component properties to a component document */
-function applyComponentProperties(properties, doc) {
-    applyPropertiesToTarget(properties, doc.properties);
+function applyComponentProperties(properties, doc, refs) {
+    applyPropertiesToTarget(properties, doc.properties, refs);
 }
 /** Apply a list of CompactProperty entries into a target object, preserving nesting */
-function applyPropertiesToTarget(properties, target) {
+function applyPropertiesToTarget(properties, target, refs) {
     for (const prop of properties) {
         if (Array.isArray(prop.value)) {
             // Nested block — check if the target already has this key as an object
             const existing = target[prop.key];
             if (isPlainObject(existing) && prop.value.length > 0 && !prop.value.some(c => c.key === '__item__')) {
                 // Recursively apply nested properties into existing object
-                applyPropertiesToTarget(prop.value, existing);
+                applyPropertiesToTarget(prop.value, existing, refs);
             }
             else {
                 // Reconstruct as new object or array, passing original for key remapping
-                target[prop.key] = reconstructNestedValue(prop.value, existing);
+                target[prop.key] = reconstructNestedValue(prop.value, existing, refs);
             }
         }
         else {
-            const parsed = (0, compact_reader_1.parseCompactValue)(prop.value);
+            let parsed = (0, compact_reader_1.parseCompactValue)(prop.value);
+            // Resolve path references (->GOPath:Component or @GOPath:Component)
+            parsed = resolvePathReference(parsed, refs);
             const original = target[prop.key];
             // Preserve null references: compact writes {fileID:0} as "null",
             // but we need to keep the original {fileID: 0} object for YAML round-trip
@@ -355,6 +357,34 @@ function applyPropertiesToTarget(properties, target) {
             target[prop.key] = parsed;
         }
     }
+}
+/**
+ * Resolve ->GOPath:Component or @GOPath:Component path references to {fileID: X} objects.
+ * Recursively handles arrays. Returns the original value unchanged if not a path reference.
+ */
+function resolvePathReference(value, refs) {
+    if (!refs)
+        return value;
+    if (typeof value === 'string') {
+        let pathRef = null;
+        if (value.startsWith('->')) {
+            pathRef = value.substring(2);
+        }
+        else if (value.startsWith('@')) {
+            pathRef = value.substring(1);
+        }
+        if (!pathRef)
+            return value;
+        const fileIds = refs.get(pathRef);
+        if (fileIds && fileIds.length > 0) {
+            return (0, compact_reader_1.parseCompactValue)('{' + fileIds[0] + '}');
+        }
+        return value; // Unresolved — keep as string
+    }
+    if (Array.isArray(value)) {
+        return value.map(item => resolvePathReference(item, refs));
+    }
+    return value;
 }
 /** Preserve the __flow marker from original onto target (non-enumerable) */
 function preserveFlowMarker(original, target) {
@@ -397,7 +427,7 @@ function remapVectorKeys(parsed, original) {
     return remapped;
 }
 /** Reconstruct a nested value from CompactProperty children, using original for key remapping */
-function reconstructNestedValue(children, original) {
+function reconstructNestedValue(children, original, refs) {
     // Check if this is an array (items have __item__ key) or an object
     const isArray = children.some(c => c.key === '__item__');
     if (isArray) {
@@ -405,10 +435,11 @@ function reconstructNestedValue(children, original) {
         return children.map((c, idx) => {
             const origItem = origArray?.[idx];
             if (typeof c.value === 'string') {
-                const parsed = (0, compact_reader_1.parseCompactValue)(c.value);
+                let parsed = (0, compact_reader_1.parseCompactValue)(c.value);
+                parsed = resolvePathReference(parsed, refs);
                 return remapWithOriginal(parsed, origItem);
             }
-            return reconstructNestedValue(c.value, origItem);
+            return reconstructNestedValue(c.value, origItem, refs);
         });
     }
     // Object
@@ -417,10 +448,11 @@ function reconstructNestedValue(children, original) {
     for (const child of children) {
         const origVal = origObj?.[child.key];
         if (Array.isArray(child.value)) {
-            result[child.key] = reconstructNestedValue(child.value, origVal);
+            result[child.key] = reconstructNestedValue(child.value, origVal, refs);
         }
         else {
-            const parsed = (0, compact_reader_1.parseCompactValue)(child.value);
+            let parsed = (0, compact_reader_1.parseCompactValue)(child.value);
+            parsed = resolvePathReference(parsed, refs);
             result[child.key] = remapWithOriginal(parsed, origVal);
         }
     }

@@ -100,12 +100,15 @@ function writeCompact(file, options = {}) {
         };
     }
     writeStructureTree(file.hierarchy, lines, '', true, resolver, expansionCtx);
+    // Build internal reference map (fileID → GOPath:ComponentType)
+    const refMap = buildInternalRefMap(file, resolver);
     // Details section
     lines.push('--- DETAILS');
-    writeDetails(file.hierarchy, lines, '', resolver, !options.verbose);
+    writeDetails(file.hierarchy, lines, '', resolver, !options.verbose, refMap);
     // REFS section
     lines.push('--- REFS');
     writeRefsSection(file.hierarchy, lines, resolver);
+    writeStrippedComponentRefs(file, lines, resolver);
     return lines.join('\n') + '\n';
 }
 /** Try to expand a nested prefab by loading and parsing its source */
@@ -228,7 +231,7 @@ function writeStructureTree(node, lines, prefix, isRoot, resolver, expansionCtx,
     }
 }
 /** Write the details section for a GO and its descendants */
-function writeDetails(node, lines, path, resolver, filterBoilerplate = true) {
+function writeDetails(node, lines, path, resolver, filterBoilerplate = true, refMap) {
     // Use short path (just the GO name, unless we need disambiguation)
     const currentPath = path ? `${path}/${node.name}` : node.name;
     const displayPath = node.name;
@@ -261,12 +264,128 @@ function writeDetails(node, lines, path, resolver, filterBoilerplate = true) {
         lines.push('');
         lines.push(`[${displayPath}:${compName}]`);
         for (const [key, value] of propEntries) {
-            writeProperty(key, value, lines, '');
+            writeProperty(key, value, lines, '', refMap);
         }
     }
     // Recurse children
     for (const child of node.children) {
-        writeDetails(child, lines, currentPath, resolver, filterBoilerplate);
+        writeDetails(child, lines, currentPath, resolver, filterBoilerplate, refMap);
+    }
+}
+/** Build a map from fileID → "GOName:ComponentType" for resolving internal references */
+function buildInternalRefMap(file, resolver) {
+    const map = new Map();
+    if (!file.hierarchy)
+        return map;
+    // Walk hierarchy to collect all known fileIDs
+    collectNodeFileIds(file.hierarchy, map, resolver);
+    // Add stripped document entries for nested prefab components
+    const piNodeNames = buildPINodeNames(file.hierarchy, resolver);
+    const SKIP_TYPES = new Set(['Transform', 'RectTransform', 'CanvasRenderer', 'GameObject']);
+    for (const doc of file.documents) {
+        if (!doc.stripped)
+            continue;
+        if (map.has(doc.fileId))
+            continue;
+        const piRef = doc.properties.m_PrefabInstance;
+        if (!piRef)
+            continue;
+        const piFileId = String(piRef.fileID);
+        const nodeName = piNodeNames.get(piFileId);
+        if (!nodeName)
+            continue;
+        let typeName = doc.typeName;
+        if (doc.typeId === 114 && doc.properties.m_Script?.guid) {
+            const resolved = resolver?.resolve(doc.properties.m_Script.guid);
+            if (resolved)
+                typeName = resolved;
+        }
+        if (SKIP_TYPES.has(typeName))
+            continue;
+        map.set(doc.fileId, `${nodeName}:${typeName}`);
+    }
+    return map;
+}
+/** Collect fileIDs from hierarchy nodes into a map */
+function collectNodeFileIds(node, map, resolver) {
+    let name = node.name;
+    if (name === 'NestedPrefab' && node.nestedPrefab) {
+        name = resolveSourceName(node, resolver) || name;
+    }
+    if (node.fileId && node.fileId !== '0') {
+        map.set(node.fileId, name);
+    }
+    if (node.transform.fileId) {
+        const ttype = node.transform.isRect ? 'RectTransform' : 'Transform';
+        map.set(node.transform.fileId, `${name}:${ttype}`);
+    }
+    for (const comp of node.components) {
+        const compName = resolveComponentName(comp, resolver);
+        map.set(comp.fileId, `${name}:${compName}`);
+    }
+    for (const child of node.children) {
+        collectNodeFileIds(child, map, resolver);
+    }
+}
+/** Build PrefabInstance fileId → node name mapping from hierarchy */
+function buildPINodeNames(node, resolver) {
+    const map = new Map();
+    function collect(n) {
+        if (n.nestedPrefab) {
+            let name = n.name;
+            if (name === 'NestedPrefab') {
+                name = resolveSourceName(n, resolver) || name;
+            }
+            map.set(n.nestedPrefab.instanceId, name);
+        }
+        for (const child of n.children)
+            collect(child);
+    }
+    collect(node);
+    return map;
+}
+/** Write REFS entries for stripped component docs not covered by the hierarchy */
+function writeStrippedComponentRefs(file, lines, resolver) {
+    if (!file.hierarchy)
+        return;
+    const piNodeNames = buildPINodeNames(file.hierarchy, resolver);
+    // Collect fileIDs already written by writeNodeRefs
+    const writtenIds = new Set();
+    function collectWritten(node) {
+        if (node.fileId && node.fileId !== '0')
+            writtenIds.add(node.fileId);
+        if (node.transform.fileId)
+            writtenIds.add(node.transform.fileId);
+        for (const comp of node.components)
+            writtenIds.add(comp.fileId);
+        if (node.nestedPrefab)
+            writtenIds.add(node.nestedPrefab.instanceId);
+        for (const child of node.children)
+            collectWritten(child);
+    }
+    collectWritten(file.hierarchy);
+    const SKIP_TYPES = new Set(['Transform', 'RectTransform', 'CanvasRenderer', 'GameObject']);
+    for (const doc of file.documents) {
+        if (!doc.stripped)
+            continue;
+        if (writtenIds.has(doc.fileId))
+            continue;
+        const piRef = doc.properties.m_PrefabInstance;
+        if (!piRef)
+            continue;
+        const piFileId = String(piRef.fileID);
+        const nodeName = piNodeNames.get(piFileId);
+        if (!nodeName)
+            continue;
+        let typeName = doc.typeName;
+        if (doc.typeId === 114 && doc.properties.m_Script?.guid) {
+            const resolved = resolver?.resolve(doc.properties.m_Script.guid);
+            if (resolved)
+                typeName = resolved;
+        }
+        if (SKIP_TYPES.has(typeName))
+            continue;
+        lines.push(`${nodeName}:${typeName} = ${doc.fileId}`);
     }
 }
 /** Write the REFS section mapping paths to fileIDs */
@@ -357,7 +476,7 @@ function writeTransformSection(transform, path) {
     return `[${path}:${typeName}]\n${lines.join('\n')}`;
 }
 /** Write a property value in compact format */
-function writeProperty(key, value, lines, indent) {
+function writeProperty(key, value, lines, indent, refMap) {
     if (value === null || value === undefined) {
         lines.push(`${indent}${key} = null`);
         return;
@@ -365,7 +484,7 @@ function writeProperty(key, value, lines, indent) {
     if (typeof value === 'object' && !Array.isArray(value)) {
         // Check if it's a file reference
         if ('fileID' in value) {
-            lines.push(`${indent}${key} = ${formatReference(value)}`);
+            lines.push(`${indent}${key} = ${formatReference(value, refMap)}`);
             return;
         }
         // Check if it's a vector/color
@@ -376,7 +495,7 @@ function writeProperty(key, value, lines, indent) {
         // Nested object
         lines.push(`${indent}${key}:`);
         for (const [k, v] of Object.entries(value)) {
-            writeProperty(k, v, lines, indent + '  ');
+            writeProperty(k, v, lines, indent + '  ', refMap);
         }
         return;
     }
@@ -387,7 +506,7 @@ function writeProperty(key, value, lines, indent) {
         }
         // Check if all items are simple references
         if (value.every((v) => typeof v === 'object' && 'fileID' in v)) {
-            const refs = value.map((v) => formatReference(v));
+            const refs = value.map((v) => formatReference(v, refMap));
             if (refs.join(', ').length < 80) {
                 lines.push(`${indent}${key} = [${refs.join(', ')}]`);
                 return;
@@ -403,7 +522,7 @@ function writeProperty(key, value, lines, indent) {
         for (const item of value) {
             if (typeof item === 'object' && !Array.isArray(item)) {
                 if ('fileID' in item) {
-                    lines.push(`${indent}  - ${formatReference(item)}`);
+                    lines.push(`${indent}  - ${formatReference(item, refMap)}`);
                 }
                 else {
                     const entries = Object.entries(item);
@@ -413,20 +532,20 @@ function writeProperty(key, value, lines, indent) {
                             // Nested object value → block format
                             lines.push(`${indent}  - ${firstKey}:`);
                             for (const [k, v] of Object.entries(firstVal)) {
-                                writeProperty(k, v, lines, indent + '      ');
+                                writeProperty(k, v, lines, indent + '      ', refMap);
                             }
                         }
                         else {
-                            lines.push(`${indent}  - ${firstKey} = ${formatValue(firstVal)}`);
+                            lines.push(`${indent}  - ${firstKey} = ${formatValue(firstVal, refMap)}`);
                         }
                         for (let i = 1; i < entries.length; i++) {
-                            writeProperty(entries[i][0], entries[i][1], lines, indent + '    ');
+                            writeProperty(entries[i][0], entries[i][1], lines, indent + '    ', refMap);
                         }
                     }
                 }
             }
             else {
-                lines.push(`${indent}  - ${formatValue(item)}`);
+                lines.push(`${indent}  - ${formatValue(item, refMap)}`);
             }
         }
         return;
@@ -435,25 +554,25 @@ function writeProperty(key, value, lines, indent) {
     lines.push(`${indent}${key} = ${value}`);
 }
 /** Format a value inline */
-function formatValue(value) {
+function formatValue(value, refMap) {
     if (value === null || value === undefined)
         return 'null';
     if (typeof value === 'object' && !Array.isArray(value)) {
         if ('fileID' in value)
-            return formatReference(value);
+            return formatReference(value, refMap);
         if (isVector(value))
             return formatVector(value);
         // Nested object — serialize as inline brace notation to avoid [object Object]
         const entries = Object.entries(value);
-        const parts = entries.map(([k, v]) => `${k}: ${formatValue(v)}`);
+        const parts = entries.map(([k, v]) => `${k}: ${formatValue(v, refMap)}`);
         return `{${parts.join(', ')}}`;
     }
     if (Array.isArray(value))
-        return `[${value.map(formatValue).join(', ')}]`;
+        return `[${value.map(v => formatValue(v, refMap)).join(', ')}]`;
     return String(value);
 }
 /** Format a file reference */
-function formatReference(ref) {
+function formatReference(ref, refMap) {
     if (!ref)
         return 'null';
     if (String(ref.fileID) === '0')
@@ -461,6 +580,12 @@ function formatReference(ref) {
     if (ref.guid) {
         const type = ref.type !== undefined && ref.type !== 3 ? `, ${ref.type}` : '';
         return `{${ref.fileID}, ${ref.guid}${type}}`;
+    }
+    // Internal reference — try to resolve to ->GOPath:Component format
+    if (refMap) {
+        const resolved = refMap.get(String(ref.fileID));
+        if (resolved)
+            return `->${resolved}`;
     }
     return `{${ref.fileID}}`;
 }

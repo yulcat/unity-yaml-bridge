@@ -1,22 +1,33 @@
 {
   "name": "unity-yaml-bridge",
   "version": "1.0.0",
-  "description": "",
+  "description": "Bidirectional parser between Unity YAML and AI-friendly .ubridge format",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
     "ubridge": "dist/cli.js"
   },
+  "files": [
+    "dist/**/*.js",
+    "dist/**/*.d.ts",
+    "docs/FORMAT.md",
+    "README.md"
+  ],
   "scripts": {
     "build": "tsc",
+    "prepare": "tsc",
     "test": "tsc && node dist/test-roundtrip.js && node dist/test-compact-roundtrip.js && node dist/test-refs.js",
     "test:roundtrip": "tsc && node dist/test-roundtrip.js",
     "test:compact": "tsc && node dist/test-compact-roundtrip.js",
     "test:refs": "tsc && node dist/test-refs.js"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "keywords": ["unity", "yaml", "prefab", "ai", "parser", "gamedev"],
+  "author": "yulcat",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yulcat/unity-yaml-bridge.git"
+  },
   "type": "commonjs",
   "devDependencies": {
     "@types/node": "^25.5.0",

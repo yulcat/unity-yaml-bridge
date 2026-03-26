@@ -28,10 +28,43 @@ Button [ButtonActivation]
   - Omit: Transform, RectTransform, CanvasRenderer (boilerplate)
   - Include: Image, TextMeshProUGUI, Animator, AudioSource, custom MonoBehaviours
 - `{PrefabName}` — nested prefab instance (the GO came from instantiating PrefabName)
+- Nested prefab expansion: when a `--project` path is provided, nested prefab hierarchies are recursively inlined, showing the full tree from the source prefab
 - Variant markers (prefab variant files only):
   - `*` after component name = modified (e.g. `Image*`)
   - `+` before GO name = added
   - `-` before GO name = removed
+
+### Nested Prefab Expansion
+
+When a Unity project path is provided (via `--project` or `guidResolver`), nested PrefabInstance nodes are recursively expanded to show the full hierarchy from their source prefab. This makes the tree readable without needing to open the source prefab separately.
+
+```
+_Card_Template [CameraFacingBillboard, CardBehaviour]
+├─ Frame [Image]
+├─ _Header_Text {_Header_Text}
+│  └─ Text [TextMeshProUGUI*]
+├─ Paragraph_Text {Paragraph_Text}
+│  └─ Text [TextMeshProUGUI*]
+└─ small circle {Medal_Template} [MedalDisplayUI*, Animator]
+   ├─ Circle_Image [Image*]
+   ├─ Small_Circle_Image [Image*]
+   ├─ ActivationParticles_Template {ActivationParticles_Template}
+   │  ├─ ParticleReferences
+   │  │  ├─ Burst_ParticleSystem [ParticleSystem*, ParticleSystemRenderer*]
+   │  │  └─ Activated_ParticleSystem [ParticleSystem*, ParticleSystemRenderer*]
+   │  ├─ Activated_UIParticles [UIParticles*]
+   │  └─ Burst_UIParticles [UIParticles*]
+   └─ ProfileIcon_Image {ProfileIcon_Image}
+      └─ Image [Image*]
+```
+
+Key behaviors:
+- `{SourceName}` annotation shows which prefab the node was instantiated from
+- Children of the nested prefab are inlined at the correct tree depth
+- `*` markers indicate components overridden by the base PI's modifications
+- Expansion is recursive (nested-within-nested prefabs are also expanded)
+- Cycle detection prevents infinite recursion when prefabs reference each other
+- If the source prefab file cannot be found, the node shows just `{GUID}` without expansion
 
 ### Name Collision Resolution
 
@@ -192,13 +225,26 @@ For variants, the file shows the full inherited tree from the base prefab with o
 
 ### Structure Section (Variant)
 
-Shows the full inherited tree with markers:
+When the base prefab can be resolved, the structure shows the full inherited tree (including nested prefab expansion) with `*` markers on overridden components:
+
 ```
-_Card_Template [CardDisplay]
-├─ Frame [Image*]
-├─ _Header_Text [TextMeshProUGUI*]
-├─ Paragraph_Text [TextMeshProUGUI*]
-└─ small circle [Image*, MedalDisplayUI*]
+_Card_Template [CameraFacingBillboard, CardBehaviour*]
+├─ Frame [Image]
+├─ _Header_Text {_Header_Text}
+│  └─ Text [TextMeshProUGUI*]
+├─ Paragraph_Text {Paragraph_Text}
+│  └─ Text [TextMeshProUGUI*]
+└─ small circle {Medal_Template} [MedalDisplayUI*, Animator]
+   ├─ Circle_Image [Image*]
+   ├─ Small_Circle_Image [Image*]
+   ├─ ActivationParticles_Template {ActivationParticles_Template}
+   │  ├─ ParticleReferences
+   │  │  ├─ Burst_ParticleSystem [ParticleSystem*, ParticleSystemRenderer*]
+   │  │  └─ Activated_ParticleSystem [ParticleSystem*, ParticleSystemRenderer*]
+   │  ├─ Activated_UIParticles [UIParticles*]
+   │  └─ Burst_UIParticles [UIParticles*]
+   └─ ProfileIcon_Image {ProfileIcon_Image}
+      └─ Image [Image*]
 ```
 
 `*` = this component has overrides in this variant.
@@ -210,18 +256,31 @@ If the base prefab cannot be resolved, falls back to:
 
 ### Details Section (Variant)
 
-Only overridden properties appear. Section headers use `[GOPath:ComponentType]` format (same as regular prefabs), not raw fileID references:
+Only overridden properties appear. Section headers use `[GOPath:ComponentType]` format, resolved from the base prefab hierarchy — never raw fileID references.
 
 ```
+[_Card_Template]
+m_Name = Card_Explorer_Variant
+
 [_Header_Text:TextMeshProUGUI]
 m_text = Explorer
 
 [Paragraph_Text:TextMeshProUGUI]
 m_text = Agility and speed. A fast mode for exploring and reaching new heights.
 
-[_Card_Template:CardDisplay]
+[small circle/Circle_Image:Image]
+m_Sprite = {21300000, 42d984ce295234641b1cb18df0854078}
+m_Color.a = -0.044181824
+
+[_Card_Template:CardBehaviour]
 cardData = {11400000, 1fe163de0e6ff604d9ba3bd3b6228a5b}
 ```
+
+Path resolution rules:
+- **Direct base objects**: Use the GO name from the base hierarchy (e.g. `_Card_Template:CardBehaviour`)
+- **Nested prefab objects**: Use the instance name + component type (e.g. `_Header_Text:TextMeshProUGUI`)
+- **Disambiguation**: When the same component type appears on multiple GOs within a nested prefab, the source GO name is appended (e.g. `small circle/Circle_Image:Image` vs `small circle/Small_Circle_Image:Image`)
+- **Deep nesting**: For objects inside nested prefabs within nested prefabs, the full path is shown (e.g. `small circle/ActivationParticles_Template/Activated_ParticleSystem:ParticleSystem`)
 
 Boilerplate variant modifications are filtered (transform positions, rotation orders, etc.).
 
@@ -235,6 +294,8 @@ _Card_Template:RectTransform = 8368714169436892108
 _Card_Template = 3640861149533394057
 _Header_Text:TextMeshProUGUI = 7213628277689136018
 Paragraph_Text:TextMeshProUGUI = 4010685728728214465
+small circle/Circle_Image:Image = 6683245448512787790
+small circle/Small_Circle_Image:Image = 2153683003282787722
 ```
 
 The `__instance` entry stores the PrefabInstance document's own fileID. Other entries map to target fileIDs used in the base prefab, enabling the tool to reconstruct `target: {fileID: X, guid: Y, type: 3}` modification entries.

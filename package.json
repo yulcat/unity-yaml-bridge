@@ -15,7 +15,7 @@
   ],
   "scripts": {
     "build": "tsc",
-    "prepare": "tsc",
+    "prepare": "npx tsc",
     "test": "tsc && node dist/test-roundtrip.js && node dist/test-compact-roundtrip.js && node dist/test-refs.js",
     "test:roundtrip": "tsc && node dist/test-roundtrip.js",
     "test:compact": "tsc && node dist/test-compact-roundtrip.js",

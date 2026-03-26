@@ -1,0 +1,197 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1 &6368200575031299620
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 7635044582660409908}
+  - component: {fileID: 6494414662289814071}
+  - component: {fileID: 4174410743559798359}
+  - component: {fileID: 6367698995396024101}
+  - component: {fileID: 1121905045406500152}
+  - component: {fileID: 4893605324375264477}
+  - component: {fileID: 7045247640163793923}
+  - component: {fileID: 5573504920089838499}
+  - component: {fileID: 6497476425901126634}
+  m_Layer: 0
+  m_Name: Enemy_m10215_BankRobber
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &7635044582660409908
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 6368200575031299620}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: -1.84, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &6494414662289814071
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 6368200575031299620}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: ae541760420c484d90d380ffb271f057, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+--- !u!114 &4174410743559798359
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 6368200575031299620}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: e259a14c592e454bac38998992c70ea6, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  Model:
+    SearchType: 1
+    Speed: 1
+--- !u!114 &6367698995396024101
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 6368200575031299620}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 45ab2fd5cf714f8587cf91bc4e365ef7, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  Model:
+    CharacterType: 1
+--- !u!114 &1121905045406500152
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 6368200575031299620}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 47bea9963b5241679f987ba1e1f39f84, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  Model:
+    RepulseRadius: 0.6
+    HitRadius: 0.5
+--- !u!114 &4893605324375264477
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 6368200575031299620}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 635abba27b55412a92c5b7716cdb7d7a, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  Model:
+    CombatProperty:
+      HealthPoint: 720
+      AttackPoint: 1
+      DefensePoint: 0
+      CriticalRate: 1000
+      CriticalDamageRate: 0
+      CriticalChance: 0
+      CriticalResist: 0
+      Accuracy: 100
+      Avoidance: 100
+      DamageIncrease: 0
+      DamageDecrease: 0
+      AbilityHaste: 0
+      Speed: 0
+      HealthRegenPerSecond: 0
+      KnockBackResistance: 0
+      AirborneResistance: 0
+      AirborneAvoidance: 0
+      ActionControlResistance: 0
+      ActionControlAvoidance: 0
+    Properties:
+      AnimationDuration: 0.72
+      PreAttackDelay: 0.15
+      AttackRange: 4
+      MoveThroughRepulse: 0
+      OpponentDetectionRange: 50
+--- !u!114 &7045247640163793923
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 6368200575031299620}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: b3c5f990f0054854b38221fc3764350f, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  Model:
+    Prefab:
+      Asset: {fileID: 4523078749317480282, guid: f499cbba601257b468900d70c9179bfa, type: 3}
+      Name: m10215
+    UseScaleMultiplier: 0
+    ScaleMultiplierSynergy:
+      Value: 1
+      SynergyType: 0
+      SynergyMultiplier: 1
+    InitialPosition:
+      x: -1.84
+      y: 0
+      z: 0
+    InitialRotation: 0
+--- !u!114 &5573504920089838499
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 6368200575031299620}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 9f6e08f3797847e5b10c33ef185fb675, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  Model:
+    Radius: 1
+    UseCustomShadow: 0
+    Prefab:
+      Asset: {fileID: 0}
+      Name: 
+--- !u!114 &6497476425901126634
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 6368200575031299620}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: e0b4a383512e40f5a0f21b1f08f272cd, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  Model:
+    Models:
+    - SkillPrefab:
+        Prefab: {fileID: 8803272124581995615, guid: 47f8eb83cbf75654697c5a8e80fc7865, type: 3}
+        Name: skill_e_projectile_bomb_m

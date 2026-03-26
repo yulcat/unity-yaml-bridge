@@ -327,7 +327,12 @@ function writeNodeRefs(
   lines: string[],
   resolver?: GuidResolver
 ): void {
-  const name = node.name;
+  let name = node.name;
+  // Resolve 'NestedPrefab' default to source name
+  if (name === 'NestedPrefab' && node.nestedPrefab) {
+    const resolved = resolveSourceName(node, resolver);
+    if (resolved) name = resolved;
+  }
 
   // GO fileId
   if (node.fileId && node.fileId !== '0') {
@@ -610,7 +615,7 @@ function buildBaseDocMap(
   // Build PI fileID → nested prefab node name mapping from hierarchy
   const piNodeNames = new Map<string, string>();
   if (baseHierarchy) {
-    collectNestedNodeNames(baseHierarchy, piNodeNames);
+    collectNestedNodeNames(baseHierarchy, piNodeNames, resolver);
   }
 
   // Index all docs by fileId
@@ -679,13 +684,19 @@ function buildBaseDocMap(
   return map;
 }
 
-/** Collect nested prefab node names: PI instanceId → node name */
-function collectNestedNodeNames(node: GameObjectNode, map: Map<string, string>): void {
+/** Collect nested prefab node names: PI instanceId → node name (resolves 'NestedPrefab' defaults) */
+function collectNestedNodeNames(node: GameObjectNode, map: Map<string, string>, resolver?: GuidResolver): void {
   if (node.nestedPrefab) {
-    map.set(node.nestedPrefab.instanceId, node.name);
+    let name = node.name;
+    if (name === 'NestedPrefab' && node.nestedPrefab.sourceGuid) {
+      name = node.nestedPrefab.sourceName ||
+        (resolver ? resolver.resolve(node.nestedPrefab.sourceGuid) : undefined) ||
+        name;
+    }
+    map.set(node.nestedPrefab.instanceId, name);
   }
   for (const child of node.children) {
-    collectNestedNodeNames(child, map);
+    collectNestedNodeNames(child, map, resolver);
   }
 }
 
@@ -745,9 +756,16 @@ function inferComponentType(propertyPaths: string[]): string | null {
   return best || null;
 }
 
+/** Entry representing a component reachable through the nested prefab chain */
+interface SourceObjectEntry {
+  path: string;           // e.g., "_Header_Text" or "small circle/Circle_Image"
+  componentType: string;  // e.g., "Image", "TextMeshProUGUI"
+  baseModPropPaths: Set<string>; // property paths from base PI modifications
+}
+
 /**
- * Resolve unresolved variant targets by matching property paths against
- * nested prefab source objects. Returns a map: targetFileId → resolved key.
+ * Resolve unresolved variant targets by recursively traversing nested prefab
+ * hierarchies. Returns a map: targetFileId → resolved GOPath:ComponentType key.
  */
 function resolveNestedTargets(
   unresolvedTargets: Map<string, PropertyModification[]>,
@@ -757,111 +775,236 @@ function resolveNestedTargets(
 ): Map<string, string> {
   const resolved = new Map<string, string>();
 
-  // Build: nested node name → [component types available in that source]
-  // Also track PI fileID → nested node name
+  // Build PI → node name mapping (with source name resolution)
   const piNodeNames = new Map<string, string>();
-  collectNestedNodeNames(baseHierarchy, piNodeNames);
+  collectNestedNodeNames(baseHierarchy, piNodeNames, resolver);
 
-  // For each PI, load source and build type → node name mapping
-  // Also collect source object property paths for disambiguation
-  interface SourceObjectInfo {
-    nodeName: string;
-    componentType: string;
-    propertyPaths: Set<string>;  // paths from base PI modifications
-  }
-  const sourceObjectsByType = new Map<string, SourceObjectInfo[]>();
+  // Build comprehensive component inventory from all nested prefab chains
+  const allEntries: SourceObjectEntry[] = [];
 
   for (const pi of basePrefabInstances) {
-    const piId = pi.fileId;
-    const nodeName = piNodeNames.get(piId);
+    const nodeName = piNodeNames.get(pi.fileId);
     if (!nodeName) continue;
 
     const sourceGuid = pi.sourcePrefab.guid;
     if (!sourceGuid) continue;
 
-    const sourcePath = resolver.resolveFilePath(sourceGuid);
-    if (!sourcePath || !fs.existsSync(sourcePath)) continue;
-
-    try {
-      const sourceContent = fs.readFileSync(sourcePath, 'utf-8');
-      const sourceFile = parseUnityYaml(sourceContent);
-
-      // Build source object type index
-      const sourceDocTypes = new Map<string, string>(); // sourceFileId → componentType
-      for (const doc of sourceFile.documents) {
-        if (doc.stripped) continue;
-        let typeName = doc.typeName;
-        if (doc.typeId === 114 && doc.properties.m_Script?.guid) {
-          const r = resolver.resolve(doc.properties.m_Script.guid);
-          if (r) typeName = r;
-        }
-        sourceDocTypes.set(doc.fileId, typeName);
-      }
-
-      // Collect property paths from base PI modifications for each source object
-      for (const mod of pi.modifications) {
-        const sourceObjId = String(mod.target.fileID);
-        const componentType = sourceDocTypes.get(sourceObjId);
-        if (!componentType) continue;
-
-        const key = `${nodeName}:${componentType}`;
-        if (!sourceObjectsByType.has(key)) {
-          sourceObjectsByType.set(key, []);
-        }
-        let info = sourceObjectsByType.get(key)!.find(
-          s => s.nodeName === nodeName && s.componentType === componentType
-        );
-        if (!info) {
-          info = { nodeName, componentType, propertyPaths: new Set() };
-          sourceObjectsByType.get(key)!.push(info);
-        }
-        info.propertyPaths.add(mod.propertyPath);
-      }
-    } catch {
-      // Failed to parse source — skip
-    }
+    collectSourceEntries(nodeName, sourceGuid, pi.modifications, resolver, allEntries, 0);
   }
 
-  // Now resolve each unresolved target
+  // Group unresolved targets by inferred component type for assignment-based matching
+  const targetsByType = new Map<string, [string, PropertyModification[]][]>();
   for (const [targetId, mods] of unresolvedTargets) {
-    const paths = mods.map(m => m.propertyPath);
-    const compType = inferComponentType(paths);
+    const compType = inferComponentType(mods.map(m => m.propertyPath));
     if (!compType) continue;
+    if (!targetsByType.has(compType)) targetsByType.set(compType, []);
+    targetsByType.get(compType)!.push([targetId, mods]);
+  }
 
-    // Find all nested prefabs that have this component type
-    const candidates: SourceObjectInfo[] = [];
-    for (const [, infos] of sourceObjectsByType) {
-      for (const info of infos) {
-        if (info.componentType === compType) {
-          candidates.push(info);
-        }
-      }
-    }
-
+  // For each component type, match targets to candidates (each candidate used at most once)
+  for (const [compType, targets] of targetsByType) {
+    const candidates = allEntries.filter(e => e.componentType === compType);
     if (candidates.length === 0) continue;
 
-    if (candidates.length === 1) {
-      resolved.set(targetId, `${candidates[0].nodeName}:${compType}`);
-      continue;
-    }
+    const usedCandidates = new Set<number>();
 
-    // Disambiguate: pick the candidate with the most property path overlap
-    let bestCandidate = candidates[0];
-    let bestOverlap = 0;
-    for (const candidate of candidates) {
-      let overlap = 0;
-      for (const p of paths) {
-        if (candidate.propertyPaths.has(p)) overlap++;
+    for (const [targetId, mods] of targets) {
+      const variantPaths = mods.map(m => m.propertyPath);
+      let bestIdx = -1;
+      let bestOverlap = -1;
+
+      for (let i = 0; i < candidates.length; i++) {
+        if (usedCandidates.has(i)) continue;
+        let overlap = 0;
+        for (const p of variantPaths) {
+          if (candidates[i].baseModPropPaths.has(p)) overlap++;
+        }
+        if (overlap > bestOverlap) {
+          bestOverlap = overlap;
+          bestIdx = i;
+        }
       }
-      if (overlap > bestOverlap) {
-        bestOverlap = overlap;
-        bestCandidate = candidate;
+
+      if (bestIdx >= 0) {
+        resolved.set(targetId, `${candidates[bestIdx].path}:${compType}`);
+        usedCandidates.add(bestIdx);
       }
     }
-    resolved.set(targetId, `${bestCandidate.nodeName}:${compType}`);
   }
 
   return resolved;
+}
+
+/**
+ * Recursively collect source component entries from a nested prefab chain.
+ * For each source object reachable through the PI chain, records its path,
+ * component type, and base modification property paths (for disambiguation).
+ */
+function collectSourceEntries(
+  parentPath: string,
+  sourceGuid: string,
+  piMods: PropertyModification[],
+  resolver: GuidResolver,
+  result: SourceObjectEntry[],
+  depth: number
+): void {
+  if (depth > 3) return;
+
+  const sourcePath = resolver.resolveFilePath(sourceGuid);
+  if (!sourcePath || !fs.existsSync(sourcePath)) return;
+
+  try {
+    const sourceContent = fs.readFileSync(sourcePath, 'utf-8');
+    const sourceFile = parseUnityYaml(sourceContent);
+
+    // Build GO name map: goFileId → name
+    const goNames = new Map<string, string>();
+    for (const doc of sourceFile.documents) {
+      if (doc.typeId === 1 && !doc.stripped) {
+        goNames.set(doc.fileId, doc.properties.m_Name || 'Unnamed');
+      }
+    }
+
+    // Build source doc info: sourceFileId → { goName, componentType }
+    const sourceDocInfo = new Map<string, { goName: string; componentType: string }>();
+    for (const doc of sourceFile.documents) {
+      if (doc.stripped) continue;
+      const goRef = doc.properties.m_GameObject ? String(doc.properties.m_GameObject.fileID) : '';
+      const goName = goNames.get(goRef) || goNames.get(doc.fileId) || '';
+      let typeName = doc.typeName;
+      if (doc.typeId === 114 && doc.properties.m_Script?.guid) {
+        typeName = resolver.resolve(doc.properties.m_Script.guid) || typeName;
+      }
+      sourceDocInfo.set(doc.fileId, { goName, componentType: typeName });
+    }
+
+    // Count how many times each component type appears (for disambiguation)
+    const typeCount = new Map<string, number>();
+    const skipTypes = new Set(['GameObject', 'Transform', 'RectTransform', 'CanvasRenderer']);
+    for (const [, info] of sourceDocInfo) {
+      if (skipTypes.has(info.componentType)) continue;
+      typeCount.set(info.componentType, (typeCount.get(info.componentType) || 0) + 1);
+    }
+    // Also count component types from sub-PIs (they contribute to disambiguation)
+    if (sourceFile.hierarchy) {
+      countNestedComponentTypes(sourceFile.hierarchy, sourceFile.prefabInstances, resolver, typeCount);
+    }
+
+    // Group PI modifications by target fileId
+    const modsByTarget = new Map<string, Set<string>>();
+    for (const mod of piMods) {
+      const id = String(mod.target.fileID);
+      if (!modsByTarget.has(id)) modsByTarget.set(id, new Set());
+      modsByTarget.get(id)!.add(mod.propertyPath);
+    }
+
+    // Build stripped doc → sub-PI mapping
+    const strippedToPI = new Map<string, string>();
+    for (const doc of sourceFile.documents) {
+      if (doc.stripped && doc.properties.m_PrefabInstance) {
+        strippedToPI.set(doc.fileId, String(doc.properties.m_PrefabInstance.fileID));
+      }
+    }
+
+    // Sub-PI node names
+    const subPiNodeNames = new Map<string, string>();
+    if (sourceFile.hierarchy) {
+      collectNestedNodeNames(sourceFile.hierarchy, subPiNodeNames, resolver);
+    }
+
+    // Process each PI modification target
+    const processedSubPIs = new Set<string>();
+
+    for (const [targetId, propPaths] of modsByTarget) {
+      const docInfo = sourceDocInfo.get(targetId);
+      if (docInfo) {
+        // Direct source doc — use GO name if disambiguation needed
+        const needsDisambig = (typeCount.get(docInfo.componentType) || 0) > 1;
+        const path = needsDisambig ? `${parentPath}/${docInfo.goName}` : parentPath;
+        result.push({ path, componentType: docInfo.componentType, baseModPropPaths: propPaths });
+      } else {
+        // Check if it's a stripped doc → recurse into sub-PI
+        const subPiId = strippedToPI.get(targetId);
+        if (subPiId && !processedSubPIs.has(subPiId)) {
+          processedSubPIs.add(subPiId);
+          const subPi = sourceFile.prefabInstances.find(p => p.fileId === subPiId);
+          if (subPi && subPi.sourcePrefab.guid) {
+            const subName = subPiNodeNames.get(subPiId) ||
+              resolver.resolve(subPi.sourcePrefab.guid) || 'unknown';
+            collectSourceEntries(
+              `${parentPath}/${subName}`, subPi.sourcePrefab.guid,
+              subPi.modifications, resolver, result, depth + 1
+            );
+          }
+        } else if (!subPiId) {
+          // Computed deep fileID — not a stripped doc in source.
+          // Infer component type and record with parent path.
+          const compType = inferComponentType([...propPaths]);
+          if (compType) {
+            result.push({ path: parentPath, componentType: compType, baseModPropPaths: propPaths });
+          }
+        }
+      }
+    }
+
+    // Process sub-PIs that weren't reached via stripped doc resolution
+    for (const subPi of sourceFile.prefabInstances) {
+      if (processedSubPIs.has(subPi.fileId)) continue;
+      processedSubPIs.add(subPi.fileId);
+
+      if (!subPi.sourcePrefab.guid) continue;
+      const subName = subPiNodeNames.get(subPi.fileId) ||
+        resolver.resolve(subPi.sourcePrefab.guid) || null;
+      if (!subName) continue;
+
+      collectSourceEntries(
+        `${parentPath}/${subName}`, subPi.sourcePrefab.guid,
+        subPi.modifications, resolver, result, depth + 1
+      );
+    }
+  } catch {
+    // Failed to parse source — skip
+  }
+}
+
+/** Count component types in nested prefab sub-PIs (for disambiguation decisions) */
+function countNestedComponentTypes(
+  hierarchy: GameObjectNode,
+  prefabInstances: PrefabInstanceInfo[],
+  resolver: GuidResolver,
+  typeCount: Map<string, number>
+): void {
+  const skipTypes = new Set(['GameObject', 'Transform', 'RectTransform', 'CanvasRenderer']);
+  function walkNode(node: GameObjectNode): void {
+    if (node.nestedPrefab) {
+      // Try to load and count components from source
+      const sourceGuid = node.nestedPrefab.sourceGuid;
+      if (sourceGuid) {
+        const sourcePath = resolver.resolveFilePath(sourceGuid);
+        if (sourcePath && fs.existsSync(sourcePath)) {
+          try {
+            const sourceFile = parseUnityYaml(fs.readFileSync(sourcePath, 'utf-8'));
+            for (const doc of sourceFile.documents) {
+              if (doc.stripped) continue;
+              let typeName = doc.typeName;
+              if (doc.typeId === 114 && doc.properties.m_Script?.guid) {
+                typeName = resolver.resolve(doc.properties.m_Script.guid) || typeName;
+              }
+              if (!skipTypes.has(typeName)) {
+                typeCount.set(typeName, (typeCount.get(typeName) || 0) + 1);
+              }
+            }
+          } catch { /* skip */ }
+        }
+      }
+    }
+    for (const child of node.children) {
+      walkNode(child);
+    }
+  }
+  for (const child of hierarchy.children) {
+    walkNode(child);
+  }
 }
 
 /** Resolve a target fileID to a GOPath:ComponentType key using the base doc map */

@@ -11,8 +11,8 @@ export interface CompactFile {
     baseGuid?: string;
     structure: CompactStructureNode | null;
     sections: CompactSection[];
-    /** REFS map: "GOName:ComponentType" → fileID string */
-    refs: Map<string, string>;
+    /** REFS map: "GOName:ComponentType" → fileID strings (supports duplicate keys) */
+    refs: Map<string, string[]>;
 }
 export interface CompactStructureNode {
     name: string;

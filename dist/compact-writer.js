@@ -454,10 +454,13 @@ function formatValue(value) {
 }
 /** Format a file reference */
 function formatReference(ref) {
-    if (!ref || String(ref.fileID) === '0')
+    if (!ref)
         return 'null';
+    if (String(ref.fileID) === '0')
+        return '{0}';
     if (ref.guid) {
-        return `{${ref.fileID}, ${ref.guid}}`;
+        const type = ref.type !== undefined && ref.type !== 3 ? `, ${ref.type}` : '';
+        return `{${ref.fileID}, ${ref.guid}${type}}`;
     }
     return `{${ref.fileID}}`;
 }

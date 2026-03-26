@@ -98,21 +98,21 @@ console.log('='.repeat(60));
         fail('REFS parsed', 'No entries found');
     }
     // Check specific entries from Button.prefab
-    const buttonGoRef = compact.refs.get('Button');
+    const buttonGoRef = compact.refs.get('Button')?.[0];
     if (buttonGoRef === '8027481463175804169') {
         pass('Button GO fileID correct');
     }
     else {
         fail('Button GO fileID correct', `Got: ${buttonGoRef}`);
     }
-    const buttonRtRef = compact.refs.get('Button:RectTransform');
+    const buttonRtRef = compact.refs.get('Button:RectTransform')?.[0];
     if (buttonRtRef === '8027481463175804168') {
         pass('Button:RectTransform fileID correct');
     }
     else {
         fail('Button:RectTransform fileID correct', `Got: ${buttonRtRef}`);
     }
-    const bgImageRef = compact.refs.get('Background9Slice_Image:Image');
+    const bgImageRef = compact.refs.get('Background9Slice_Image:Image')?.[0];
     if (bgImageRef === '8027481461304769067') {
         pass('Background9Slice_Image:Image fileID correct');
     }
@@ -120,7 +120,7 @@ console.log('='.repeat(60));
         fail('Background9Slice_Image:Image fileID correct', `Got: ${bgImageRef}`);
     }
     // Check nested prefab instance ref
-    const textInstanceRef = compact.refs.get('Button_Text:__instance');
+    const textInstanceRef = compact.refs.get('Button_Text:__instance')?.[0];
     if (textInstanceRef === '6920765965181414293') {
         pass('Button_Text:__instance fileID correct');
     }
@@ -169,7 +169,7 @@ console.log('='.repeat(60));
     const compactStr = (0, compact_writer_1.writeCompact)(ast, { guidResolver: resolver });
     const compact = (0, compact_reader_1.readCompact)(compactStr);
     // Check __instance ref
-    const instanceRef = compact.refs.get('__instance');
+    const instanceRef = compact.refs.get('__instance')?.[0];
     if (instanceRef === '4987371547573211178') {
         pass('Variant __instance fileID correct');
     }

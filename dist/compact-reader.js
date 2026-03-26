@@ -148,7 +148,8 @@ function parseDetailsSections(lines, sections) {
     let currentSection = null;
     // Stack of (property, indent) for nesting — only properties with value=[] are pushed
     let stack = [];
-    for (const line of lines) {
+    for (let li = 0; li < lines.length; li++) {
+        const line = lines[li];
         const trimmed = line.trim();
         // Skip empty lines and comments
         if (trimmed === '' || trimmed.startsWith('#'))
@@ -208,13 +209,16 @@ function parseDetailsSections(lines, sections) {
                 }
                 if (blockProp && Array.isArray(blockProp.value)) {
                     if (itemMatch) {
+                        let itemValue = itemMatch[2];
+                        // Collect multiline quoted strings
+                        itemValue = collectMultilineValue(itemValue, lines, li, (newIdx) => { li = newIdx; });
                         // key=value array item: wrap in __item__ group so continuations
                         // (subsequent non-dash lines at deeper indent) get grouped together
                         const itemGroup = {
                             key: '__item__',
                             value: [{
                                     key: itemMatch[1],
-                                    value: itemMatch[2],
+                                    value: itemValue,
                                     indent: indent + 2,
                                 }],
                             indent,
@@ -252,9 +256,12 @@ function parseDetailsSections(lines, sections) {
             else {
                 const propMatch = trimmed.match(/^(.+?)\s*=\s*(.*)$/);
                 if (propMatch) {
+                    let propValue = propMatch[2];
+                    // Collect multiline quoted strings
+                    propValue = collectMultilineValue(propValue, lines, li, (newIdx) => { li = newIdx; });
                     const prop = {
                         key: propMatch[1],
-                        value: propMatch[2],
+                        value: propValue,
                         indent,
                     };
                     target.push(prop);
@@ -272,6 +279,46 @@ function parseDetailsSections(lines, sections) {
             }
         }
     }
+}
+/**
+ * Collect multiline quoted string values.
+ * If the value starts with a quote but doesn't end with it,
+ * continue reading lines until the closing quote is found.
+ */
+function collectMultilineValue(value, lines, currentIdx, setIdx) {
+    // Double-quoted multiline
+    if (value.startsWith('"') && !value.endsWith('"')) {
+        let full = value;
+        let i = currentIdx + 1;
+        while (i < lines.length) {
+            const nextLine = lines[i];
+            full += '\n' + nextLine;
+            if (nextLine.trimEnd().endsWith('"') && !nextLine.trimEnd().endsWith('\\"')) {
+                setIdx(i);
+                return full;
+            }
+            i++;
+        }
+        setIdx(i - 1);
+        return full;
+    }
+    // Single-quoted multiline
+    if (value.startsWith("'") && !value.endsWith("'")) {
+        let full = value;
+        let i = currentIdx + 1;
+        while (i < lines.length) {
+            const nextLine = lines[i];
+            full += '\n' + nextLine;
+            if (nextLine.trimEnd().endsWith("'")) {
+                setIdx(i);
+                return full;
+            }
+            i++;
+        }
+        setIdx(i - 1);
+        return full;
+    }
+    return value;
 }
 // ============================================================
 // Value Parsing — convert compact string values back to AST types
@@ -423,7 +470,7 @@ function smartSplit(str, delimiter) {
         parts.push(current.trim());
     return parts;
 }
-/** Parse the REFS section: "key = fileID" lines into a Map */
+/** Parse the REFS section: "key = fileID" lines into a Map (supports duplicate keys) */
 function parseRefsSection(lines, refs) {
     for (const line of lines) {
         const trimmed = line.trim();
@@ -434,7 +481,9 @@ function parseRefsSection(lines, refs) {
             continue;
         const key = trimmed.substring(0, eqIdx);
         const value = trimmed.substring(eqIdx + 3);
-        refs.set(key, value);
+        if (!refs.has(key))
+            refs.set(key, []);
+        refs.get(key).push(value);
     }
 }
 /** Parse a numeric value, preserving formatting for strings that would lose precision */

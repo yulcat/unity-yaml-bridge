@@ -119,48 +119,50 @@ function mergePrefabSections(file, sections, refs) {
     // Build a flat map: GO name → GameObjectNode (using the hierarchy)
     const goMap = new Map();
     flattenHierarchy(file.hierarchy, goMap);
+    // Track which REFS fileIDs have been used (for duplicate key handling)
+    const usedRefs = new Set();
     for (const section of sections) {
         const goPath = section.goPath;
         const compType = section.componentType;
         const refsKey = compType ? `${goPath}:${compType}` : goPath;
-        // Try REFS lookup first for precise matching
-        const refsFileId = refs.get(refsKey);
-        if (refsFileId) {
-            const doc = docMap.get(refsFileId);
-            if (doc) {
-                if (compType === 'Transform' || compType === 'RectTransform') {
-                    applyTransformProperties(section.properties, doc, compType === 'RectTransform');
+        // Try REFS lookup — find the best matching document for this section
+        const refsFileIds = refs.get(refsKey);
+        if (refsFileIds && refsFileIds.length > 0) {
+            const refsFileId = refsFileIds.length === 1
+                ? refsFileIds[0]
+                : findBestRefsMatch(refsFileIds, section, docMap, usedRefs);
+            if (refsFileId) {
+                usedRefs.add(refsFileId);
+                const doc = docMap.get(refsFileId);
+                if (doc) {
+                    if (compType === 'Transform' || compType === 'RectTransform') {
+                        applyTransformProperties(section.properties, doc, compType === 'RectTransform');
+                    }
+                    else {
+                        applyComponentProperties(section.properties, doc);
+                    }
+                    continue;
                 }
-                else {
-                    applyComponentProperties(section.properties, doc);
-                }
-                continue;
             }
         }
         // Fallback: name-based matching
         const candidates = goMap.get(goPath) || [];
         if (candidates.length === 0) {
-            // New GO — check if this section represents a new element
-            // For now, skip (new element creation handled separately)
             continue;
         }
-        // Use the first match (name collision handling would use path/index)
         const go = candidates[0];
         if (compType === 'Transform' || compType === 'RectTransform') {
-            // Transform section — apply to the transform document
             const transformDoc = docMap.get(go.transform.fileId);
             if (transformDoc) {
                 applyTransformProperties(section.properties, transformDoc, compType === 'RectTransform');
             }
         }
         else {
-            // Component section — find the matching component
             const comp = go.components.find(c => {
                 if (c.typeName === compType)
                     return true;
                 if (c.scriptName === compType)
                     return true;
-                // For MonoBehaviour with GUID name
                 if (c.scriptGuid === compType)
                     return true;
                 return false;
@@ -173,6 +175,84 @@ function mergePrefabSections(file, sections, refs) {
             }
         }
     }
+}
+/**
+ * Find the best matching REFS fileID for a section when there are duplicates.
+ * Compares section properties against each candidate document's existing values.
+ * For a zero-edit roundtrip, the correct document already has matching values.
+ */
+function findBestRefsMatch(fileIds, section, docMap, usedRefs) {
+    const unused = fileIds.filter(id => !usedRefs.has(id));
+    if (unused.length === 0)
+        return fileIds[0]; // All used, fallback to first
+    if (unused.length === 1)
+        return unused[0];
+    // Score each candidate by how many section properties match the document's values
+    let bestId = unused[0];
+    let bestScore = -1;
+    for (const id of unused) {
+        const doc = docMap.get(id);
+        if (!doc)
+            continue;
+        let score = 0;
+        for (const prop of section.properties) {
+            if (typeof prop.value !== 'string')
+                continue;
+            const parsed = (0, compact_reader_1.parseCompactValue)(prop.value);
+            const docVal = getDocValueForProp(prop.key, doc.properties, section.componentType);
+            if (docVal !== undefined && valuesMatch(parsed, docVal)) {
+                score++;
+            }
+        }
+        if (score > bestScore) {
+            bestScore = score;
+            bestId = id;
+        }
+    }
+    return bestId;
+}
+/** Get the document property value for a compact property key (handles transform shorthands) */
+function getDocValueForProp(key, props, compType) {
+    // Transform shorthand mappings
+    if (compType === 'RectTransform' || compType === 'Transform') {
+        switch (key) {
+            case 'pos': return compType === 'RectTransform' ? props.m_AnchoredPosition : props.m_LocalPosition;
+            case 'rot': return props.m_LocalRotation;
+            case 'scale': return props.m_LocalScale;
+            case 'size': return props.m_SizeDelta;
+            case 'pivot': return props.m_Pivot;
+            case 'anchor': {
+                const min = props.m_AnchorMin;
+                const max = props.m_AnchorMax;
+                return min && max ? { min, max } : undefined;
+            }
+        }
+    }
+    return props[key];
+}
+/** Check if two values match (deep comparison for vectors, shallow for scalars) */
+function valuesMatch(a, b) {
+    if (a === b)
+        return true;
+    if (a == null || b == null)
+        return false;
+    if (typeof a === 'object' && typeof b === 'object') {
+        // For anchor: {min, max} comparison
+        if ('min' in a && 'min' in b) {
+            return valuesMatch(a.min, b.min) && valuesMatch(a.max, b.max);
+        }
+        // Vector/color comparison: compare values by position
+        const aKeys = Object.keys(a).filter(k => !k.startsWith('__'));
+        const bKeys = Object.keys(b).filter(k => !k.startsWith('__'));
+        if (aKeys.length !== bKeys.length)
+            return false;
+        for (let i = 0; i < aKeys.length; i++) {
+            if (String(a[aKeys[i]]) !== String(b[bKeys[i]]))
+                return false;
+        }
+        return true;
+    }
+    return String(a) === String(b);
 }
 /** Flatten hierarchy into a map of name → nodes */
 function flattenHierarchy(node, map) {
@@ -250,8 +330,8 @@ function applyPropertiesToTarget(properties, target) {
                 applyPropertiesToTarget(prop.value, existing);
             }
             else {
-                // Reconstruct as new object or array
-                target[prop.key] = reconstructNestedValue(prop.value);
+                // Reconstruct as new object or array, passing original for key remapping
+                target[prop.key] = reconstructNestedValue(prop.value, existing);
             }
         }
         else {
@@ -316,24 +396,47 @@ function remapVectorKeys(parsed, original) {
     }
     return remapped;
 }
-/** Reconstruct a nested value from CompactProperty children */
-function reconstructNestedValue(children) {
+/** Reconstruct a nested value from CompactProperty children, using original for key remapping */
+function reconstructNestedValue(children, original) {
     // Check if this is an array (items have __item__ key) or an object
     const isArray = children.some(c => c.key === '__item__');
     if (isArray) {
-        return children.map(c => typeof c.value === 'string' ? (0, compact_reader_1.parseCompactValue)(c.value) : reconstructNestedValue(c.value));
+        const origArray = Array.isArray(original) ? original : undefined;
+        return children.map((c, idx) => {
+            const origItem = origArray?.[idx];
+            if (typeof c.value === 'string') {
+                const parsed = (0, compact_reader_1.parseCompactValue)(c.value);
+                return remapWithOriginal(parsed, origItem);
+            }
+            return reconstructNestedValue(c.value, origItem);
+        });
     }
     // Object
+    const origObj = isPlainObject(original) ? original : undefined;
     const result = {};
     for (const child of children) {
+        const origVal = origObj?.[child.key];
         if (Array.isArray(child.value)) {
-            result[child.key] = reconstructNestedValue(child.value);
+            result[child.key] = reconstructNestedValue(child.value, origVal);
         }
         else {
-            result[child.key] = (0, compact_reader_1.parseCompactValue)(child.value);
+            const parsed = (0, compact_reader_1.parseCompactValue)(child.value);
+            result[child.key] = remapWithOriginal(parsed, origVal);
         }
     }
     return result;
+}
+/** Remap a parsed value using the original for vector key preservation and flow markers */
+function remapWithOriginal(parsed, original) {
+    if (isPlainObject(parsed) && isPlainObject(original)) {
+        const remapped = remapVectorKeys(parsed, original);
+        if (remapped) {
+            preserveFlowMarker(original, remapped);
+            return remapped;
+        }
+        preserveFlowMarker(original, parsed);
+    }
+    return parsed;
 }
 // ============================================================
 // Variant merging — match sections by REFS or target fileID
@@ -353,11 +456,15 @@ function mergeVariantSections(file, sections, refs) {
         return;
     // Build reverse REFS map: fileID → key (for lookup)
     const reverseRefs = new Map();
-    for (const [key, fileId] of refs) {
+    for (const [key, fileIds] of refs) {
         if (key !== '__instance') {
-            reverseRefs.set(fileId, key);
+            for (const fileId of fileIds) {
+                reverseRefs.set(fileId, key);
+            }
         }
     }
+    // Track per-key index for cycling through duplicate REFS entries
+    const refsIndexMap = new Map();
     for (const section of sections) {
         // Resolve target fileID from REFS or section header
         let targetFileId;
@@ -370,7 +477,12 @@ function mergeVariantSections(file, sections, refs) {
             const refsKey = section.componentType
                 ? `${section.goPath}:${section.componentType}`
                 : section.goPath;
-            targetFileId = refs.get(refsKey);
+            const refsFileIds = refs.get(refsKey);
+            if (refsFileIds && refsFileIds.length > 0) {
+                const idx = refsIndexMap.get(refsKey) || 0;
+                targetFileId = refsFileIds[idx];
+                refsIndexMap.set(refsKey, idx + 1);
+            }
         }
         if (!targetFileId)
             continue;

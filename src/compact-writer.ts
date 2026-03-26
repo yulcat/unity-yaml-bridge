@@ -352,6 +352,18 @@ function buildInternalRefMap(
     map.set(doc.fileId, `${nodeName}:${typeName}`);
   }
 
+  // Remove ambiguous entries: if multiple fileIDs map to the same refString,
+  // the -> path would be ambiguous on read-back. Keep those as raw {fileID}.
+  const valueCounts = new Map<string, number>();
+  for (const v of map.values()) {
+    valueCounts.set(v, (valueCounts.get(v) || 0) + 1);
+  }
+  for (const [fileId, refStr] of [...map.entries()]) {
+    if ((valueCounts.get(refStr) || 0) > 1) {
+      map.delete(fileId);
+    }
+  }
+
   return map;
 }
 

@@ -12,8 +12,6 @@
  */
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.writeUnityYaml = writeUnityYaml;
-/** Max line length before breaking a flow mapping across lines */
-const MAX_LINE_LENGTH = 90;
 /** Write a UnityFile back to Unity YAML string */
 function writeUnityYaml(file) {
     const lines = [];
@@ -90,8 +88,8 @@ function writeYamlValue(key, value, lines, indent) {
             const flow = formatFlowMapping(value);
             const lineStr = `${indentStr}${key}: ${flow}`;
             const wasMultiLine = value.__multiLine === true;
-            if (wasMultiLine || (lineStr.length >= MAX_LINE_LENGTH && !isVectorOrColor(value))) {
-                // Break multi-line flow mapping (preserve original format or break long refs)
+            if (wasMultiLine) {
+                // Break multi-line flow mapping (preserve original format)
                 writeMultiLineFlowMapping(key, value, lines, indent);
             }
             else {
@@ -114,7 +112,7 @@ function writeYamlArrayItem(item, lines, indent) {
             const flow = formatFlowMapping(item);
             const lineStr = `${indentStr}- ${flow}`;
             const wasMultiLine = item.__multiLine === true;
-            if (wasMultiLine || (lineStr.length >= MAX_LINE_LENGTH && !isVectorOrColor(item))) {
+            if (wasMultiLine) {
                 writeMultiLineFlowMappingArrayItem(item, lines, indent);
             }
             else {
@@ -153,8 +151,8 @@ function writeYamlArrayItem(item, lines, indent) {
             const flow = formatFlowMapping(firstVal);
             const lineStr = `${indentStr}- ${firstKey}: ${flow}`;
             const firstValWasMultiLine = firstVal.__multiLine === true;
-            if (firstValWasMultiLine || lineStr.length >= MAX_LINE_LENGTH) {
-                // Break multi-line for long flow mappings in array items
+            if (firstValWasMultiLine) {
+                // Break multi-line flow mapping (preserve original format)
                 const flowParts = splitFlowMapping(firstVal);
                 lines.push(`${indentStr}- ${firstKey}: ${flowParts.first}`);
                 lines.push(`${' '.repeat(indent + 4)}${flowParts.rest}`);
@@ -182,12 +180,12 @@ function isFlowMapping(obj) {
     if (!obj || typeof obj !== 'object' || Array.isArray(obj))
         return false;
     const keys = Object.keys(obj);
-    // File references
+    // File references — always flow
     if (keys.includes('fileID'))
         return true;
-    // Small vectors/colors
+    // Vectors/colors — only flow if originally parsed from a flow mapping
     if (keys.length <= 4 && keys.every(k => ['x', 'y', 'z', 'w', 'r', 'g', 'b', 'a'].includes(k))) {
-        return true;
+        return obj.__flow === true;
     }
     return false;
 }

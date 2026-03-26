@@ -223,6 +223,23 @@ function parseDetailsSections(lines, sections) {
                         // Push onto stack so continuation lines become children of this group
                         stack.push({ prop: itemGroup, indent });
                     }
+                    else if (itemContent.endsWith(':')) {
+                        // Nested block within array item: - Key:
+                        const nestedKey = itemContent.slice(0, -1);
+                        const nestedBlock = {
+                            key: nestedKey,
+                            value: [],
+                            indent: indent + 2,
+                        };
+                        const itemGroup = {
+                            key: '__item__',
+                            value: [nestedBlock],
+                            indent,
+                        };
+                        blockProp.value.push(itemGroup);
+                        stack.push({ prop: itemGroup, indent });
+                        stack.push({ prop: nestedBlock, indent: indent + 2 });
+                    }
                     else {
                         blockProp.value.push({
                             key: '__item__',

@@ -1,1 +1,1 @@
-{"version":3,"file":"unity-yaml-writer.d.ts","sourceRoot":"","sources":["../src/unity-yaml-writer.ts"],"names":[],"mappings":"AAAA;;;;;;;;;;GAUG;AAEH,OAAO,EAAiB,SAAS,EAAkB,MAAM,SAAS,CAAC;AAKnE,kDAAkD;AAClD,wBAAgB,cAAc,CAAC,IAAI,EAAE,SAAS,GAAG,MAAM,CAsBtD"}
+{"version":3,"file":"unity-yaml-writer.d.ts","sourceRoot":"","sources":["../src/unity-yaml-writer.ts"],"names":[],"mappings":"AAAA;;;;;;;;;;GAUG;AAEH,OAAO,EAAiB,SAAS,EAAkB,MAAM,SAAS,CAAC;AAEnE,kDAAkD;AAClD,wBAAgB,cAAc,CAAC,IAAI,EAAE,SAAS,GAAG,MAAM,CAsBtD"}

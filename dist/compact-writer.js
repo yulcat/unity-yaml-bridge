@@ -409,9 +409,18 @@ function writeProperty(key, value, lines, indent) {
                     const entries = Object.entries(item);
                     if (entries.length > 0) {
                         const [firstKey, firstVal] = entries[0];
-                        lines.push(`${indent}  - ${firstKey} = ${formatValue(firstVal)}`);
+                        if (isNestedObject(firstVal)) {
+                            // Nested object value → block format
+                            lines.push(`${indent}  - ${firstKey}:`);
+                            for (const [k, v] of Object.entries(firstVal)) {
+                                writeProperty(k, v, lines, indent + '      ');
+                            }
+                        }
+                        else {
+                            lines.push(`${indent}  - ${firstKey} = ${formatValue(firstVal)}`);
+                        }
                         for (let i = 1; i < entries.length; i++) {
-                            lines.push(`${indent}    ${entries[i][0]} = ${formatValue(entries[i][1])}`);
+                            writeProperty(entries[i][0], entries[i][1], lines, indent + '    ');
                         }
                     }
                 }
@@ -459,6 +468,11 @@ function isNullRef(value) {
     if (typeof value === 'object' && 'fileID' in value && String(value.fileID) === '0')
         return true;
     return false;
+}
+/** Check if a value is a nested object (not ref, not vector, not array) */
+function isNestedObject(val) {
+    return typeof val === 'object' && val !== null && !Array.isArray(val)
+        && !('fileID' in val) && !isVector(val);
 }
 /** Check if an object looks like a vector */
 function isVector(obj) {

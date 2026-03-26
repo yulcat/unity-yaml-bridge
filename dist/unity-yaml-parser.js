@@ -503,6 +503,11 @@ function markMultiLine(obj) {
     Object.defineProperty(obj, '__multiLine', { value: true, enumerable: false, writable: false });
     return obj;
 }
+/** Mark an object as originally parsed from a flow mapping (inline {}) */
+function markFlow(obj) {
+    Object.defineProperty(obj, '__flow', { value: true, enumerable: false, writable: false });
+    return obj;
+}
 /** Parse a YAML flow mapping: {key: value, key2: value2} */
 function parseFlowMapping(str) {
     const result = {};
@@ -520,6 +525,7 @@ function parseFlowMapping(str) {
         const value = pair.substring(colonIdx + 1).trim();
         result[key] = parseInlineValue(value);
     }
+    markFlow(result);
     return result;
 }
 /** Parse a flow sequence: [a, b, c] */

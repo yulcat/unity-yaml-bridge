@@ -139,10 +139,14 @@ Full spec: [docs/FORMAT.md](docs/FORMAT.md)
 ## Installation
 
 ```bash
+npm i -g github:yulcat/unity-yaml-bridge
+```
+
+If the above fails (npm git-install bugs on some versions), clone manually:
+
+```bash
 git clone https://github.com/yulcat/unity-yaml-bridge.git
-cd unity-yaml-bridge
-npm install
-npm link    # makes `ubridge` available globally
+cd unity-yaml-bridge && npm install && npm link
 ```
 
 ## Usage

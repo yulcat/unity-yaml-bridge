@@ -60,9 +60,21 @@ export class GuidResolver {
   /** Scan a Unity project folder for .cs.meta and asset .meta files */
   scanProject(projectPath: string): void {
     const assetsPath = path.join(projectPath, 'Assets');
-    if (!fs.existsSync(assetsPath)) return;
+    if (fs.existsSync(assetsPath)) {
+      this.scanDirectory(assetsPath);
+    }
 
-    this.scanDirectory(assetsPath);
+    // Also scan Packages/ (local packages and package references)
+    const packagesPath = path.join(projectPath, 'Packages');
+    if (fs.existsSync(packagesPath)) {
+      this.scanDirectory(packagesPath);
+    }
+
+    // Also scan Library/PackageCache/ (downloaded package cache)
+    const packageCachePath = path.join(projectPath, 'Library', 'PackageCache');
+    if (fs.existsSync(packageCachePath)) {
+      this.scanDirectory(packageCachePath);
+    }
   }
 
   /** Recursively scan a directory for .meta files */

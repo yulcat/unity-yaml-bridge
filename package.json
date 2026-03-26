@@ -6,9 +6,10 @@
   "types": "dist/index.d.ts",
   "scripts": {
     "build": "tsc",
-    "test": "tsc && node dist/test-roundtrip.js && node dist/test-compact-roundtrip.js",
+    "test": "tsc && node dist/test-roundtrip.js && node dist/test-compact-roundtrip.js && node dist/test-refs.js",
     "test:roundtrip": "tsc && node dist/test-roundtrip.js",
-    "test:compact": "tsc && node dist/test-compact-roundtrip.js"
+    "test:compact": "tsc && node dist/test-compact-roundtrip.js",
+    "test:refs": "tsc && node dist/test-refs.js"
   },
   "keywords": [],
   "author": "",

@@ -383,6 +383,143 @@ console.log('='.repeat(60));
 }
 
 // ============================================================
+// Test 9: Nested prefab expansion in structure tree
+// ============================================================
+
+console.log('\n' + '='.repeat(60));
+console.log('TEST: Nested prefab expansion (_Card_Template)');
+console.log('='.repeat(60));
+
+{
+  const content = fs.readFileSync(path.join(SAMPLES_DIR, 'prefabs', '_Card_Template.prefab'), 'utf-8');
+  const ast = parseUnityYaml(content);
+  const compactStr = writeCompact(ast, { guidResolver: resolver });
+
+  const structure = compactStr.split('--- STRUCTURE')[1]?.split('--- DETAILS')[0] || '';
+
+  // Check that nested prefabs show {SourceName} annotations
+  if (structure.includes('{_Header_Text}')) {
+    pass('_Header_Text source name shown');
+  } else {
+    fail('_Header_Text source name', 'Not found in structure');
+  }
+
+  if (structure.includes('{Medal_Template}')) {
+    pass('Medal_Template source name shown');
+  } else {
+    fail('Medal_Template source name', 'Not found in structure');
+  }
+
+  // Check expanded children from Medal_Template
+  if (structure.includes('Circle_Image') && structure.includes('Small_Circle_Image')) {
+    pass('Medal_Template children expanded (Circle_Image, Small_Circle_Image)');
+  } else {
+    fail('Medal_Template children', 'Missing expanded children');
+  }
+
+  // Check deep nesting: ActivationParticles_Template children
+  if (structure.includes('Burst_ParticleSystem') && structure.includes('Activated_ParticleSystem')) {
+    pass('Deep nested children expanded (Burst/Activated ParticleSystem)');
+  } else {
+    fail('Deep nested children', 'Missing Burst/Activated ParticleSystem');
+  }
+
+  // Check modification markers (* on overridden components)
+  if (structure.includes('TextMeshProUGUI*')) {
+    pass('Modification markers (* on overridden components)');
+  } else {
+    fail('Modification markers', 'No * markers found');
+  }
+
+  // Check REFS uses resolved names (not NestedPrefab)
+  const refs = compactStr.split('--- REFS')[1] || '';
+  if (refs.includes('_Header_Text') && !refs.includes('NestedPrefab')) {
+    pass('REFS uses resolved names (not NestedPrefab)');
+  } else {
+    fail('REFS resolution', refs.includes('NestedPrefab') ? 'Found NestedPrefab in REFS' : 'Missing _Header_Text');
+  }
+}
+
+// ============================================================
+// Test 10: Variant path resolution (resolved headers)
+// ============================================================
+
+console.log('\n' + '='.repeat(60));
+console.log('TEST: Variant path resolution (Card_Explorer_Variant)');
+console.log('='.repeat(60));
+
+{
+  const content = fs.readFileSync(path.join(SAMPLES_DIR, 'variants', 'Card_Explorer_Variant.prefab'), 'utf-8');
+  const ast = parseUnityYaml(content);
+  const compactStr = writeCompact(ast, { guidResolver: resolver });
+
+  const details = compactStr.split('--- DETAILS')[1]?.split('--- REFS')[0] || '';
+  const refs = compactStr.split('--- REFS')[1] || '';
+
+  // Check _Header_Text resolved (not NestedPrefab)
+  if (details.includes('[_Header_Text:TextMeshProUGUI]')) {
+    pass('_Header_Text:TextMeshProUGUI resolved in DETAILS');
+  } else {
+    fail('_Header_Text resolution', 'Not found in DETAILS');
+  }
+
+  // Check Paragraph_Text resolved (not duplicate _Header_Text)
+  if (details.includes('[Paragraph_Text:TextMeshProUGUI]')) {
+    pass('Paragraph_Text:TextMeshProUGUI resolved in DETAILS');
+  } else {
+    fail('Paragraph_Text resolution', 'Not found in DETAILS');
+  }
+
+  // Check Image disambiguation with GO paths
+  if (details.includes('Circle_Image:Image') && details.includes('Small_Circle_Image:Image')) {
+    pass('Image components disambiguated with GO paths');
+  } else {
+    fail('Image disambiguation', 'Missing Circle_Image or Small_Circle_Image paths');
+  }
+
+  // Check deep nested resolution (ParticleSystem)
+  if (details.includes('ActivationParticles_Template') && details.includes('ParticleSystem]')) {
+    pass('Deep nested ParticleSystem resolved');
+  } else {
+    fail('Deep nested resolution', 'Missing ActivationParticles_Template path');
+  }
+
+  // Check no raw &fileID headers remain in DETAILS
+  const hasRawIds = /\[&\d+/.test(details);
+  if (!hasRawIds) {
+    pass('No raw &fileID headers in DETAILS');
+  } else {
+    fail('Raw fileID headers', 'Found raw &fileID in DETAILS');
+  }
+
+  // Check REFS has unique keys (no duplicates)
+  const refsLines = refs.trim().split('\n').filter(l => l.includes(' = '));
+  const refsKeys = refsLines.map(l => l.split(' = ')[0]);
+  const uniqueKeys = new Set(refsKeys);
+  if (uniqueKeys.size === refsKeys.length) {
+    pass(`REFS has ${refsKeys.length} unique keys`);
+  } else {
+    fail('REFS uniqueness', `${refsKeys.length} keys but only ${uniqueKeys.size} unique`);
+  }
+
+  // Identity round-trip
+  const compact = readCompact(compactStr);
+  const merged = mergeCompactChanges(ast, compact);
+  const output = writeUnityYaml(merged);
+  const origLines = content.split('\n').map(l => l.trimEnd());
+  const outLines = output.split('\n').map(l => l.trimEnd());
+  let diffs = 0;
+  for (let i = 0; i < Math.max(origLines.length, outLines.length); i++) {
+    if ((origLines[i] || '') !== (outLines[i] || '')) diffs++;
+  }
+  if (diffs === 0) {
+    pass('Variant with resolved paths: identity round-trip 0 diffs');
+  } else {
+    fail(`Variant round-trip: ${diffs} diffs`);
+  }
+}
+
+// ============================================================
 // Summary
 // ============================================================
 

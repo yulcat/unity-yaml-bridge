@@ -143,9 +143,11 @@ function getTreeDepth(line) {
     }
     return depth;
 }
-/** Parse detail sections from lines */
+/** Parse detail sections from lines using stack-based indent tracking */
 function parseDetailsSections(lines, sections) {
     let currentSection = null;
+    // Stack of (property, indent) for nesting — only properties with value=[] are pushed
+    let stack = [];
     for (const line of lines) {
         const trimmed = line.trim();
         // Skip empty lines and comments
@@ -171,48 +173,84 @@ function parseDetailsSections(lines, sections) {
                 }
             }
             sections.push(currentSection);
+            stack = [];
             continue;
         }
         // Property line
         if (currentSection) {
             const indent = line.length - line.trimStart().length;
-            const propMatch = trimmed.match(/^(.+?)\s*=\s*(.*)$/);
-            if (propMatch) {
-                currentSection.properties.push({
-                    key: propMatch[1],
-                    value: propMatch[2],
-                    indent,
-                });
+            // Pop stack until we find a parent with indent strictly less than current
+            while (stack.length > 0 && stack[stack.length - 1].indent >= indent) {
+                stack.pop();
             }
-            else if (trimmed.endsWith(':')) {
-                // Start of nested block
-                currentSection.properties.push({
-                    key: trimmed.slice(0, -1),
-                    value: [],
-                    indent,
-                });
-            }
-            else if (trimmed.startsWith('- ')) {
-                // Array item — attach to previous property that is a block
-                const lastProp = currentSection.properties[currentSection.properties.length - 1];
-                if (lastProp && Array.isArray(lastProp.value)) {
-                    const itemContent = trimmed.substring(2);
-                    const itemMatch = itemContent.match(/^(.+?)\s*=\s*(.*)$/);
+            // Determine the target container: parent's value array, or section's top-level properties
+            const target = stack.length > 0
+                ? stack[stack.length - 1].prop.value
+                : currentSection.properties;
+            if (trimmed.startsWith('- ')) {
+                // Array item — find the nearest ancestor block (value=[]) to attach to
+                const itemContent = trimmed.substring(2);
+                const itemMatch = itemContent.match(/^(.+?)\s*=\s*(.*)$/);
+                // Find the block property to attach to: walk up the stack or check last item in target
+                let blockProp = null;
+                // First check if the stack top is a block
+                if (stack.length > 0 && Array.isArray(stack[stack.length - 1].prop.value)) {
+                    blockProp = stack[stack.length - 1].prop;
+                }
+                // Otherwise check the last property in the target
+                if (!blockProp) {
+                    for (let i = target.length - 1; i >= 0; i--) {
+                        if (Array.isArray(target[i].value)) {
+                            blockProp = target[i];
+                            break;
+                        }
+                    }
+                }
+                if (blockProp && Array.isArray(blockProp.value)) {
                     if (itemMatch) {
-                        lastProp.value.push({
-                            key: itemMatch[1],
-                            value: itemMatch[2],
-                            indent: indent + 2,
-                        });
+                        // key=value array item: wrap in __item__ group so continuations
+                        // (subsequent non-dash lines at deeper indent) get grouped together
+                        const itemGroup = {
+                            key: '__item__',
+                            value: [{
+                                    key: itemMatch[1],
+                                    value: itemMatch[2],
+                                    indent: indent + 2,
+                                }],
+                            indent,
+                        };
+                        blockProp.value.push(itemGroup);
+                        // Push onto stack so continuation lines become children of this group
+                        stack.push({ prop: itemGroup, indent });
                     }
                     else {
-                        // Simple array item
-                        lastProp.value.push({
+                        blockProp.value.push({
                             key: '__item__',
                             value: itemContent,
                             indent: indent + 2,
                         });
                     }
+                }
+            }
+            else {
+                const propMatch = trimmed.match(/^(.+?)\s*=\s*(.*)$/);
+                if (propMatch) {
+                    const prop = {
+                        key: propMatch[1],
+                        value: propMatch[2],
+                        indent,
+                    };
+                    target.push(prop);
+                }
+                else if (trimmed.endsWith(':')) {
+                    // Start of nested block
+                    const prop = {
+                        key: trimmed.slice(0, -1),
+                        value: [],
+                        indent,
+                    };
+                    target.push(prop);
+                    stack.push({ prop, indent });
                 }
             }
         }

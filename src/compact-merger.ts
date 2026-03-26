@@ -190,13 +190,25 @@ function applyTransformProperties(
 
 /** Apply component properties to a component document */
 function applyComponentProperties(properties: CompactProperty[], doc: UnityDocument): void {
+  applyPropertiesToTarget(properties, doc.properties);
+}
+
+/** Apply a list of CompactProperty entries into a target object, preserving nesting */
+function applyPropertiesToTarget(properties: CompactProperty[], target: Record<string, any>): void {
   for (const prop of properties) {
     if (Array.isArray(prop.value)) {
-      // Nested block — reconstruct as object or array
-      doc.properties[prop.key] = reconstructNestedValue(prop.value);
+      // Nested block — check if the target already has this key as an object
+      const existing = target[prop.key];
+      if (isPlainObject(existing) && prop.value.length > 0 && !prop.value.some(c => c.key === '__item__')) {
+        // Recursively apply nested properties into existing object
+        applyPropertiesToTarget(prop.value, existing);
+      } else {
+        // Reconstruct as new object or array
+        target[prop.key] = reconstructNestedValue(prop.value);
+      }
     } else {
       const parsed = parseCompactValue(prop.value);
-      const original = doc.properties[prop.key];
+      const original = target[prop.key];
 
       // Preserve null references: compact writes {fileID:0} as "null",
       // but we need to keep the original {fileID: 0} object for YAML round-trip
@@ -208,12 +220,12 @@ function applyComponentProperties(properties: CompactProperty[], doc: UnityDocum
       if (isPlainObject(parsed) && isPlainObject(original)) {
         const remapped = remapVectorKeys(parsed, original);
         if (remapped) {
-          doc.properties[prop.key] = remapped;
+          target[prop.key] = remapped;
           continue;
         }
       }
 
-      doc.properties[prop.key] = parsed;
+      target[prop.key] = parsed;
     }
   }
 }

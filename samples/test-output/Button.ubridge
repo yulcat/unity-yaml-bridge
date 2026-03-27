@@ -32,5 +32,5 @@ Background9Slice_Image = 8027481461304769077
 Background9Slice_Image:RectTransform = 8027481461304769076
 Background9Slice_Image:Image = 8027481461304769067
 Button_Text:RectTransform = 8027481463030904457
-Button_Text:__instance = 6920765965181414293
 Button_Text:TextMeshProUGUI = 8027481463030904456
+Button_Text:__instance = 6920765965181414293

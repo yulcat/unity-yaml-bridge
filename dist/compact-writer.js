@@ -357,6 +357,8 @@ function buildPINodeNames(node, resolver) {
 function buildStrippedComponentMap(file, resolver) {
     const map = new Map();
     const SKIP_TYPES = new Set(['Transform', 'RectTransform', 'CanvasRenderer', 'GameObject']);
+    // Map stripped GO fileID → owning PrefabInstance fileID
+    const strippedGoToPi = new Map();
     for (const doc of file.documents) {
         if (!doc.stripped)
             continue;
@@ -364,6 +366,10 @@ function buildStrippedComponentMap(file, resolver) {
         if (!piRef)
             continue;
         const piFileId = String(piRef.fileID);
+        // Track stripped GameObjects for second pass
+        if (doc.typeId === 1) {
+            strippedGoToPi.set(doc.fileId, piFileId);
+        }
         let typeName = doc.typeName;
         if (doc.typeId === 114 && doc.properties.m_Script?.guid) {
             typeName = resolveStrippedScriptName(doc.properties.m_Script.guid, resolver);
@@ -373,6 +379,33 @@ function buildStrippedComponentMap(file, resolver) {
         if (!map.has(piFileId))
             map.set(piFileId, []);
         map.get(piFileId).push({ typeName, fileId: doc.fileId });
+    }
+    // Second pass: non-stripped components attached to stripped GameObjects
+    // These are components added/overridden on a nested prefab instance's GO
+    for (const doc of file.documents) {
+        if (doc.stripped)
+            continue;
+        if (doc.typeId === 1 || doc.typeId === 1001)
+            continue; // skip GOs and PrefabInstances
+        const piRef = doc.properties.m_PrefabInstance;
+        if (piRef && String(piRef.fileID) !== '0')
+            continue; // belongs to a PI directly
+        const goRef = doc.properties.m_GameObject;
+        if (!goRef)
+            continue;
+        const goFileId = String(goRef.fileID);
+        const owningPiFileId = strippedGoToPi.get(goFileId);
+        if (!owningPiFileId)
+            continue;
+        let typeName = doc.typeName;
+        if (doc.typeId === 114 && doc.properties.m_Script?.guid) {
+            typeName = resolveStrippedScriptName(doc.properties.m_Script.guid, resolver);
+        }
+        if (SKIP_TYPES.has(typeName))
+            continue;
+        if (!map.has(owningPiFileId))
+            map.set(owningPiFileId, []);
+        map.get(owningPiFileId).push({ typeName, fileId: doc.fileId });
     }
     return map;
 }

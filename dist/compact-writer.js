@@ -107,8 +107,8 @@ function writeCompact(file, options = {}) {
     writeDetails(file.hierarchy, lines, '', resolver, !options.verbose, refMap);
     // REFS section
     lines.push('--- REFS');
-    writeRefsSection(file.hierarchy, lines, resolver);
-    writeStrippedComponentRefs(file, lines, resolver);
+    const strippedMap = buildStrippedComponentMap(file, resolver);
+    writeRefsSection(file.hierarchy, lines, resolver, strippedMap);
     return lines.join('\n') + '\n';
 }
 /** Try to expand a nested prefab by loading and parsing its source */
@@ -296,9 +296,7 @@ function buildInternalRefMap(file, resolver) {
             continue;
         let typeName = doc.typeName;
         if (doc.typeId === 114 && doc.properties.m_Script?.guid) {
-            const resolved = resolver?.resolve(doc.properties.m_Script.guid);
-            if (resolved)
-                typeName = resolved;
+            typeName = resolveStrippedScriptName(doc.properties.m_Script.guid, resolver);
         }
         if (SKIP_TYPES.has(typeName))
             continue;
@@ -355,56 +353,44 @@ function buildPINodeNames(node, resolver) {
     collect(node);
     return map;
 }
-/** Write REFS entries for stripped component docs not covered by the hierarchy */
-function writeStrippedComponentRefs(file, lines, resolver) {
-    if (!file.hierarchy)
-        return;
-    const piNodeNames = buildPINodeNames(file.hierarchy, resolver);
-    // Collect fileIDs already written by writeNodeRefs
-    const writtenIds = new Set();
-    function collectWritten(node) {
-        if (node.fileId && node.fileId !== '0')
-            writtenIds.add(node.fileId);
-        if (node.transform.fileId)
-            writtenIds.add(node.transform.fileId);
-        for (const comp of node.components)
-            writtenIds.add(comp.fileId);
-        if (node.nestedPrefab)
-            writtenIds.add(node.nestedPrefab.instanceId);
-        for (const child of node.children)
-            collectWritten(child);
-    }
-    collectWritten(file.hierarchy);
+/** Build a map from PI instanceId → stripped component refs (excluding Transform/RectTransform/CanvasRenderer/GO) */
+function buildStrippedComponentMap(file, resolver) {
+    const map = new Map();
     const SKIP_TYPES = new Set(['Transform', 'RectTransform', 'CanvasRenderer', 'GameObject']);
     for (const doc of file.documents) {
         if (!doc.stripped)
-            continue;
-        if (writtenIds.has(doc.fileId))
             continue;
         const piRef = doc.properties.m_PrefabInstance;
         if (!piRef)
             continue;
         const piFileId = String(piRef.fileID);
-        const nodeName = piNodeNames.get(piFileId);
-        if (!nodeName)
-            continue;
         let typeName = doc.typeName;
         if (doc.typeId === 114 && doc.properties.m_Script?.guid) {
-            const resolved = resolver?.resolve(doc.properties.m_Script.guid);
-            if (resolved)
-                typeName = resolved;
+            typeName = resolveStrippedScriptName(doc.properties.m_Script.guid, resolver);
         }
         if (SKIP_TYPES.has(typeName))
             continue;
-        lines.push(`${nodeName}:${typeName} = ${doc.fileId}`);
+        if (!map.has(piFileId))
+            map.set(piFileId, []);
+        map.get(piFileId).push({ typeName, fileId: doc.fileId });
     }
+    return map;
+}
+/** Resolve a script GUID to a class name, with fallback to MonoBehaviour_<guid8> */
+function resolveStrippedScriptName(guid, resolver) {
+    if (resolver) {
+        const name = resolver.resolve(guid);
+        if (name)
+            return name;
+    }
+    return `MonoBehaviour_${guid.substring(0, 8)}`;
 }
 /** Write the REFS section mapping paths to fileIDs */
-function writeRefsSection(node, lines, resolver) {
-    writeNodeRefs(node, lines, resolver);
+function writeRefsSection(node, lines, resolver, strippedMap) {
+    writeNodeRefs(node, lines, resolver, strippedMap);
 }
 /** Write refs entries for a single node and its descendants */
-function writeNodeRefs(node, lines, resolver) {
+function writeNodeRefs(node, lines, resolver, strippedMap) {
     let name = node.name;
     // Resolve 'NestedPrefab' default to source name
     if (name === 'NestedPrefab' && node.nestedPrefab) {
@@ -428,13 +414,20 @@ function writeNodeRefs(node, lines, resolver) {
         const compName = resolveComponentName(comp, resolver);
         lines.push(`${name}:${compName} = ${comp.fileId}`);
     }
+    // Stripped component refs from nested prefab (grouped with parent GO)
+    if (node.nestedPrefab && strippedMap) {
+        const strippedRefs = strippedMap.get(node.nestedPrefab.instanceId) || [];
+        for (const ref of strippedRefs) {
+            lines.push(`${name}:${ref.typeName} = ${ref.fileId}`);
+        }
+    }
     // Nested prefab instance
     if (node.nestedPrefab) {
         lines.push(`${name}:__instance = ${node.nestedPrefab.instanceId}`);
     }
     // Recurse children
     for (const child of node.children) {
-        writeNodeRefs(child, lines, resolver);
+        writeNodeRefs(child, lines, resolver, strippedMap);
     }
 }
 /** Write the transform section in compact form */

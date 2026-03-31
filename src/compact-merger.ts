@@ -56,6 +56,19 @@ export function generateFileId(): string {
   return value.toString();
 }
 
+/** Recursively collect all GO paths from a STRUCTURE tree */
+function collectStructurePaths(node: import('./compact-reader').CompactStructureNode, parentPath: string, paths: Set<string>): void {
+  const currentPath = parentPath ? `${parentPath}/${node.name}` : node.name;
+  paths.add(currentPath);
+  // Also add with each component
+  for (const comp of node.components) {
+    paths.add(`${currentPath}:${comp}`);
+  }
+  for (const child of node.children) {
+    collectStructurePaths(child, currentPath, paths);
+  }
+}
+
 /**
  * Merge compact file changes into the original AST.
  * Returns a new UnityFile with the changes applied.
@@ -64,10 +77,17 @@ export function generateFileId(): string {
 export function mergeCompactChanges(original: UnityFile, compact: CompactFile): UnityFile {
   const result = cloneUnityFile(original);
 
+  // Collect all GO paths from STRUCTURE tree — used to distinguish
+  // valid new references (GO exists in hierarchy) from typos
+  const structurePaths = new Set<string>();
+  if (compact.structure) {
+    collectStructurePaths(compact.structure, '', structurePaths);
+  }
+
   if (compact.type === 'variant') {
     mergeVariantSections(result, compact.sections, compact.refs);
   } else {
-    mergePrefabSections(result, compact.sections, compact.refs);
+    mergePrefabSections(result, compact.sections, compact.refs, structurePaths);
   }
 
   return result;
@@ -78,7 +98,7 @@ export function mergeCompactChanges(original: UnityFile, compact: CompactFile): 
 // ============================================================
 
 /** Merge sections for a regular prefab */
-function mergePrefabSections(file: UnityFile, sections: CompactSection[], refs: Map<string, string[]>): void {
+function mergePrefabSections(file: UnityFile, sections: CompactSection[], refs: Map<string, string[]>, structurePaths?: Set<string>): void {
   if (!file.hierarchy) return;
 
   // Build a map: document fileId → document (for fast lookup)
@@ -93,19 +113,6 @@ function mergePrefabSections(file: UnityFile, sections: CompactSection[], refs: 
 
   // Track which REFS fileIDs have been used (for duplicate key handling)
   const usedRefs = new Set<string>();
-
-  // Collect added paths (sections with + prefix) so -> references to new objects
-  // can auto-generate fileIDs instead of throwing errors
-  const addedPaths = new Set<string>();
-  for (const section of sections) {
-    if (section.isAdded) {
-      const key = section.componentType
-        ? `${section.goPath}:${section.componentType}`
-        : section.goPath;
-      addedPaths.add(key);
-      addedPaths.add(section.goPath); // Also add the bare GO path
-    }
-  }
 
   for (const section of sections) {
     const goPath = section.goPath;
@@ -125,7 +132,7 @@ function mergePrefabSections(file: UnityFile, sections: CompactSection[], refs: 
           if (compType === 'Transform' || compType === 'RectTransform') {
             applyTransformProperties(section.properties, doc, compType === 'RectTransform');
           } else {
-            applyComponentProperties(section.properties, doc, refs, addedPaths);
+            applyComponentProperties(section.properties, doc, refs, structurePaths);
           }
           continue;
         }
@@ -156,7 +163,7 @@ function mergePrefabSections(file: UnityFile, sections: CompactSection[], refs: 
       if (comp) {
         const compDoc = docMap.get(comp.fileId);
         if (compDoc) {
-          applyComponentProperties(section.properties, compDoc, refs, addedPaths);
+          applyComponentProperties(section.properties, compDoc, refs, structurePaths);
         }
       }
     }
@@ -315,12 +322,12 @@ function applyTransformProperties(
 }
 
 /** Apply component properties to a component document */
-function applyComponentProperties(properties: CompactProperty[], doc: UnityDocument, refs?: Map<string, string[]>, addedPaths?: Set<string>): void {
-  applyPropertiesToTarget(properties, doc.properties, refs, addedPaths);
+function applyComponentProperties(properties: CompactProperty[], doc: UnityDocument, refs?: Map<string, string[]>, structurePaths?: Set<string>): void {
+  applyPropertiesToTarget(properties, doc.properties, refs, structurePaths);
 }
 
 /** Apply a list of CompactProperty entries into a target object, preserving nesting */
-function applyPropertiesToTarget(properties: CompactProperty[], target: Record<string, any>, refs?: Map<string, string[]>, addedPaths?: Set<string>): void {
+function applyPropertiesToTarget(properties: CompactProperty[], target: Record<string, any>, refs?: Map<string, string[]>, structurePaths?: Set<string>): void {
   for (const prop of properties) {
     if (Array.isArray(prop.value)) {
       // Nested block — check if the target already has this key as an object
@@ -330,13 +337,13 @@ function applyPropertiesToTarget(properties: CompactProperty[], target: Record<s
         applyPropertiesToTarget(prop.value, existing, refs);
       } else {
         // Reconstruct as new object or array, passing original for key remapping
-        target[prop.key] = reconstructNestedValue(prop.value, existing, refs, addedPaths);
+        target[prop.key] = reconstructNestedValue(prop.value, existing, refs, structurePaths);
       }
     } else {
       let parsed = parseCompactValue(prop.value);
 
       // Resolve path references (->GOPath:Component or @GOPath:Component)
-      parsed = resolvePathReference(parsed, refs, addedPaths);
+      parsed = resolvePathReference(parsed, refs, structurePaths);
 
       const original = target[prop.key];
 
@@ -366,7 +373,7 @@ function applyPropertiesToTarget(properties: CompactProperty[], target: Record<s
  * Resolve ->GOPath:Component or @GOPath:Component path references to {fileID: X} objects.
  * Recursively handles arrays. Returns the original value unchanged if not a path reference.
  */
-function resolvePathReference(value: any, refs?: Map<string, string[]>, addedPaths?: Set<string>): any {
+function resolvePathReference(value: any, refs?: Map<string, string[]>, structurePaths?: Set<string>): any {
   if (!refs) return value;
 
   if (typeof value === 'string') {
@@ -386,17 +393,17 @@ function resolvePathReference(value: any, refs?: Map<string, string[]>, addedPat
 
     // Not found in REFS — check if this references a newly added section (+ prefix).
     // If so, auto-generate a fileID and register it in REFS for later use.
-    if (addedPaths && addedPaths.has(pathRef)) {
+    if (structurePaths && structurePaths.has(pathRef)) {
       const newFileId = generateFileId();
       refs.set(pathRef, [newFileId]);
       return parseCompactValue('{' + newFileId + '}');
     }
 
     // Also check if just the GO part matches an added path (reference to GO's Transform)
-    if (addedPaths) {
+    if (structurePaths) {
       const colonIdx = pathRef.indexOf(':');
       const goPath = colonIdx >= 0 ? pathRef.substring(0, colonIdx) : pathRef;
-      if (addedPaths.has(goPath)) {
+      if (structurePaths.has(goPath)) {
         const newFileId = generateFileId();
         refs.set(pathRef, [newFileId]);
         return parseCompactValue('{' + newFileId + '}');
@@ -411,7 +418,7 @@ function resolvePathReference(value: any, refs?: Map<string, string[]>, addedPat
   }
 
   if (Array.isArray(value)) {
-    return value.map(item => resolvePathReference(item, refs, addedPaths));
+    return value.map(item => resolvePathReference(item, refs, structurePaths));
   }
 
   return value;
@@ -464,7 +471,7 @@ function remapVectorKeys(parsed: Record<string, any>, original: Record<string, a
 }
 
 /** Reconstruct a nested value from CompactProperty children, using original for key remapping */
-function reconstructNestedValue(children: CompactProperty[], original?: any, refs?: Map<string, string[]>, addedPaths?: Set<string>): any {
+function reconstructNestedValue(children: CompactProperty[], original?: any, refs?: Map<string, string[]>, structurePaths?: Set<string>): any {
   // Check if this is an array (items have __item__ key) or an object
   const isArray = children.some(c => c.key === '__item__');
   if (isArray) {
@@ -473,10 +480,10 @@ function reconstructNestedValue(children: CompactProperty[], original?: any, ref
       const origItem = origArray?.[idx];
       if (typeof c.value === 'string') {
         let parsed = parseCompactValue(c.value);
-        parsed = resolvePathReference(parsed, refs, addedPaths);
+        parsed = resolvePathReference(parsed, refs, structurePaths);
         return remapWithOriginal(parsed, origItem);
       }
-      return reconstructNestedValue(c.value as CompactProperty[], origItem, refs, addedPaths);
+      return reconstructNestedValue(c.value as CompactProperty[], origItem, refs, structurePaths);
     });
   }
 
@@ -486,10 +493,10 @@ function reconstructNestedValue(children: CompactProperty[], original?: any, ref
   for (const child of children) {
     const origVal = origObj?.[child.key];
     if (Array.isArray(child.value)) {
-      result[child.key] = reconstructNestedValue(child.value, origVal, refs, addedPaths);
+      result[child.key] = reconstructNestedValue(child.value, origVal, refs, structurePaths);
     } else {
       let parsed = parseCompactValue(child.value);
-      parsed = resolvePathReference(parsed, refs, addedPaths);
+      parsed = resolvePathReference(parsed, refs, structurePaths);
       result[child.key] = remapWithOriginal(parsed, origVal);
     }
   }

@@ -7,16 +7,23 @@
   "bin": {
     "ubridge": "dist/cli.js"
   },
-
   "scripts": {
     "build": "tsc",
     "prepublishOnly": "tsc",
     "test": "tsc && node dist/test-roundtrip.js && node dist/test-compact-roundtrip.js && node dist/test-refs.js",
     "test:roundtrip": "tsc && node dist/test-roundtrip.js",
     "test:compact": "tsc && node dist/test-compact-roundtrip.js",
-    "test:refs": "tsc && node dist/test-refs.js"
+    "test:refs": "tsc && node dist/test-refs.js",
+    "prepare": "npm run build"
   },
-  "keywords": ["unity", "yaml", "prefab", "ai", "parser", "gamedev"],
+  "keywords": [
+    "unity",
+    "yaml",
+    "prefab",
+    "ai",
+    "parser",
+    "gamedev"
+  ],
   "author": "yulcat",
   "license": "MIT",
   "repository": {
@@ -27,5 +34,11 @@
   "devDependencies": {
     "@types/node": "^25.5.0",
     "typescript": "^6.0.2"
-  }
+  },
+  "files": [
+    "dist/",
+    "samples/",
+    "docs/",
+    "README.md"
+  ]
 }

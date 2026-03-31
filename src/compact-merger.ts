@@ -233,14 +233,15 @@ function valuesMatch(a: any, b: any): boolean {
 }
 
 /** Flatten hierarchy into a map of name → nodes */
-function flattenHierarchy(node: GameObjectNode, map: Map<string, GameObjectNode[]>): void {
-  if (!map.has(node.name)) {
-    map.set(node.name, []);
+function flattenHierarchy(node: GameObjectNode, map: Map<string, GameObjectNode[]>, parentPath: string = ''): void {
+  const currentPath = parentPath ? `${parentPath}/${node.name}` : node.name;
+  if (!map.has(currentPath)) {
+    map.set(currentPath, []);
   }
-  map.get(node.name)!.push(node);
+  map.get(currentPath)!.push(node);
 
   for (const child of node.children) {
-    flattenHierarchy(child, map);
+    flattenHierarchy(child, map, currentPath);
   }
 }
 

@@ -28,13 +28,16 @@ m_Camera = {0}
 
 [_Card_Template:CardBehaviour]
 cardData = {0}
-cardDisplaysToHideAndShow = [->Frame, ->_Header_Text, ->Paragraph_Text]
-medalDisplayUI = ->small circle:MedalDisplayUI
+cardDisplaysToHideAndShow:
+  - ->_Card_Template/Frame
+  - ->_Card_Template/_Header_Text
+  - ->_Card_Template/Paragraph_Text
+medalDisplayUI = ->_Card_Template/small circle:MedalDisplayUI
 
-[Frame:RectTransform]
+[_Card_Template/Frame:RectTransform]
 anchor = (0, 0)-(1, 1)
 
-[Frame:Image]
+[_Card_Template/Frame:Image]
 m_Color = (1, 1, 1, 1)
 m_Sprite = {21300000, 29a4077ad82c77d4a9be8349d4b48b37}
 m_Type = 1
@@ -44,16 +47,16 @@ _Card_Template = 3640861149533394057
 _Card_Template:RectTransform = 8368714169436892108
 _Card_Template:CameraFacingBillboard = 182953068969363021
 _Card_Template:CardBehaviour = 3617094297190067200
-Frame = 2100659746680659327
-Frame:RectTransform = 233227047284964750
-Frame:Image = 5598127903791586326
-_Header_Text = 2276444076082895750
-_Header_Text:RectTransform = 4967643782733132011
-_Header_Text:__instance = 435768937130368832
-Paragraph_Text = 815790438873356520
-Paragraph_Text:RectTransform = 7279466503550670669
-Paragraph_Text:__instance = 1520847364777890966
-small circle:RectTransform = 7871776933903133687
-small circle:ParticleSystem = 4413684578389200477
-small circle:MedalDisplayUI = 6431933051627347590
-small circle:__instance = 6409668946328506549
+_Card_Template/Frame = 2100659746680659327
+_Card_Template/Frame:RectTransform = 233227047284964750
+_Card_Template/Frame:Image = 5598127903791586326
+_Card_Template/_Header_Text = 2276444076082895750
+_Card_Template/_Header_Text:RectTransform = 4967643782733132011
+_Card_Template/_Header_Text:__instance = 435768937130368832
+_Card_Template/Paragraph_Text = 815790438873356520
+_Card_Template/Paragraph_Text:RectTransform = 7279466503550670669
+_Card_Template/Paragraph_Text:__instance = 1520847364777890966
+_Card_Template/small circle:RectTransform = 7871776933903133687
+_Card_Template/small circle:ParticleSystem = 4413684578389200477
+_Card_Template/small circle:MedalDisplayUI = 6431933051627347590
+_Card_Template/small circle:__instance = 6409668946328506549

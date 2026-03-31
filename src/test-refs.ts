@@ -87,19 +87,19 @@ console.log('='.repeat(60));
     fail('Button:RectTransform fileID correct', `Got: ${buttonRtRef}`);
   }
 
-  const bgImageRef = compact.refs.get('Background9Slice_Image:Image')?.[0];
+  const bgImageRef = compact.refs.get('Button/Background9Slice_Image:Image')?.[0];
   if (bgImageRef === '8027481461304769067') {
-    pass('Background9Slice_Image:Image fileID correct');
+    pass('Button/Background9Slice_Image:Image fileID correct');
   } else {
-    fail('Background9Slice_Image:Image fileID correct', `Got: ${bgImageRef}`);
+    fail('Button/Background9Slice_Image:Image fileID correct', `Got: ${bgImageRef}`);
   }
 
   // Check nested prefab instance ref
-  const textInstanceRef = compact.refs.get('Button_Text:__instance')?.[0];
+  const textInstanceRef = compact.refs.get('Button/Button_Text:__instance')?.[0];
   if (textInstanceRef === '6920765965181414293') {
-    pass('Button_Text:__instance fileID correct');
+    pass('Button/Button_Text:__instance fileID correct');
   } else {
-    fail('Button_Text:__instance fileID correct', `Got: ${textInstanceRef}`);
+    fail('Button/Button_Text:__instance fileID correct', `Got: ${textInstanceRef}`);
   }
 }
 

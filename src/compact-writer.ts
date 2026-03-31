@@ -274,12 +274,10 @@ function writeDetails(
   filterBoilerplate: boolean = true,
   refMap?: Map<string, string>
 ): void {
-  // Use short path (just the GO name, unless we need disambiguation)
   const currentPath = path ? `${path}/${node.name}` : node.name;
-  const displayPath = node.name;
 
   // Write transform details (if non-default)
-  const transformSection = writeTransformSection(node.transform, displayPath);
+  const transformSection = writeTransformSection(node.transform, currentPath);
   if (transformSection) {
     lines.push('');
     lines.push(transformSection);
@@ -304,7 +302,7 @@ function writeDetails(
     if (propEntries.length === 0) continue;
 
     lines.push('');
-    lines.push(`[${displayPath}:${compName}]`);
+    lines.push(`[${currentPath}:${compName}]`);
 
     for (const [key, value] of propEntries) {
       writeProperty(key, value, lines, '', refMap);
@@ -370,43 +368,47 @@ function buildInternalRefMap(
 function collectNodeFileIds(
   node: GameObjectNode,
   map: Map<string, string>,
-  resolver?: GuidResolver
+  resolver?: GuidResolver,
+  parentPath: string = ''
 ): void {
   let name = node.name;
   if (name === 'NestedPrefab' && node.nestedPrefab) {
     name = resolveSourceName(node, resolver) || name;
   }
 
+  const currentPath = parentPath ? `${parentPath}/${name}` : name;
+
   if (node.fileId && node.fileId !== '0') {
-    map.set(node.fileId, name);
+    map.set(node.fileId, currentPath);
   }
   if (node.transform.fileId) {
     const ttype = node.transform.isRect ? 'RectTransform' : 'Transform';
-    map.set(node.transform.fileId, `${name}:${ttype}`);
+    map.set(node.transform.fileId, `${currentPath}:${ttype}`);
   }
   for (const comp of node.components) {
     const compName = resolveComponentName(comp, resolver);
-    map.set(comp.fileId, `${name}:${compName}`);
+    map.set(comp.fileId, `${currentPath}:${compName}`);
   }
   for (const child of node.children) {
-    collectNodeFileIds(child, map, resolver);
+    collectNodeFileIds(child, map, resolver, currentPath);
   }
 }
 
-/** Build PrefabInstance fileId → node name mapping from hierarchy */
+/** Build PrefabInstance fileId → node path mapping from hierarchy */
 function buildPINodeNames(node: GameObjectNode, resolver?: GuidResolver): Map<string, string> {
   const map = new Map<string, string>();
-  function collect(n: GameObjectNode): void {
-    if (n.nestedPrefab) {
-      let name = n.name;
-      if (name === 'NestedPrefab') {
-        name = resolveSourceName(n, resolver) || name;
-      }
-      map.set(n.nestedPrefab.instanceId, name);
+  function collect(n: GameObjectNode, parentPath: string): void {
+    let name = n.name;
+    if (name === 'NestedPrefab' && n.nestedPrefab) {
+      name = resolveSourceName(n, resolver) || name;
     }
-    for (const child of n.children) collect(child);
+    const currentPath = parentPath ? `${parentPath}/${name}` : name;
+    if (n.nestedPrefab) {
+      map.set(n.nestedPrefab.instanceId, currentPath);
+    }
+    for (const child of n.children) collect(child, currentPath);
   }
-  collect(node);
+  collect(node, '');
   return map;
 }
 
@@ -494,7 +496,7 @@ function writeRefsSection(
   resolver?: GuidResolver,
   strippedMap?: Map<string, StrippedComponentRef[]>
 ): void {
-  writeNodeRefs(node, lines, resolver, strippedMap);
+  writeNodeRefs(node, lines, resolver, strippedMap, '');
 }
 
 /** Write refs entries for a single node and its descendants */
@@ -502,7 +504,8 @@ function writeNodeRefs(
   node: GameObjectNode,
   lines: string[],
   resolver?: GuidResolver,
-  strippedMap?: Map<string, StrippedComponentRef[]>
+  strippedMap?: Map<string, StrippedComponentRef[]>,
+  parentPath: string = ''
 ): void {
   let name = node.name;
   // Resolve 'NestedPrefab' default to source name
@@ -511,40 +514,42 @@ function writeNodeRefs(
     if (resolved) name = resolved;
   }
 
+  const currentPath = parentPath ? `${parentPath}/${name}` : name;
+
   // GO fileId
   if (node.fileId && node.fileId !== '0') {
-    lines.push(`${name} = ${node.fileId}`);
+    lines.push(`${currentPath} = ${node.fileId}`);
   }
 
   // Transform fileId
   if (node.transform.fileId) {
     const typeName = node.transform.isRect ? 'RectTransform' : 'Transform';
-    lines.push(`${name}:${typeName} = ${node.transform.fileId}`);
+    lines.push(`${currentPath}:${typeName} = ${node.transform.fileId}`);
   }
 
   // Component fileIds
   for (const comp of node.components) {
     if (OMIT_COMPONENTS.has(comp.typeName)) continue;
     const compName = resolveComponentName(comp, resolver);
-    lines.push(`${name}:${compName} = ${comp.fileId}`);
+    lines.push(`${currentPath}:${compName} = ${comp.fileId}`);
   }
 
   // Stripped component refs from nested prefab (grouped with parent GO)
   if (node.nestedPrefab && strippedMap) {
     const strippedRefs = strippedMap.get(node.nestedPrefab.instanceId) || [];
     for (const ref of strippedRefs) {
-      lines.push(`${name}:${ref.typeName} = ${ref.fileId}`);
+      lines.push(`${currentPath}:${ref.typeName} = ${ref.fileId}`);
     }
   }
 
   // Nested prefab instance
   if (node.nestedPrefab) {
-    lines.push(`${name}:__instance = ${node.nestedPrefab.instanceId}`);
+    lines.push(`${currentPath}:__instance = ${node.nestedPrefab.instanceId}`);
   }
 
   // Recurse children
   for (const child of node.children) {
-    writeNodeRefs(child, lines, resolver, strippedMap);
+    writeNodeRefs(child, lines, resolver, strippedMap, currentPath);
   }
 }
 

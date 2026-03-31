@@ -14,12 +14,12 @@ size = (187.87, 51.63)
 activatedText = Activated
 activateText = Activate
 disabledText = Disabled
-activateDisplayText = ->Button_Text:TextMeshProUGUI
+activateDisplayText = ->Button/Button_Text:TextMeshProUGUI
 
-[Background9Slice_Image:RectTransform]
+[Button/Background9Slice_Image:RectTransform]
 anchor = (0, 0)-(1, 1)
 
-[Background9Slice_Image:Image]
+[Button/Background9Slice_Image:Image]
 m_Color = (1, 1, 1, 1)
 m_Sprite = {21300000, e197d4e89f9f4274dac4566fdd117ecf}
 m_Type = 1
@@ -28,9 +28,9 @@ m_FillCenter = 1
 Button = 8027481463175804169
 Button:RectTransform = 8027481463175804168
 Button:ActivatePanelUI = 8027481463175804175
-Background9Slice_Image = 8027481461304769077
-Background9Slice_Image:RectTransform = 8027481461304769076
-Background9Slice_Image:Image = 8027481461304769067
-Button_Text:RectTransform = 8027481463030904457
-Button_Text:TextMeshProUGUI = 8027481463030904456
-Button_Text:__instance = 6920765965181414293
+Button/Background9Slice_Image = 8027481461304769077
+Button/Background9Slice_Image:RectTransform = 8027481461304769076
+Button/Background9Slice_Image:Image = 8027481461304769067
+Button/Button_Text:RectTransform = 8027481463030904457
+Button/Button_Text:TextMeshProUGUI = 8027481463030904456
+Button/Button_Text:__instance = 6920765965181414293

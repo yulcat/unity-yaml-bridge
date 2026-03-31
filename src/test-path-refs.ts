@@ -338,6 +338,138 @@ console.log('='.repeat(60));
 }
 
 // ============================================================
+// Test 8: Reference to a new component (exists in STRUCTURE, not in REFS)
+// ============================================================
+
+console.log('\n' + '='.repeat(60));
+console.log('TEST: Reference to a new component via STRUCTURE presence');
+console.log('='.repeat(60));
+
+{
+  const content = fs.readFileSync(path.join(SAMPLES_DIR, 'prefabs', 'Button.prefab'), 'utf-8');
+  const ast = parseUnityYaml(content);
+  const compactStr = writeCompact(ast, { guidResolver: resolver });
+
+  // Inject a new GO 'NewPanel' with Image component into STRUCTURE,
+  // add a DETAILS section, and make an existing field reference it.
+  const modifiedCompact = compactStr
+    // Replace last child marker with middle child, then add new last child
+    .replace(
+      /└─ (Button_Text.*)/,
+      '├─ $1\n└─ NewPanel [Image]'
+    )
+    // Add a DETAILS section for the new component
+    .replace(
+      '--- REFS',
+      '[Button/NewPanel:Image]\nm_Color = (1, 0, 0, 1)\n\n--- REFS'
+    )
+    // Change activateDisplayText to reference the new component
+    .replace(
+      /activateDisplayText = ->[^\n]+/,
+      'activateDisplayText = ->Button/NewPanel:Image'
+    );
+
+  const compact = readCompact(modifiedCompact);
+
+  // Verify NewPanel exists in structure
+  const hasNewPanel = compact.structure?.children?.some(c => c.name === 'NewPanel');
+  if (hasNewPanel) {
+    pass('NewPanel found in parsed STRUCTURE');
+  } else {
+    fail('NewPanel not in STRUCTURE');
+  }
+
+  // Merge — should NOT throw because NewPanel:Image is in STRUCTURE
+  try {
+    const merged = mergeCompactChanges(ast, compact);
+    const output = writeUnityYaml(merged);
+
+    // Verify the reference was resolved to a valid fileID (not zero, not the string)
+    const refMatch = output.match(/activateDisplayText: \{fileID: (\d+)\}/);
+    if (refMatch && refMatch[1] !== '0') {
+      pass(`Reference to new component resolved to fileID: ${refMatch[1]}`);
+    } else {
+      fail('Reference resolution', `Got: ${refMatch ? refMatch[0] : 'not found'}`);
+    }
+  } catch (e: any) {
+    fail('Should not throw for STRUCTURE-present reference', e.message);
+  }
+}
+
+// ============================================================
+// Test 9: Cross-reference between two new objects
+// ============================================================
+
+console.log('\n' + '='.repeat(60));
+console.log('TEST: Cross-reference between two new objects');
+console.log('='.repeat(60));
+
+{
+  const content = fs.readFileSync(path.join(SAMPLES_DIR, 'prefabs', 'Button.prefab'), 'utf-8');
+  const ast = parseUnityYaml(content);
+  const compactStr = writeCompact(ast, { guidResolver: resolver });
+
+  // Add two new GOs: SourceGO and TargetGO, with SourceGO referencing TargetGO
+  const modifiedCompact = compactStr
+    .replace(
+      /└─ (Button_Text.*)/,
+      '├─ $1\n├─ SourceGO [MonoBehaviour]\n└─ TargetGO [Image]'
+    )
+    .replace(
+      '--- REFS',
+      '[Button/SourceGO:MonoBehaviour]\ntargetRef = ->Button/TargetGO:Image\n\n[Button/TargetGO:Image]\nm_Color = (0, 1, 0, 1)\n\n--- REFS'
+    );
+
+  const compact = readCompact(modifiedCompact);
+
+  // The merge should NOT throw — both GOs exist in STRUCTURE.
+  // Note: merger doesn't create new YAML documents for new GOs yet,
+  // so new component sections are silently skipped (no matching AST doc).
+  // We verify the merge completes without error.
+  try {
+    mergeCompactChanges(ast, compact);
+    pass('Cross-reference between new objects resolved without error');
+  } catch (e: any) {
+    fail('Should not throw for cross-reference between new objects', e.message);
+  }
+}
+
+// ============================================================
+// Test 10: Reference to non-existent GO still throws
+// ============================================================
+
+console.log('\n' + '='.repeat(60));
+console.log('TEST: Reference to GO not in STRUCTURE or REFS still throws');
+console.log('='.repeat(60));
+
+{
+  const content = fs.readFileSync(path.join(SAMPLES_DIR, 'prefabs', 'Button.prefab'), 'utf-8');
+  const ast = parseUnityYaml(content);
+  const compactStr = writeCompact(ast, { guidResolver: resolver });
+  const compact = readCompact(compactStr);
+
+  // Inject a reference to a GO that doesn't exist anywhere
+  for (const section of compact.sections) {
+    for (const prop of section.properties) {
+      if (prop.key === 'activateDisplayText') {
+        prop.value = '->CompletelyFakeGO/Nonexistent:Image';
+      }
+    }
+  }
+
+  try {
+    mergeCompactChanges(ast, compact);
+    fail('Should throw for GO not in STRUCTURE or REFS', 'No error thrown');
+  } catch (e: any) {
+    if (e.message.includes('Unresolved path reference')) {
+      pass('Correctly throws for reference to nonexistent GO');
+    } else {
+      fail('Wrong error', e.message);
+    }
+  }
+}
+
+// ============================================================
 // Summary
 // ============================================================
 

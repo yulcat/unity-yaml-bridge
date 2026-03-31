@@ -82,9 +82,9 @@ console.log('='.repeat(60));
     const content = fs.readFileSync(path.join(SAMPLES_DIR, 'prefabs', 'Button.prefab'), 'utf-8');
     const ast = (0, unity_yaml_parser_1.parseUnityYaml)(content);
     const compactStr = (0, compact_writer_1.writeCompact)(ast, { guidResolver: resolver });
-    // Check that activateDisplayText uses -> format
-    if (compactStr.includes('activateDisplayText = ->Button_Text:TextMeshProUGUI')) {
-        pass('activateDisplayText written as ->Button_Text:TextMeshProUGUI');
+    // Check that activateDisplayText uses -> format with slash path
+    if (compactStr.includes('activateDisplayText = ->Button/Button_Text:TextMeshProUGUI')) {
+        pass('activateDisplayText written as ->Button/Button_Text:TextMeshProUGUI');
     }
     else {
         fail('activateDisplayText -> format', 'Not found in compact output');
@@ -115,10 +115,10 @@ console.log('='.repeat(60));
     const ast = (0, unity_yaml_parser_1.parseUnityYaml)(content);
     const compactStr = (0, compact_writer_1.writeCompact)(ast, { guidResolver: resolver });
     const compact = (0, compact_reader_1.readCompact)(compactStr);
-    // Check that Button_Text:TextMeshProUGUI is in REFS
-    const tmproRef = compact.refs.get('Button_Text:TextMeshProUGUI')?.[0];
+    // Check that Button/Button_Text:TextMeshProUGUI is in REFS (slash path)
+    const tmproRef = compact.refs.get('Button/Button_Text:TextMeshProUGUI')?.[0];
     if (tmproRef === '8027481463030904456') {
-        pass('Button_Text:TextMeshProUGUI = 8027481463030904456 in REFS');
+        pass('Button/Button_Text:TextMeshProUGUI = 8027481463030904456 in REFS');
     }
     else {
         fail('Stripped component in REFS', `Got: ${tmproRef}`);
@@ -171,7 +171,7 @@ console.log('='.repeat(60));
     const ast = (0, unity_yaml_parser_1.parseUnityYaml)(content);
     const compactStr = (0, compact_writer_1.writeCompact)(ast, { guidResolver: resolver });
     // Replace -> with @ in the compact string
-    const atCompact = compactStr.replace('->Button_Text:TextMeshProUGUI', '@Button_Text:TextMeshProUGUI');
+    const atCompact = compactStr.replace('->Button/Button_Text:TextMeshProUGUI', '@Button/Button_Text:TextMeshProUGUI');
     const compact = (0, compact_reader_1.readCompact)(atCompact);
     // Merge back and verify
     const merged = (0, compact_merger_1.mergeCompactChanges)(ast, compact);
@@ -207,14 +207,15 @@ console.log('='.repeat(60));
     const content = fs.readFileSync(path.join(SAMPLES_DIR, 'prefabs', '_Card_Template.prefab'), 'utf-8');
     const ast = (0, unity_yaml_parser_1.parseUnityYaml)(content);
     const compactStr = (0, compact_writer_1.writeCompact)(ast, { guidResolver: resolver });
-    // Check that the array uses -> format
-    if (compactStr.includes('[->Frame, ->_Header_Text, ->Paragraph_Text]')) {
-        pass('Array of internal refs uses -> format');
+    // Check that the array uses -> format with slash paths
+    if (compactStr.includes('->_Card_Template/Frame') &&
+        compactStr.includes('->_Card_Template/_Header_Text') &&
+        compactStr.includes('->_Card_Template/Paragraph_Text')) {
+        pass('Array of internal refs uses -> format with slash paths');
     }
     else {
-        // Check if individual refs are present
-        const hasArrow = compactStr.includes('->Frame');
-        fail('Array -> format', `Has ->Frame: ${hasArrow}`);
+        const hasArrow = compactStr.includes('->_Card_Template/Frame');
+        fail('Array -> format', `Has ->_Card_Template/Frame: ${hasArrow}`);
     }
     // Round-trip should still work
     const compact = (0, compact_reader_1.readCompact)(compactStr);
@@ -245,12 +246,12 @@ console.log('='.repeat(60));
     const ast = (0, unity_yaml_parser_1.parseUnityYaml)(content);
     const compactStr = (0, compact_writer_1.writeCompact)(ast, { guidResolver: resolver });
     const compact = (0, compact_reader_1.readCompact)(compactStr);
-    // Modify the compact: change activateDisplayText to point to Background9Slice_Image:Image
+    // Modify the compact: change activateDisplayText to point to Background9Slice_Image:Image (slash path)
     for (const section of compact.sections) {
         for (const prop of section.properties) {
             if (prop.key === 'activateDisplayText') {
-                // Use @ syntax to set reference
-                prop.value = '@Background9Slice_Image:Image';
+                // Use @ syntax to set reference with slash path
+                prop.value = '@Button/Background9Slice_Image:Image';
             }
         }
     }

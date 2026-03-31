@@ -255,13 +255,14 @@ function valuesMatch(a, b) {
     return String(a) === String(b);
 }
 /** Flatten hierarchy into a map of name → nodes */
-function flattenHierarchy(node, map) {
-    if (!map.has(node.name)) {
-        map.set(node.name, []);
+function flattenHierarchy(node, map, parentPath = '') {
+    const currentPath = parentPath ? `${parentPath}/${node.name}` : node.name;
+    if (!map.has(currentPath)) {
+        map.set(currentPath, []);
     }
-    map.get(node.name).push(node);
+    map.get(currentPath).push(node);
     for (const child of node.children) {
-        flattenHierarchy(child, map);
+        flattenHierarchy(child, map, currentPath);
     }
 }
 /** Apply transform shorthand properties to a transform document */

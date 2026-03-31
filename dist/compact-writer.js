@@ -232,11 +232,9 @@ function writeStructureTree(node, lines, prefix, isRoot, resolver, expansionCtx,
 }
 /** Write the details section for a GO and its descendants */
 function writeDetails(node, lines, path, resolver, filterBoilerplate = true, refMap) {
-    // Use short path (just the GO name, unless we need disambiguation)
     const currentPath = path ? `${path}/${node.name}` : node.name;
-    const displayPath = node.name;
     // Write transform details (if non-default)
-    const transformSection = writeTransformSection(node.transform, displayPath);
+    const transformSection = writeTransformSection(node.transform, currentPath);
     if (transformSection) {
         lines.push('');
         lines.push(transformSection);
@@ -262,7 +260,7 @@ function writeDetails(node, lines, path, resolver, filterBoilerplate = true, ref
         if (propEntries.length === 0)
             continue;
         lines.push('');
-        lines.push(`[${displayPath}:${compName}]`);
+        lines.push(`[${currentPath}:${compName}]`);
         for (const [key, value] of propEntries) {
             writeProperty(key, value, lines, '', refMap);
         }
@@ -316,41 +314,43 @@ function buildInternalRefMap(file, resolver) {
     return map;
 }
 /** Collect fileIDs from hierarchy nodes into a map */
-function collectNodeFileIds(node, map, resolver) {
+function collectNodeFileIds(node, map, resolver, parentPath = '') {
     let name = node.name;
     if (name === 'NestedPrefab' && node.nestedPrefab) {
         name = resolveSourceName(node, resolver) || name;
     }
+    const currentPath = parentPath ? `${parentPath}/${name}` : name;
     if (node.fileId && node.fileId !== '0') {
-        map.set(node.fileId, name);
+        map.set(node.fileId, currentPath);
     }
     if (node.transform.fileId) {
         const ttype = node.transform.isRect ? 'RectTransform' : 'Transform';
-        map.set(node.transform.fileId, `${name}:${ttype}`);
+        map.set(node.transform.fileId, `${currentPath}:${ttype}`);
     }
     for (const comp of node.components) {
         const compName = resolveComponentName(comp, resolver);
-        map.set(comp.fileId, `${name}:${compName}`);
+        map.set(comp.fileId, `${currentPath}:${compName}`);
     }
     for (const child of node.children) {
-        collectNodeFileIds(child, map, resolver);
+        collectNodeFileIds(child, map, resolver, currentPath);
     }
 }
-/** Build PrefabInstance fileId → node name mapping from hierarchy */
+/** Build PrefabInstance fileId → node path mapping from hierarchy */
 function buildPINodeNames(node, resolver) {
     const map = new Map();
-    function collect(n) {
+    function collect(n, parentPath) {
+        let name = n.name;
+        if (name === 'NestedPrefab' && n.nestedPrefab) {
+            name = resolveSourceName(n, resolver) || name;
+        }
+        const currentPath = parentPath ? `${parentPath}/${name}` : name;
         if (n.nestedPrefab) {
-            let name = n.name;
-            if (name === 'NestedPrefab') {
-                name = resolveSourceName(n, resolver) || name;
-            }
-            map.set(n.nestedPrefab.instanceId, name);
+            map.set(n.nestedPrefab.instanceId, currentPath);
         }
         for (const child of n.children)
-            collect(child);
+            collect(child, currentPath);
     }
-    collect(node);
+    collect(node, '');
     return map;
 }
 /** Build a map from PI instanceId → stripped component refs (excluding Transform/RectTransform/CanvasRenderer/GO) */
@@ -420,10 +420,10 @@ function resolveStrippedScriptName(guid, resolver) {
 }
 /** Write the REFS section mapping paths to fileIDs */
 function writeRefsSection(node, lines, resolver, strippedMap) {
-    writeNodeRefs(node, lines, resolver, strippedMap);
+    writeNodeRefs(node, lines, resolver, strippedMap, '');
 }
 /** Write refs entries for a single node and its descendants */
-function writeNodeRefs(node, lines, resolver, strippedMap) {
+function writeNodeRefs(node, lines, resolver, strippedMap, parentPath = '') {
     let name = node.name;
     // Resolve 'NestedPrefab' default to source name
     if (name === 'NestedPrefab' && node.nestedPrefab) {
@@ -431,36 +431,37 @@ function writeNodeRefs(node, lines, resolver, strippedMap) {
         if (resolved)
             name = resolved;
     }
+    const currentPath = parentPath ? `${parentPath}/${name}` : name;
     // GO fileId
     if (node.fileId && node.fileId !== '0') {
-        lines.push(`${name} = ${node.fileId}`);
+        lines.push(`${currentPath} = ${node.fileId}`);
     }
     // Transform fileId
     if (node.transform.fileId) {
         const typeName = node.transform.isRect ? 'RectTransform' : 'Transform';
-        lines.push(`${name}:${typeName} = ${node.transform.fileId}`);
+        lines.push(`${currentPath}:${typeName} = ${node.transform.fileId}`);
     }
     // Component fileIds
     for (const comp of node.components) {
         if (types_1.OMIT_COMPONENTS.has(comp.typeName))
             continue;
         const compName = resolveComponentName(comp, resolver);
-        lines.push(`${name}:${compName} = ${comp.fileId}`);
+        lines.push(`${currentPath}:${compName} = ${comp.fileId}`);
     }
     // Stripped component refs from nested prefab (grouped with parent GO)
     if (node.nestedPrefab && strippedMap) {
         const strippedRefs = strippedMap.get(node.nestedPrefab.instanceId) || [];
         for (const ref of strippedRefs) {
-            lines.push(`${name}:${ref.typeName} = ${ref.fileId}`);
+            lines.push(`${currentPath}:${ref.typeName} = ${ref.fileId}`);
         }
     }
     // Nested prefab instance
     if (node.nestedPrefab) {
-        lines.push(`${name}:__instance = ${node.nestedPrefab.instanceId}`);
+        lines.push(`${currentPath}:__instance = ${node.nestedPrefab.instanceId}`);
     }
     // Recurse children
     for (const child of node.children) {
-        writeNodeRefs(child, lines, resolver, strippedMap);
+        writeNodeRefs(child, lines, resolver, strippedMap, currentPath);
     }
 }
 /** Write the transform section in compact form */

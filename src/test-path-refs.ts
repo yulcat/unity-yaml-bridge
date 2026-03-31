@@ -260,6 +260,83 @@ console.log('='.repeat(60));
 }
 
 // ============================================================
+// Test 7: Unresolved path reference throws an error
+// ============================================================
+
+console.log('\n' + '='.repeat(60));
+console.log('TEST: Unresolved path reference throws an error');
+console.log('='.repeat(60));
+
+{
+  const content = fs.readFileSync(path.join(SAMPLES_DIR, 'prefabs', 'Button.prefab'), 'utf-8');
+  const ast = parseUnityYaml(content);
+  const compactStr = writeCompact(ast, { guidResolver: resolver });
+  const compact = readCompact(compactStr);
+
+  // Inject a bogus -> reference into a property
+  for (const section of compact.sections) {
+    for (const prop of section.properties) {
+      if (prop.key === 'activateDisplayText') {
+        prop.value = '->NonExistent_GO:FakeComponent';
+      }
+    }
+  }
+
+  try {
+    mergeCompactChanges(ast, compact);
+    fail('Unresolved -> reference should throw', 'No error was thrown');
+  } catch (e: any) {
+    if (e.message.includes('Unresolved path reference: ->NonExistent_GO:FakeComponent')
+        && e.message.includes('Valid REFS keys:')) {
+      pass('Unresolved -> reference throws error with path and REFS keys');
+    } else {
+      fail('Error message format', `Got: ${e.message}`);
+    }
+  }
+
+  // Also test @ alias
+  for (const section of compact.sections) {
+    for (const prop of section.properties) {
+      if (prop.key === 'activateDisplayText') {
+        prop.value = '@NonExistent_GO:FakeComponent';
+      }
+    }
+  }
+
+  try {
+    mergeCompactChanges(ast, compact);
+    fail('Unresolved @ reference should throw', 'No error was thrown');
+  } catch (e: any) {
+    if (e.message.includes('Unresolved path reference: @NonExistent_GO:FakeComponent')
+        && e.message.includes('Valid REFS keys:')) {
+      pass('Unresolved @ reference throws error with path and REFS keys');
+    } else {
+      fail('Error message format', `Got: ${e.message}`);
+    }
+  }
+
+  // Test unresolved reference inside an array
+  for (const section of compact.sections) {
+    for (const prop of section.properties) {
+      if (prop.key === 'activateDisplayText') {
+        prop.value = '[->Valid_Ref:Might_Exist, ->Bogus_Array_Ref:Missing]';
+      }
+    }
+  }
+
+  try {
+    mergeCompactChanges(ast, compact);
+    fail('Unresolved array -> reference should throw', 'No error was thrown');
+  } catch (e: any) {
+    if (e.message.includes('Unresolved path reference:') && e.message.includes('Valid REFS keys:')) {
+      pass('Unresolved array -> reference throws error');
+    } else {
+      fail('Array error message format', `Got: ${e.message}`);
+    }
+  }
+}
+
+// ============================================================
 // Summary
 // ============================================================
 

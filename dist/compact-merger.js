@@ -379,7 +379,9 @@ function resolvePathReference(value, refs) {
         if (fileIds && fileIds.length > 0) {
             return (0, compact_reader_1.parseCompactValue)('{' + fileIds[0] + '}');
         }
-        return value; // Unresolved — keep as string
+        const sampleKeys = Array.from(refs.keys()).slice(0, 10).join(', ');
+        throw new Error(`Unresolved path reference: ${value}. Valid REFS keys: [${sampleKeys}]. ` +
+            `Make sure the reference exactly matches a key in the REFS section.`);
     }
     if (Array.isArray(value)) {
         return value.map(item => resolvePathReference(item, refs));

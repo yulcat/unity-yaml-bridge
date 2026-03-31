@@ -268,6 +268,80 @@ console.log('='.repeat(60));
     }
 }
 // ============================================================
+// Test 7: Unresolved path reference throws an error
+// ============================================================
+console.log('\n' + '='.repeat(60));
+console.log('TEST: Unresolved path reference throws an error');
+console.log('='.repeat(60));
+{
+    const content = fs.readFileSync(path.join(SAMPLES_DIR, 'prefabs', 'Button.prefab'), 'utf-8');
+    const ast = (0, unity_yaml_parser_1.parseUnityYaml)(content);
+    const compactStr = (0, compact_writer_1.writeCompact)(ast, { guidResolver: resolver });
+    const compact = (0, compact_reader_1.readCompact)(compactStr);
+    // Inject a bogus -> reference into a property
+    for (const section of compact.sections) {
+        for (const prop of section.properties) {
+            if (prop.key === 'activateDisplayText') {
+                prop.value = '->NonExistent_GO:FakeComponent';
+            }
+        }
+    }
+    try {
+        (0, compact_merger_1.mergeCompactChanges)(ast, compact);
+        fail('Unresolved -> reference should throw', 'No error was thrown');
+    }
+    catch (e) {
+        if (e.message.includes('Unresolved path reference: ->NonExistent_GO:FakeComponent')
+            && e.message.includes('Valid REFS keys:')) {
+            pass('Unresolved -> reference throws error with path and REFS keys');
+        }
+        else {
+            fail('Error message format', `Got: ${e.message}`);
+        }
+    }
+    // Also test @ alias
+    for (const section of compact.sections) {
+        for (const prop of section.properties) {
+            if (prop.key === 'activateDisplayText') {
+                prop.value = '@NonExistent_GO:FakeComponent';
+            }
+        }
+    }
+    try {
+        (0, compact_merger_1.mergeCompactChanges)(ast, compact);
+        fail('Unresolved @ reference should throw', 'No error was thrown');
+    }
+    catch (e) {
+        if (e.message.includes('Unresolved path reference: @NonExistent_GO:FakeComponent')
+            && e.message.includes('Valid REFS keys:')) {
+            pass('Unresolved @ reference throws error with path and REFS keys');
+        }
+        else {
+            fail('Error message format', `Got: ${e.message}`);
+        }
+    }
+    // Test unresolved reference inside an array
+    for (const section of compact.sections) {
+        for (const prop of section.properties) {
+            if (prop.key === 'activateDisplayText') {
+                prop.value = '[->Valid_Ref:Might_Exist, ->Bogus_Array_Ref:Missing]';
+            }
+        }
+    }
+    try {
+        (0, compact_merger_1.mergeCompactChanges)(ast, compact);
+        fail('Unresolved array -> reference should throw', 'No error was thrown');
+    }
+    catch (e) {
+        if (e.message.includes('Unresolved path reference:') && e.message.includes('Valid REFS keys:')) {
+            pass('Unresolved array -> reference throws error');
+        }
+        else {
+            fail('Array error message format', `Got: ${e.message}`);
+        }
+    }
+}
+// ============================================================
 // Summary
 // ============================================================
 console.log(`\n${'='.repeat(60)}`);

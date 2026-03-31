@@ -157,20 +157,25 @@ function parseDetailsSections(lines, sections) {
         // Section header: [GOPath:ComponentType] or [&fileID]
         const sectionMatch = trimmed.match(/^\[([^\]]+)\]$/);
         if (sectionMatch) {
-            const header = sectionMatch[1];
+            let header = sectionMatch[1];
+            let isAdded = false;
+            if (header.startsWith('+ ')) {
+                isAdded = true;
+                header = header.substring(2);
+            }
             if (header.startsWith('&')) {
                 // Variant section: [&fileID]
-                currentSection = { goPath: header, componentType: '', properties: [] };
+                currentSection = { goPath: header, componentType: '', properties: [], isAdded };
             }
             else {
                 const colonIdx = header.indexOf(':');
                 if (colonIdx >= 0) {
                     const goPath = header.substring(0, colonIdx);
                     const componentType = header.substring(colonIdx + 1);
-                    currentSection = { goPath, componentType, properties: [] };
+                    currentSection = { goPath, componentType, properties: [], isAdded };
                 }
                 else {
-                    currentSection = { goPath: header, componentType: '', properties: [] };
+                    currentSection = { goPath: header, componentType: '', properties: [], isAdded };
                 }
             }
             sections.push(currentSection);

@@ -28,6 +28,8 @@ export interface CompactSection {
     componentType: string;
     /** Parsed properties */
     properties: CompactProperty[];
+    /** Whether this section is for a newly added component (+ prefix in DETAILS header) */
+    isAdded?: boolean;
 }
 export interface CompactProperty {
     key: string;

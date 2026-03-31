@@ -121,6 +121,18 @@ function mergePrefabSections(file, sections, refs) {
     flattenHierarchy(file.hierarchy, goMap);
     // Track which REFS fileIDs have been used (for duplicate key handling)
     const usedRefs = new Set();
+    // Collect added paths (sections with + prefix) so -> references to new objects
+    // can auto-generate fileIDs instead of throwing errors
+    const addedPaths = new Set();
+    for (const section of sections) {
+        if (section.isAdded) {
+            const key = section.componentType
+                ? `${section.goPath}:${section.componentType}`
+                : section.goPath;
+            addedPaths.add(key);
+            addedPaths.add(section.goPath); // Also add the bare GO path
+        }
+    }
     for (const section of sections) {
         const goPath = section.goPath;
         const compType = section.componentType;
@@ -139,7 +151,7 @@ function mergePrefabSections(file, sections, refs) {
                         applyTransformProperties(section.properties, doc, compType === 'RectTransform');
                     }
                     else {
-                        applyComponentProperties(section.properties, doc, refs);
+                        applyComponentProperties(section.properties, doc, refs, addedPaths);
                     }
                     continue;
                 }
@@ -170,7 +182,7 @@ function mergePrefabSections(file, sections, refs) {
             if (comp) {
                 const compDoc = docMap.get(comp.fileId);
                 if (compDoc) {
-                    applyComponentProperties(section.properties, compDoc, refs);
+                    applyComponentProperties(section.properties, compDoc, refs, addedPaths);
                 }
             }
         }
@@ -317,11 +329,11 @@ function applyTransformProperties(properties, doc, isRect) {
     }
 }
 /** Apply component properties to a component document */
-function applyComponentProperties(properties, doc, refs) {
-    applyPropertiesToTarget(properties, doc.properties, refs);
+function applyComponentProperties(properties, doc, refs, addedPaths) {
+    applyPropertiesToTarget(properties, doc.properties, refs, addedPaths);
 }
 /** Apply a list of CompactProperty entries into a target object, preserving nesting */
-function applyPropertiesToTarget(properties, target, refs) {
+function applyPropertiesToTarget(properties, target, refs, addedPaths) {
     for (const prop of properties) {
         if (Array.isArray(prop.value)) {
             // Nested block — check if the target already has this key as an object
@@ -332,13 +344,13 @@ function applyPropertiesToTarget(properties, target, refs) {
             }
             else {
                 // Reconstruct as new object or array, passing original for key remapping
-                target[prop.key] = reconstructNestedValue(prop.value, existing, refs);
+                target[prop.key] = reconstructNestedValue(prop.value, existing, refs, addedPaths);
             }
         }
         else {
             let parsed = (0, compact_reader_1.parseCompactValue)(prop.value);
             // Resolve path references (->GOPath:Component or @GOPath:Component)
-            parsed = resolvePathReference(parsed, refs);
+            parsed = resolvePathReference(parsed, refs, addedPaths);
             const original = target[prop.key];
             // Preserve null references: compact writes {fileID:0} as "null",
             // but we need to keep the original {fileID: 0} object for YAML round-trip
@@ -363,7 +375,7 @@ function applyPropertiesToTarget(properties, target, refs) {
  * Resolve ->GOPath:Component or @GOPath:Component path references to {fileID: X} objects.
  * Recursively handles arrays. Returns the original value unchanged if not a path reference.
  */
-function resolvePathReference(value, refs) {
+function resolvePathReference(value, refs, addedPaths) {
     if (!refs)
         return value;
     if (typeof value === 'string') {
@@ -380,12 +392,29 @@ function resolvePathReference(value, refs) {
         if (fileIds && fileIds.length > 0) {
             return (0, compact_reader_1.parseCompactValue)('{' + fileIds[0] + '}');
         }
+        // Not found in REFS — check if this references a newly added section (+ prefix).
+        // If so, auto-generate a fileID and register it in REFS for later use.
+        if (addedPaths && addedPaths.has(pathRef)) {
+            const newFileId = generateFileId();
+            refs.set(pathRef, [newFileId]);
+            return (0, compact_reader_1.parseCompactValue)('{' + newFileId + '}');
+        }
+        // Also check if just the GO part matches an added path (reference to GO's Transform)
+        if (addedPaths) {
+            const colonIdx = pathRef.indexOf(':');
+            const goPath = colonIdx >= 0 ? pathRef.substring(0, colonIdx) : pathRef;
+            if (addedPaths.has(goPath)) {
+                const newFileId = generateFileId();
+                refs.set(pathRef, [newFileId]);
+                return (0, compact_reader_1.parseCompactValue)('{' + newFileId + '}');
+            }
+        }
         const sampleKeys = Array.from(refs.keys()).slice(0, 10).join(', ');
         throw new Error(`Unresolved path reference: ${value}. Valid REFS keys: [${sampleKeys}]. ` +
             `Make sure the reference exactly matches a key in the REFS section.`);
     }
     if (Array.isArray(value)) {
-        return value.map(item => resolvePathReference(item, refs));
+        return value.map(item => resolvePathReference(item, refs, addedPaths));
     }
     return value;
 }
@@ -430,7 +459,7 @@ function remapVectorKeys(parsed, original) {
     return remapped;
 }
 /** Reconstruct a nested value from CompactProperty children, using original for key remapping */
-function reconstructNestedValue(children, original, refs) {
+function reconstructNestedValue(children, original, refs, addedPaths) {
     // Check if this is an array (items have __item__ key) or an object
     const isArray = children.some(c => c.key === '__item__');
     if (isArray) {
@@ -439,10 +468,10 @@ function reconstructNestedValue(children, original, refs) {
             const origItem = origArray?.[idx];
             if (typeof c.value === 'string') {
                 let parsed = (0, compact_reader_1.parseCompactValue)(c.value);
-                parsed = resolvePathReference(parsed, refs);
+                parsed = resolvePathReference(parsed, refs, addedPaths);
                 return remapWithOriginal(parsed, origItem);
             }
-            return reconstructNestedValue(c.value, origItem, refs);
+            return reconstructNestedValue(c.value, origItem, refs, addedPaths);
         });
     }
     // Object
@@ -451,11 +480,11 @@ function reconstructNestedValue(children, original, refs) {
     for (const child of children) {
         const origVal = origObj?.[child.key];
         if (Array.isArray(child.value)) {
-            result[child.key] = reconstructNestedValue(child.value, origVal, refs);
+            result[child.key] = reconstructNestedValue(child.value, origVal, refs, addedPaths);
         }
         else {
             let parsed = (0, compact_reader_1.parseCompactValue)(child.value);
-            parsed = resolvePathReference(parsed, refs);
+            parsed = resolvePathReference(parsed, refs, addedPaths);
             result[child.key] = remapWithOriginal(parsed, origVal);
         }
     }

@@ -25,6 +25,8 @@ export declare class GuidResolver {
     resolveFilePath(guid: string): string | undefined;
     /** Add a manual mapping */
     add(guid: string, name: string): void;
+    /** Add a manual asset mapping */
+    addAsset(guid: string, assetPath: string, name?: string): void;
     /** Get the number of mappings */
     get size(): number;
 }

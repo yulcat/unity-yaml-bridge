@@ -1,38 +1,26 @@
 # ubridge v1 | prefab
 --- STRUCTURE
-_Card_Template [CameraFacingBillboard, CardBehaviour]
+_Card_Template [9d7c3f249fc4309468af0da8b9aadc60, 9208535555d3a8240ace8b8bd8270dfb]
 ├─ Frame [Image]
-├─ _Header_Text {_Header_Text}
-│  └─ Text [TextMeshProUGUI*]
-├─ Paragraph_Text {Paragraph_Text}
-│  └─ Text [TextMeshProUGUI*]
-└─ small circle {Medal_Template} [MedalDisplayUI*, Animator]
-   ├─ Circle_Image [Image*]
-   ├─ Small_Circle_Image [Image*]
-   ├─ ActivationParticles_Template {ActivationParticles_Template}
-   │  ├─ ParticleReferences
-   │  │  ├─ Burst_ParticleSystem [ParticleSystem*, ParticleSystemRenderer*]
-   │  │  └─ Activated_ParticleSystem [ParticleSystem*, ParticleSystemRenderer*]
-   │  ├─ Activated_UIParticles [UIParticles*]
-   │  └─ Burst_UIParticles [UIParticles*]
-   └─ ProfileIcon_Image {ProfileIcon_Image}
-      └─ Image [Image*]
+├─ NestedPrefab {4363f8259f7f14e418706d51b057d9f3}
+├─ NestedPrefab {de624dab09f28584fa6f3e2ddc3d0d3b}
+└─ small circle {d06aea9cb778d4741bb5f11c640fdb9e}
 --- DETAILS
 
 [_Card_Template:RectTransform]
 pos = (0.0049973, -0.011566)
 size = (529, 626)
 
-[_Card_Template:CameraFacingBillboard]
+[_Card_Template:9d7c3f249fc4309468af0da8b9aadc60]
 m_Camera = {0}
 
-[_Card_Template:CardBehaviour]
+[_Card_Template:9208535555d3a8240ace8b8bd8270dfb]
 cardData = {0}
 cardDisplaysToHideAndShow:
   - ->_Card_Template/Frame
-  - ->_Card_Template/_Header_Text
-  - ->_Card_Template/Paragraph_Text
-medalDisplayUI = ->_Card_Template/small circle:MedalDisplayUI
+  - ->_Card_Template/4363f8259f7f14e418706d51b057d9f3
+  - ->_Card_Template/de624dab09f28584fa6f3e2ddc3d0d3b
+medalDisplayUI = ->_Card_Template/small circle:MonoBehaviour_d24ab75c
 
 [_Card_Template/Frame:RectTransform]
 anchor = (0, 0)-(1, 1)
@@ -45,18 +33,18 @@ m_FillCenter = 0
 --- REFS
 _Card_Template = 3640861149533394057
 _Card_Template:RectTransform = 8368714169436892108
-_Card_Template:CameraFacingBillboard = 182953068969363021
-_Card_Template:CardBehaviour = 3617094297190067200
+_Card_Template:9d7c3f249fc4309468af0da8b9aadc60 = 182953068969363021
+_Card_Template:9208535555d3a8240ace8b8bd8270dfb = 3617094297190067200
 _Card_Template/Frame = 2100659746680659327
 _Card_Template/Frame:RectTransform = 233227047284964750
 _Card_Template/Frame:Image = 5598127903791586326
-_Card_Template/_Header_Text = 2276444076082895750
-_Card_Template/_Header_Text:RectTransform = 4967643782733132011
-_Card_Template/_Header_Text:__instance = 435768937130368832
-_Card_Template/Paragraph_Text = 815790438873356520
-_Card_Template/Paragraph_Text:RectTransform = 7279466503550670669
-_Card_Template/Paragraph_Text:__instance = 1520847364777890966
+_Card_Template/4363f8259f7f14e418706d51b057d9f3 = 2276444076082895750
+_Card_Template/4363f8259f7f14e418706d51b057d9f3:RectTransform = 4967643782733132011
+_Card_Template/4363f8259f7f14e418706d51b057d9f3:__instance = 435768937130368832
+_Card_Template/de624dab09f28584fa6f3e2ddc3d0d3b = 815790438873356520
+_Card_Template/de624dab09f28584fa6f3e2ddc3d0d3b:RectTransform = 7279466503550670669
+_Card_Template/de624dab09f28584fa6f3e2ddc3d0d3b:__instance = 1520847364777890966
 _Card_Template/small circle:RectTransform = 7871776933903133687
 _Card_Template/small circle:ParticleSystem = 4413684578389200477
-_Card_Template/small circle:MedalDisplayUI = 6431933051627347590
+_Card_Template/small circle:MonoBehaviour_d24ab75c = 6431933051627347590
 _Card_Template/small circle:__instance = 6409668946328506549

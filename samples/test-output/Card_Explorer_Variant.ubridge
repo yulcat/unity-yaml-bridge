@@ -1,54 +1,38 @@
 # ubridge v1 | variant | base-guid:2982fa53447c5c643865bbd0d194eab1
 --- STRUCTURE
-_Card_Template [CameraFacingBillboard, CardBehaviour*]
-├─ Frame [Image]
-├─ _Header_Text {_Header_Text}
-│  └─ Text [TextMeshProUGUI*]
-├─ Paragraph_Text {Paragraph_Text}
-│  └─ Text [TextMeshProUGUI*]
-└─ small circle {Medal_Template} [MedalDisplayUI*, Animator]
-   ├─ Circle_Image [Image*]
-   ├─ Small_Circle_Image [Image*]
-   ├─ ActivationParticles_Template {ActivationParticles_Template}
-   │  ├─ ParticleReferences
-   │  │  ├─ Burst_ParticleSystem [ParticleSystem*, ParticleSystemRenderer*]
-   │  │  └─ Activated_ParticleSystem [ParticleSystem*, ParticleSystemRenderer*]
-   │  ├─ Activated_UIParticles [UIParticles*]
-   │  └─ Burst_UIParticles [UIParticles*]
-   └─ ProfileIcon_Image {ProfileIcon_Image}
-      └─ Image [Image*]
+(variant of 2982fa53447c5c643865bbd0d194eab1)
 --- DETAILS
 
-[_Card_Template]
+[Card_Explorer_Variant]
 m_Name = Card_Explorer_Variant
 
-[_Header_Text:TextMeshProUGUI]
+[&7213628277689136018:TextMeshProUGUI]
 m_text = Explorer
 
-[Paragraph_Text:TextMeshProUGUI]
+[&4010685728728214465:TextMeshProUGUI]
 m_text = Agility and speed. A fast mode for exploring and reaching new heights.
 
-[small circle/Circle_Image:Image]
+[&6683245448512787790:Image]
 m_Sprite = {21300000, 42d984ce295234641b1cb18df0854078}
 m_Color.a = -0.044181824
 
-[small circle/ProfileIcon_Image:Image]
+[&2153683003282787722:Image]
 m_Sprite = {21300000, 54141271f16af47a1be81e646cda9698}
 m_Color.a = -0.044181824
 
-[_Card_Template:CardBehaviour]
+[&3617094297190067200]
 cardData = {11400000, 1fe163de0e6ff604d9ba3bd3b6228a5b, 2}
 
-[small circle:MedalDisplayUI]
+[&6431933051627347590:CanvasGroup]
 enableAlphaFading = 1
 
-[small circle:ParticleSystemRenderer]
+[&4413684577511426319:ParticleSystemRenderer]
 texture = {2800000, c04192e13c1d84382bad41a4b1981ad7}
 
-[small circle/Small_Circle_Image:Image]
+[&8050208937853474224:Image]
 m_Color.a = -0.044181824
 
-[small circle/ActivationParticles_Template/Activated_ParticleSystem:ParticleSystem]
+[&4413684578761676915:ParticleSystem]
 EmissionModule.m_Bursts.Array.size = 0
 EmissionModule.m_Bursts.Array.data[0].countCurve.maxCurve.m_Curve.Array.size = 2
 EmissionModule.m_Bursts.Array.data[0].countCurve.minCurve.m_Curve.Array.size = 2
@@ -76,14 +60,14 @@ EmissionModule.m_Bursts.Array.data[0].countCurve.minScalar = 30.0000
 ColorModule.gradient.maxGradient.key1.a = 0.7411765
 --- REFS
 __instance = 4987371547573211178
-_Card_Template:RectTransform = 8368714169436892108
-_Card_Template = 3640861149533394057
-_Header_Text:TextMeshProUGUI = 7213628277689136018
-Paragraph_Text:TextMeshProUGUI = 4010685728728214465
-small circle/Circle_Image:Image = 6683245448512787790
-small circle/ProfileIcon_Image:Image = 2153683003282787722
-_Card_Template:CardBehaviour = 3617094297190067200
-small circle:MedalDisplayUI = 6431933051627347590
-small circle:ParticleSystemRenderer = 4413684577511426319
-small circle/Small_Circle_Image:Image = 8050208937853474224
-small circle/ActivationParticles_Template/Activated_ParticleSystem:ParticleSystem = 4413684578761676915
+&8368714169436892108 = 8368714169436892108
+Card_Explorer_Variant = 3640861149533394057
+&7213628277689136018:TextMeshProUGUI = 7213628277689136018
+&4010685728728214465:TextMeshProUGUI = 4010685728728214465
+&6683245448512787790:Image = 6683245448512787790
+&2153683003282787722:Image = 2153683003282787722
+&3617094297190067200 = 3617094297190067200
+&6431933051627347590:CanvasGroup = 6431933051627347590
+&4413684577511426319:ParticleSystemRenderer = 4413684577511426319
+&8050208937853474224:Image = 8050208937853474224
+&4413684578761676915:ParticleSystem = 4413684578761676915

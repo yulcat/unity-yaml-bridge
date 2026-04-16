@@ -24,6 +24,73 @@ m_SortingLayer = 0
 [&8395409843983819010]
 m_SortingLayer = 0
 
+[&5672143376387600595]
+m_EffectFactor = 0.3445017
+
+[Close]
+m_Name = Close
+m_IsActive = 0
+
+[&223648653984115152]
+m_Enabled = 1
+
+[&965803255182604083]
+StateDefs.Array.data[0].Color.b = 0
+StateDefs.Array.data[0].Color.g = 0.58431375
+StateDefs.Array.data[0].Color.r = 0.9921569
+StateDefs.Array.data[0].ColorId = 17
+StateDefs.Array.data[1].Color.b = 0
+StateDefs.Array.data[1].Color.g = 0.58431375
+StateDefs.Array.data[1].Color.r = 0.9921569
+StateDefs.Array.data[1].ColorId = 17
+
+[&1812356894474226468]
+m_OnClick.m_PersistentCalls.m_Calls.Array.size = 1
+m_OnClick.m_PersistentCalls.m_Calls.Array.data[0].m_Mode = 1
+m_OnClick.m_PersistentCalls.m_Calls.Array.data[0].m_Target = {519529413612329612}
+m_OnClick.m_PersistentCalls.m_Calls.Array.data[0].m_CallState = 2
+m_OnClick.m_PersistentCalls.m_Calls.Array.data[0].m_MethodName = HandleOnStartBattleButtonClick
+m_OnClick.m_PersistentCalls.m_Calls.Array.data[0].m_TargetAssemblyTypeName = Crumble.DailyDungeonResultView, Crumble.Feature
+m_OnClick.m_PersistentCalls.m_Calls.Array.data[0].m_Arguments.m_ObjectArgumentAssemblyTypeName = UnityEngine.Object, UnityEngine
+
+[&1934706425549889224]
+m_Enabled = 1
+m_EffectFactor = 0
+
+[&2191148651219070960:Image]
+m_Color.b = 0
+m_Color.g = 0.58431375
+m_Color.r = 0.9921569
+
+[&2565549063110772291]
+_currentState = 0
+
+[&3162660291261548559]
+m_Text = "\uB2E4\uC74C \uB2E8\uACC4 \uB3C4\uC804"
+
+[BTN_130_Price]
+m_Name = BTN_130_Price
+m_IsActive = 1
+
+[&4416312238337949458:GameObject]
+m_IsActive = 1
+
+[&4619153748631767312]
+m_Text = 2/3
+
+[&6509862648532230589]
+_currentState = 0
+
+[&286857189575887468]
+m_Enabled = 0
+
+[&5013819943648304594]
+m_Text = "<color=#FEF41F>5\uCD08 </color>\uD6C4 \uB2E4\uC74C \uB2E8\uACC4\uC5D0
+        \uB3C4\uC804\uD569\uB2C8\uB2E4."
+
+[CloseCount]
+m_Name = CloseCount
+
 [Btns:RectTransform]
 anchor = (0, 0)-(1, 0)
 size = (0, 628)
@@ -247,6 +314,26 @@ DungeonClearReward = 5877011176819543437
 &7637042464082841937 = 7637042464082841937
 &8395409843983819010 = 8395409843983819010
 &8738062381939999074 = 8738062381939999074
+&3616926562377977104 = 3616926562377977104
+&5672143376387600595 = 5672143376387600595
+Close = 7210969423359924726
+&223648653984115152 = 223648653984115152
+&965803255182604083 = 965803255182604083
+&1471358605887141553 = 1471358605887141553
+&1812356894474226468 = 1812356894474226468
+&1934706425549889224 = 1934706425549889224
+&2191148651219070960:Image = 2191148651219070960
+&2565549063110772291 = 2565549063110772291
+&3162660291261548559 = 3162660291261548559
+BTN_130_Price = 4352296941819452033
+&4416312238337949458:GameObject = 4416312238337949458
+&4619153748631767312 = 4619153748631767312
+&6108363052959557579 = 6108363052959557579
+&6509862648532230589 = 6509862648532230589
+&286857189575887468 = 286857189575887468
+&5013819943648304594 = 5013819943648304594
+CloseCount = 5426011153846427230
+&7632638928775293530 = 7632638928775293530
 Btns = 2215002142782984192
 Btns:RectTransform = 7962103618101709719
 Btns:CanvasGroup = 5305909328648906312

@@ -815,13 +815,15 @@ function buildHierarchy(docs, options) {
     // Find root GameObjects
     const roots = [];
     if (options?.findStrippedRoots) {
-        // Variant added objects: roots are GOs whose transform m_Father points to a stripped transform
+        // Variant added objects: roots are GOs whose transform m_Father points to a
+        // stripped transform, or root-level additions whose father is 0.
         const strippedTransformIds = new Set(docs.filter(d => d.stripped && (d.typeId === 4 || d.typeId === 224)).map(d => d.fileId));
         for (const go of gameObjects) {
             const transformDoc = goToTransform.get(go.fileId);
             if (transformDoc) {
                 const father = transformDoc.properties.m_Father;
-                if (father && strippedTransformIds.has(String(father.fileID))) {
+                const fatherId = father ? String(father.fileID) : '0';
+                if (fatherId === '0' || strippedTransformIds.has(fatherId)) {
                     roots.push(buildNode(go));
                 }
             }

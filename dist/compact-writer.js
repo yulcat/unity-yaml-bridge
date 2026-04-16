@@ -789,6 +789,23 @@ function collectNestedNodeNames(node, map, resolver) {
         collectNestedNodeNames(child, map, resolver);
     }
 }
+/** Collect source-local GO paths keyed by GO fileID. */
+function collectGoPaths(node, parentPath, map) {
+    const currentPath = parentPath ? `${parentPath}/${node.name}` : node.name;
+    map.set(node.fileId, currentPath);
+    for (const child of node.children) {
+        collectGoPaths(child, currentPath, map);
+    }
+}
+/** Join compact paths while avoiding duplicate source root names. */
+function joinCompactPath(parentPath, childPath) {
+    if (!parentPath)
+        return childPath;
+    const slashIdx = childPath.indexOf('/');
+    if (slashIdx < 0)
+        return parentPath;
+    return `${parentPath}/${childPath.slice(slashIdx + 1)}`;
+}
 /** Property path patterns → component type inference (order matters: first match wins) */
 const PROPERTY_COMPONENT_RULES = [
     // TextMeshPro
@@ -925,6 +942,10 @@ function collectSourceEntries(parentPath, sourceGuid, piMods, resolver, result, 
                 goNames.set(doc.fileId, doc.properties.m_Name || 'Unnamed');
             }
         }
+        const goPaths = new Map();
+        if (sourceFile.hierarchy) {
+            collectGoPaths(sourceFile.hierarchy, '', goPaths);
+        }
         // Build source doc info: sourceFileId → { goName, componentType }
         const sourceDocInfo = new Map();
         for (const doc of sourceFile.documents) {
@@ -932,11 +953,12 @@ function collectSourceEntries(parentPath, sourceGuid, piMods, resolver, result, 
                 continue;
             const goRef = doc.properties.m_GameObject ? String(doc.properties.m_GameObject.fileID) : '';
             const goName = goNames.get(goRef) || goNames.get(doc.fileId) || '';
+            const goPath = goPaths.get(goRef || doc.fileId) || goName;
             let typeName = doc.typeName;
             if (doc.typeId === 114 && doc.properties.m_Script?.guid) {
                 typeName = resolver.resolve(doc.properties.m_Script.guid) || typeName;
             }
-            sourceDocInfo.set(doc.fileId, { goName, componentType: typeName });
+            sourceDocInfo.set(doc.fileId, { goName, goPath, componentType: typeName });
         }
         // Count how many times each component type appears (for disambiguation)
         const typeCount = new Map();
@@ -977,7 +999,7 @@ function collectSourceEntries(parentPath, sourceGuid, piMods, resolver, result, 
             if (docInfo) {
                 // Direct source doc — use GO name if disambiguation needed
                 const needsDisambig = (typeCount.get(docInfo.componentType) || 0) > 1;
-                const path = needsDisambig ? `${parentPath}/${docInfo.goName}` : parentPath;
+                const path = needsDisambig ? joinCompactPath(parentPath, docInfo.goPath) : parentPath;
                 result.push({ path, componentType: docInfo.componentType, baseModPropPaths: propPaths });
             }
             else {
@@ -1001,6 +1023,17 @@ function collectSourceEntries(parentPath, sourceGuid, piMods, resolver, result, 
                     }
                 }
             }
+        }
+        for (const [sourceId, docInfo] of sourceDocInfo) {
+            if (modsByTarget.has(sourceId))
+                continue;
+            if (skipTypes.has(docInfo.componentType))
+                continue;
+            result.push({
+                path: joinCompactPath(parentPath, docInfo.goPath),
+                componentType: docInfo.componentType,
+                baseModPropPaths: new Set(),
+            });
         }
         // Process sub-PIs that weren't reached via stripped doc resolution
         for (const subPi of sourceFile.prefabInstances) {
@@ -1136,9 +1169,15 @@ function writeVariantCompact(file, lines, resolver) {
                 continue;
             const fatherId = String(transformDoc.properties.m_Father?.fileID);
             const strippedParent = docById.get(fatherId);
-            if (!strippedParent || !strippedParent.stripped)
+            let baseTransformId = '';
+            if (fatherId === '0') {
+                baseTransformId = baseHierarchy?.transform.fileId || '';
+            }
+            else if (strippedParent?.stripped) {
+                baseTransformId = String(strippedParent.properties.m_CorrespondingSourceObject?.fileID);
+            }
+            if (!baseTransformId)
                 continue;
-            const baseTransformId = String(strippedParent.properties.m_CorrespondingSourceObject?.fileID);
             if (!addedObjectsMap.has(baseTransformId)) {
                 addedObjectsMap.set(baseTransformId, []);
             }
@@ -1164,6 +1203,7 @@ function writeVariantCompact(file, lines, resolver) {
     // Details section — group modifications by resolved path
     lines.push('--- DETAILS');
     writeVariantDetails(mainInstance, lines, baseMap, resolver, nestedResolved);
+    writeNestedPrefabInstanceDetails(file.prefabInstances, mainInstance, lines, resolver);
     // Write details for added objects
     if (file.hierarchy) {
         const addedRoots = file.hierarchy.name === '__added_root__'
@@ -1178,6 +1218,7 @@ function writeVariantCompact(file, lines, resolver) {
     lines.push('--- REFS');
     lines.push(`__instance = ${mainInstance.fileId}`);
     writeVariantRefs(mainInstance, lines, baseMap, nestedResolved);
+    writeNestedPrefabInstanceRefs(file.prefabInstances, mainInstance, lines, resolver);
     // Write refs for added objects
     if (file.hierarchy) {
         const addedRoots = file.hierarchy.name === '__added_root__'
@@ -1188,6 +1229,44 @@ function writeVariantCompact(file, lines, resolver) {
         }
     }
     return lines.join('\n') + '\n';
+}
+/** Load the source prefab map used to label a nested PrefabInstance's own modifications. */
+function buildSourcePrefabMap(instance, resolver) {
+    const sourceGuid = instance.sourcePrefab.guid;
+    if (!resolver || !sourceGuid)
+        return null;
+    const sourcePath = resolver.resolveFilePath(sourceGuid);
+    if (!sourcePath || !fs.existsSync(sourcePath))
+        return null;
+    try {
+        const sourceFile = (0, unity_yaml_parser_1.parseUnityYaml)(fs.readFileSync(sourcePath, 'utf-8'));
+        return buildBaseDocMap(sourceFile.documents, resolver, sourceFile.hierarchy);
+    }
+    catch {
+        return null;
+    }
+}
+/** Write DETAILS blocks for non-root PrefabInstance documents stored in a variant file. */
+function writeNestedPrefabInstanceDetails(instances, mainInstance, lines, resolver) {
+    for (const instance of instances) {
+        if (instance.fileId === mainInstance.fileId)
+            continue;
+        if (instance.modifications.length === 0)
+            continue;
+        const sourceMap = buildSourcePrefabMap(instance, resolver);
+        writeVariantDetails(instance, lines, sourceMap, resolver, null, true);
+    }
+}
+/** Write REFS entries for non-root PrefabInstance modification targets in a variant file. */
+function writeNestedPrefabInstanceRefs(instances, mainInstance, lines, resolver) {
+    for (const instance of instances) {
+        if (instance.fileId === mainInstance.fileId)
+            continue;
+        if (instance.modifications.length === 0)
+            continue;
+        const sourceMap = buildSourcePrefabMap(instance, resolver);
+        writeVariantRefs(instance, lines, sourceMap, null, true);
+    }
 }
 /** Write the variant structure tree from the base prefab hierarchy with modification markers */
 function writeVariantStructureTree(node, lines, prefix, isRoot, modifiedTargets, baseMap, resolver, expansionCtx, addedObjectsMap) {
@@ -1302,7 +1381,7 @@ function writeAddedObjectsTree(node, lines, prefix, resolver) {
     }
 }
 /** Write variant details grouped by resolved GO path */
-function writeVariantDetails(instance, lines, baseMap, resolver, nestedResolved) {
+function writeVariantDetails(instance, lines, baseMap, resolver, nestedResolved, preferNameOverrideHeader = false) {
     // Group modifications by target fileID
     const modsByTarget = new Map();
     for (const mod of instance.modifications) {
@@ -1314,7 +1393,7 @@ function writeVariantDetails(instance, lines, baseMap, resolver, nestedResolved)
     }
     for (const [targetId, mods] of modsByTarget) {
         // Resolve section header
-        const header = resolveVariantHeader(targetId, mods, baseMap, nestedResolved);
+        const header = resolveVariantHeader(targetId, mods, baseMap, nestedResolved, preferNameOverrideHeader);
         // Filter boilerplate modifications
         const filteredMods = mods.filter(m => !VARIANT_OMIT_PATHS.has(m.propertyPath));
         if (filteredMods.length === 0)
@@ -1333,7 +1412,10 @@ function writeVariantDetails(instance, lines, baseMap, resolver, nestedResolved)
  * Resolve a variant target to a human-readable header.
  * Uses baseMap first, then nestedResolved, then inference.
  */
-function resolveVariantHeader(targetId, mods, baseMap, nestedResolved) {
+function resolveVariantHeader(targetId, mods, baseMap, nestedResolved, preferNameOverrideHeader = false) {
+    const nameMod = mods.find(m => m.propertyPath === 'm_Name');
+    if (preferNameOverrideHeader && nameMod)
+        return nameMod.value;
     // 1. Try baseMap (direct and stripped docs)
     if (baseMap) {
         const resolved = resolveTargetKey(targetId, baseMap);
@@ -1347,7 +1429,6 @@ function resolveVariantHeader(targetId, mods, baseMap, nestedResolved) {
             return resolved;
     }
     // 3. Fallback: infer from m_Name or property paths
-    const nameMod = mods.find(m => m.propertyPath === 'm_Name');
     if (nameMod)
         return nameMod.value;
     const componentType = inferComponentType(mods.map(m => m.propertyPath));
@@ -1356,7 +1437,7 @@ function resolveVariantHeader(targetId, mods, baseMap, nestedResolved) {
     return `&${targetId}`;
 }
 /** Write variant REFS section */
-function writeVariantRefs(instance, lines, baseMap, nestedResolved) {
+function writeVariantRefs(instance, lines, baseMap, nestedResolved, preferNameOverrideHeader = false) {
     // Group modifications by target fileID (need all mods for inference)
     const modsByTarget = new Map();
     for (const mod of instance.modifications) {
@@ -1367,7 +1448,7 @@ function writeVariantRefs(instance, lines, baseMap, nestedResolved) {
         modsByTarget.get(targetId).push(mod);
     }
     for (const [targetId, mods] of modsByTarget) {
-        const key = resolveVariantHeader(targetId, mods, baseMap, nestedResolved);
+        const key = resolveVariantHeader(targetId, mods, baseMap, nestedResolved, preferNameOverrideHeader);
         lines.push(`${key} = ${targetId}`);
     }
 }

@@ -1,8 +1,8 @@
 # ubridge v1 | prefab
 --- STRUCTURE
-Button [ActivatePanelUI]
+Button [972d2ab202f4c7742aa210c364a56a05]
 ├─ Background9Slice_Image [Image]
-└─ Button_Text {Button_Text} [TextMeshProUGUI*]
+└─ Button_Text {f13efa6be16094e51aed2430e903eefc}
 --- DETAILS
 
 [Button:RectTransform]
@@ -10,7 +10,7 @@ pos = (-694, 416)
 scale = (1.0000385, 1.0000385, 1.0000385)
 size = (187.87, 51.63)
 
-[Button:ActivatePanelUI]
+[Button:972d2ab202f4c7742aa210c364a56a05]
 activatedText = Activated
 activateText = Activate
 disabledText = Disabled
@@ -27,7 +27,7 @@ m_FillCenter = 1
 --- REFS
 Button = 8027481463175804169
 Button:RectTransform = 8027481463175804168
-Button:ActivatePanelUI = 8027481463175804175
+Button:972d2ab202f4c7742aa210c364a56a05 = 8027481463175804175
 Button/Background9Slice_Image = 8027481461304769077
 Button/Background9Slice_Image:RectTransform = 8027481461304769076
 Button/Background9Slice_Image:Image = 8027481461304769067

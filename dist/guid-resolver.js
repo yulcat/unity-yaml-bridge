@@ -173,6 +173,13 @@ class GuidResolver {
     add(guid, name) {
         this.map.set(guid, name);
     }
+    /** Add a manual asset mapping */
+    addAsset(guid, assetPath, name) {
+        this.assetPaths.set(guid, assetPath);
+        if (name && !this.map.has(guid)) {
+            this.map.set(guid, name);
+        }
+    }
     /** Get the number of mappings */
     get size() {
         return this.map.size;

@@ -26,6 +26,33 @@ const projectPath = path.join(SAMPLES_DIR, 'unity-projects', 'PrefabWorkflows_UI
 if (fs.existsSync(projectPath)) {
   resolver.scanProject(projectPath);
   console.log(`GUID resolver: ${resolver.size} mappings loaded`);
+} else {
+  const fixtureDir = path.join(SAMPLES_DIR, 'fixtures', 'PrefabWorkflows_UIDemo');
+  resolver.add('9d7c3f249fc4309468af0da8b9aadc60', 'CameraFacingBillboard');
+  resolver.add('9208535555d3a8240ace8b8bd8270dfb', 'CardBehaviour');
+  resolver.add('d24ab75cc4c08e34caf2dc26b116aff2', 'MedalDisplayUI');
+  resolver.add('0cdb5f8b1f6f4f34f9ce7f9f5f7b67f0', 'UIParticles');
+  resolver.addAsset(
+    '2982fa53447c5c643865bbd0d194eab1',
+    path.join(SAMPLES_DIR, 'prefabs', '_Card_Template.prefab'),
+    '_Card_Template'
+  );
+  resolver.addAsset(
+    '4363f8259f7f14e418706d51b057d9f3',
+    path.join(fixtureDir, '_Header_Text.prefab'),
+    '_Header_Text'
+  );
+  resolver.addAsset(
+    'de624dab09f28584fa6f3e2ddc3d0d3b',
+    path.join(fixtureDir, 'Paragraph_Text.prefab'),
+    'Paragraph_Text'
+  );
+  resolver.addAsset(
+    'd06aea9cb778d4741bb5f11c640fdb9e',
+    path.join(fixtureDir, 'Medal_Template.prefab'),
+    'Medal_Template'
+  );
+  console.log(`GUID resolver: using checked-in fixture mappings (${resolver.size} mappings loaded)`);
 }
 
 let totalTests = 0;

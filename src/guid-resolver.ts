@@ -149,6 +149,14 @@ export class GuidResolver {
     this.map.set(guid, name);
   }
 
+  /** Add a manual asset mapping */
+  addAsset(guid: string, assetPath: string, name?: string): void {
+    this.assetPaths.set(guid, assetPath);
+    if (name && !this.map.has(guid)) {
+      this.map.set(guid, name);
+    }
+  }
+
   /** Get the number of mappings */
   get size(): number {
     return this.map.size;

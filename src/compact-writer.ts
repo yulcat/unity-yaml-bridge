@@ -1479,7 +1479,7 @@ function writeNestedPrefabInstanceRefs(
     if (instance.modifications.length === 0) continue;
 
     const sourceMap = buildSourcePrefabMap(instance, resolver);
-    writeVariantRefs(instance, lines, sourceMap, null, true);
+    writeVariantRefs(instance, lines, sourceMap, null, true, instance.fileId);
   }
 }
 
@@ -1657,12 +1657,45 @@ function writeVariantDetails(
     lines.push('');
     lines.push(`[${header}]`);
     for (const mod of filteredMods) {
-      const value = mod.objectReference && String(mod.objectReference.fileID) !== '0'
-        ? formatReference(mod.objectReference)
-        : mod.value;
+      const value = formatVariantModificationValue(mod, baseMap, nestedResolved);
       lines.push(`${mod.propertyPath} = ${value}`);
     }
   }
+}
+
+/** Resolve a variant reference target to a readable path key. */
+function resolveVariantReferenceKey(
+  targetId: string,
+  baseMap: Map<string, BaseDocInfo> | null,
+  nestedResolved?: Map<string, string> | null
+): string | null {
+  if (baseMap) {
+    const resolved = resolveTargetKey(targetId, baseMap);
+    if (resolved) return resolved;
+  }
+
+  if (nestedResolved) {
+    const resolved = nestedResolved.get(targetId);
+    if (resolved) return resolved;
+  }
+
+  return null;
+}
+
+/** Format a variant modification value, using path refs for readable internal object references. */
+function formatVariantModificationValue(
+  mod: PropertyModification,
+  baseMap: Map<string, BaseDocInfo> | null,
+  nestedResolved?: Map<string, string> | null
+): string {
+  if (mod.objectReference && String(mod.objectReference.fileID) !== '0') {
+    const refId = String(mod.objectReference.fileID);
+    const refKey = resolveVariantReferenceKey(refId, baseMap, nestedResolved);
+    if (refKey) return `->${refKey}`;
+    return formatReference(mod.objectReference);
+  }
+
+  return mod.value;
 }
 
 /**
@@ -1706,7 +1739,8 @@ function writeVariantRefs(
   lines: string[],
   baseMap: Map<string, BaseDocInfo> | null,
   nestedResolved?: Map<string, string> | null,
-  preferNameOverrideHeader: boolean = false
+  preferNameOverrideHeader: boolean = false,
+  ownerInstanceId?: string
 ): void {
   // Group modifications by target fileID (need all mods for inference)
   const modsByTarget = new Map<string, typeof instance.modifications>();
@@ -1718,8 +1752,37 @@ function writeVariantRefs(
     modsByTarget.get(targetId)!.push(mod);
   }
 
+  const emitted = new Set<string>();
+  const emitRef = (key: string, targetId: string, includeOwner: boolean): void => {
+    const refLine = `${key} = ${targetId}`;
+    if (!emitted.has(refLine)) {
+      lines.push(refLine);
+      emitted.add(refLine);
+    }
+
+    if (includeOwner && ownerInstanceId) {
+      const ownerLine = `${key}:__instance = ${ownerInstanceId}`;
+      if (!emitted.has(ownerLine)) {
+        lines.push(ownerLine);
+        emitted.add(ownerLine);
+      }
+    }
+  };
+
   for (const [targetId, mods] of modsByTarget) {
     const key = resolveVariantHeader(targetId, mods, baseMap, nestedResolved, preferNameOverrideHeader);
-    lines.push(`${key} = ${targetId}`);
+    emitRef(key, targetId, true);
+  }
+
+  // Also include readable REFS entries for objectReference values so `->path`
+  // values emitted in DETAILS can be parsed back without requiring raw fileIDs.
+  for (const mod of instance.modifications) {
+    if (!mod.objectReference || String(mod.objectReference.fileID) === '0') continue;
+
+    const refId = String(mod.objectReference.fileID);
+    const refKey = resolveVariantReferenceKey(refId, baseMap, nestedResolved);
+    if (refKey) {
+      emitRef(refKey, refId, false);
+    }
   }
 }

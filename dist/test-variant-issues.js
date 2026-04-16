@@ -4,6 +4,7 @@
  *
  * Issue #1: variant STRUCTURE must include base children and root-level added GOs.
  * Issue #2: non-root nested PrefabInstance m_Modifications must appear in DETAILS.
+ * Nested PrefabInstance internals must also write back to their owning instance.
  */
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
@@ -88,6 +89,7 @@ function makeResolver(assets) {
 const BASE_GUID = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 const NESTED_GUID = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
 const IMAGE_GUID = 'f70555f144d8491a825f0804e09c671c';
+const TMP_GUID = 'f4688fdb7df04437aeb418b961361dc5';
 function basePrefabYaml() {
     return `%YAML 1.1
 %TAG !u! tag:unity3d.com,2011:
@@ -453,6 +455,146 @@ GameObject:
   m_IsActive: 1
 `;
 }
+function nestedTextPrefabYaml() {
+    return `%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1 &100
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 200}
+  - component: {fileID: 500}
+  m_Layer: 0
+  m_Name: NestedWidget
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &200
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 100}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Children:
+  - {fileID: 310}
+  - {fileID: 410}
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &500
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 100}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: ${TMP_GUID}, type: 3}
+  m_Name:
+  m_EditorClassIdentifier:
+  m_text: Source text
+  linkRef: {fileID: 0}
+--- !u!1 &300
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 310}
+  - component: {fileID: 800}
+  m_Layer: 0
+  m_Name: TargetLabel
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &310
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 300}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Children: []
+  m_Father: {fileID: 200}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &800
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 300}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: ${TMP_GUID}, type: 3}
+  m_Name:
+  m_EditorClassIdentifier:
+  m_text: Target
+--- !u!1 &400
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 410}
+  - component: {fileID: 850}
+  m_Layer: 0
+  m_Name: AltLabel
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &410
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 400}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Children: []
+  m_Father: {fileID: 200}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &850
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 400}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: ${TMP_GUID}, type: 3}
+  m_Name:
+  m_EditorClassIdentifier:
+  m_text: Alternate
+`;
+}
 function variantWithNestedPrefabOverridesYaml() {
     return `%YAML 1.1
 %TAG !u! tag:unity3d.com,2011:
@@ -496,6 +638,49 @@ PrefabInstance:
   m_SourcePrefab: {fileID: 100100000, guid: ${NESTED_GUID}, type: 3}
 `;
 }
+function variantWithNestedPrefabComponentOverridesYaml() {
+    return `%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1001 &900
+PrefabInstance:
+  m_ObjectHideFlags: 0
+  serializedVersion: 2
+  m_Modification:
+    serializedVersion: 3
+    m_TransformParent: {fileID: 0}
+    m_Modifications:
+    - target: {fileID: 500, guid: ${BASE_GUID}, type: 3}
+      propertyPath: m_text
+      value: Root instance must not change
+      objectReference: {fileID: 0}
+    m_RemovedComponents: []
+    m_RemovedGameObjects: []
+    m_AddedGameObjects: []
+    m_AddedComponents: []
+  m_SourcePrefab: {fileID: 100100000, guid: ${BASE_GUID}, type: 3}
+--- !u!1001 &901
+PrefabInstance:
+  m_ObjectHideFlags: 0
+  serializedVersion: 2
+  m_Modification:
+    serializedVersion: 3
+    m_TransformParent: {fileID: 200}
+    m_Modifications:
+    - target: {fileID: 500, guid: ${NESTED_GUID}, type: 3}
+      propertyPath: m_text
+      value: Original nested text
+      objectReference: {fileID: 0}
+    - target: {fileID: 500, guid: ${NESTED_GUID}, type: 3}
+      propertyPath: linkRef
+      value:
+      objectReference: {fileID: 800, guid: ${NESTED_GUID}, type: 3}
+    m_RemovedComponents: []
+    m_RemovedGameObjects: []
+    m_AddedGameObjects: []
+    m_AddedComponents: []
+  m_SourcePrefab: {fileID: 100100000, guid: ${NESTED_GUID}, type: 3}
+`;
+}
 console.log('\n=== Variant issue regressions ===\n');
 {
     console.log('Issue #1: root-level added GOs are kept in STRUCTURE');
@@ -523,6 +708,38 @@ console.log('\n=== Variant issue regressions ===\n');
     assert(details.includes('Text_Quit'), 'DETAILS includes Text_Quit nested override', details);
     assert(details.includes('Text_Restore'), 'DETAILS includes Text_Restore nested override', details);
     assert(details.includes('[Text_Logout]'), 'DETAILS uses nested m_Name override as a readable header', details);
+}
+{
+    console.log('\nNested PrefabInstance internal edits write back to the owning instance');
+    const resolver = makeResolver([
+        { path: 'Base.prefab', guid: BASE_GUID, content: basePrefabYaml() },
+        { path: 'NestedText.prefab', guid: NESTED_GUID, content: nestedTextPrefabYaml() },
+    ]);
+    const ast = (0, unity_yaml_parser_1.parseUnityYaml)(variantWithNestedPrefabComponentOverridesYaml());
+    const compactText = (0, compact_writer_1.writeCompact)(ast, { guidResolver: resolver });
+    const details = getSection(compactText, 'DETAILS');
+    const refs = getSection(compactText, 'REFS');
+    assert(details.includes('[NestedWidget:TextMeshProUGUI]'), 'DETAILS includes readable nested internal component header', details);
+    assert(details.includes('m_text = Original nested text'), 'DETAILS includes nested internal component property override', details);
+    assert(details.includes('linkRef = ->TargetLabel:TextMeshProUGUI'), 'DETAILS emits nested internal objectReference as a path ref', details);
+    assert(refs.includes('NestedWidget:TextMeshProUGUI = 500'), 'REFS includes nested internal component target', refs);
+    assert(refs.includes('NestedWidget:TextMeshProUGUI:__instance = 901'), 'REFS records the owning nested PrefabInstance for edited internals', refs);
+    assert(refs.includes('TargetLabel:TextMeshProUGUI = 800'), 'REFS includes nested objectReference target path', refs);
+    const editedText = compactText
+        .replace('m_text = Original nested text', 'm_text = Edited nested text')
+        .replace('linkRef = ->TargetLabel:TextMeshProUGUI', 'linkRef = ->AltLabel:TextMeshProUGUI')
+        .replace('TargetLabel:TextMeshProUGUI = 800', 'TargetLabel:TextMeshProUGUI = 800\nAltLabel:TextMeshProUGUI = 850');
+    const merged = (0, compact_merger_1.mergeCompactChanges)(ast, (0, compact_reader_1.readCompact)(editedText));
+    const rootInstanceDoc = merged.documents.find(doc => doc.fileId === '900');
+    const nestedInstanceDoc = merged.documents.find(doc => doc.fileId === '901');
+    const rootMods = rootInstanceDoc?.properties.m_Modification?.m_Modifications || [];
+    const nestedMods = nestedInstanceDoc?.properties.m_Modification?.m_Modifications || [];
+    const rootTextMod = rootMods.find((m) => m.propertyPath === 'm_text');
+    const nestedTextMod = nestedMods.find((m) => m.propertyPath === 'm_text');
+    const nestedRefMod = nestedMods.find((m) => m.propertyPath === 'linkRef');
+    assert(nestedTextMod?.value === 'Edited nested text', 'edited nested internal property writes to non-root PrefabInstance modifications', (0, unity_yaml_writer_1.writeUnityYaml)(merged));
+    assert(rootTextMod?.value === 'Root instance must not change', 'same fileID/property on root PrefabInstance is not edited by nested section', (0, unity_yaml_writer_1.writeUnityYaml)(merged));
+    assert(fileIdOf(nestedRefMod?.objectReference) === '850', 'edited nested internal objectReference path writes to non-root PrefabInstance modifications', JSON.stringify(nestedRefMod));
 }
 {
     console.log('\nIssue #3 follow-up: added-object component refs write to real docs');

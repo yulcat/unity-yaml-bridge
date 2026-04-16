@@ -510,34 +510,82 @@ function remapWithOriginal(parsed, original) {
     }
     return parsed;
 }
-// ============================================================
-// Variant merging — match sections by REFS or target fileID
-// ============================================================
+/** Build mutable PrefabInstance modification owners from their Unity documents. */
+function buildVariantModificationOwners(file) {
+    const instanceDocs = new Map();
+    for (const doc of file.documents) {
+        if (doc.typeId === 1001) {
+            instanceDocs.set(doc.fileId, doc);
+        }
+    }
+    const owners = [];
+    for (const instance of file.prefabInstances) {
+        const doc = instanceDocs.get(instance.fileId);
+        const modifications = doc?.properties.m_Modification?.m_Modifications;
+        if (!Array.isArray(modifications))
+            continue;
+        owners.push({
+            instanceFileId: instance.fileId,
+            modifications,
+        });
+    }
+    return owners;
+}
+/** Get the first scalar REFS value for a key, with normal path alias handling. */
+function getRefsValue(refs, key, pathLookupOptions) {
+    const entry = (0, path_utils_1.findPathMapEntry)(refs, key, pathLookupOptions);
+    return entry?.value[0];
+}
+function modificationTargetsFileId(mod, targetFileId) {
+    return String(mod.target?.fileID) === targetFileId;
+}
+function ownerHasSectionProperty(owner, targetFileId, section) {
+    const editableKeys = section.properties
+        .filter(prop => typeof prop.value === 'string')
+        .map(prop => prop.key);
+    if (editableKeys.length === 0) {
+        return owner.modifications.some(mod => modificationTargetsFileId(mod, targetFileId));
+    }
+    return owner.modifications.some(mod => modificationTargetsFileId(mod, targetFileId) && editableKeys.includes(mod.propertyPath));
+}
+/** Pick the PrefabInstance document that owns a variant section's modifications. */
+function selectVariantModificationOwner(owners, targetFileId, section, ownerInstanceId, refsOccurrenceIndex = 0) {
+    if (ownerInstanceId) {
+        return owners.find(owner => owner.instanceFileId === ownerInstanceId);
+    }
+    let candidates = owners.filter(owner => ownerHasSectionProperty(owner, targetFileId, section));
+    if (candidates.length === 0) {
+        candidates = owners.filter(owner => owner.modifications.some(mod => modificationTargetsFileId(mod, targetFileId)));
+    }
+    return candidates[refsOccurrenceIndex] || candidates[0];
+}
+/** Preserve reference context when a path ref only carries a fileID. */
+function contextualizeObjectReference(parsed, existing) {
+    if (!parsed || typeof parsed !== 'object' || !('fileID' in parsed))
+        return parsed;
+    if (!existing || typeof existing !== 'object')
+        return parsed;
+    const next = { ...parsed };
+    if (next.guid === undefined && existing.guid !== undefined) {
+        next.guid = existing.guid;
+    }
+    if (next.type === undefined && existing.type !== undefined) {
+        next.type = existing.type;
+    }
+    return next;
+}
 /** Merge sections for a variant file */
 function mergeVariantSections(file, sections, refs, structurePaths) {
     // Find the main PrefabInstance (the one with transformParent = {fileID: 0})
     const mainInstance = file.prefabInstances.find(pi => String(pi.transformParent.fileID) === '0');
     if (!mainInstance)
         return;
-    // Find the PrefabInstance document
-    const instanceDoc = file.documents.find(d => d.typeId === 1001 && d.fileId === mainInstance.fileId);
-    if (!instanceDoc)
-        return;
-    const modifications = instanceDoc.properties.m_Modification?.m_Modifications;
-    if (!Array.isArray(modifications))
+    const modificationOwners = buildVariantModificationOwners(file);
+    if (modificationOwners.length === 0)
         return;
     const docMap = new Map();
     for (const doc of file.documents) {
         docMap.set(doc.fileId, doc);
-    }
-    // Build reverse REFS map: fileID → key (for lookup)
-    const reverseRefs = new Map();
-    for (const [key, fileIds] of refs) {
-        if (key !== '__instance') {
-            for (const fileId of fileIds) {
-                reverseRefs.set(fileId, key);
-            }
-        }
     }
     // Track per-key index for cycling through duplicate REFS entries
     const refsIndexMap = new Map();
@@ -545,6 +593,8 @@ function mergeVariantSections(file, sections, refs, structurePaths) {
     for (const section of sections) {
         // Resolve target fileID from REFS or section header
         let targetFileId;
+        let ownerInstanceId;
+        let refsOccurrenceIndex = 0;
         if (section.goPath.startsWith('&')) {
             // Legacy format: [&fileID]
             targetFileId = section.goPath.substring(1);
@@ -557,8 +607,10 @@ function mergeVariantSections(file, sections, refs, structurePaths) {
             const refsEntry = (0, path_utils_1.findPathMapEntry)(refs, refsKey, pathLookupOptions);
             if (refsEntry && refsEntry.value.length > 0) {
                 const idx = refsIndexMap.get(refsEntry.key) || 0;
+                refsOccurrenceIndex = idx;
                 targetFileId = refsEntry.value[idx];
                 refsIndexMap.set(refsEntry.key, idx + 1);
+                ownerInstanceId = getRefsValue(refs, `${refsEntry.key}:__instance`, pathLookupOptions);
             }
         }
         if (!targetFileId)
@@ -573,16 +625,20 @@ function mergeVariantSections(file, sections, refs, structurePaths) {
             }
             continue;
         }
+        const owner = selectVariantModificationOwner(modificationOwners, targetFileId, section, ownerInstanceId, refsOccurrenceIndex);
+        if (!owner)
+            continue;
         for (const prop of section.properties) {
             if (typeof prop.value !== 'string')
                 continue;
             // Find existing modification with this target + propertyPath
-            const existing = modifications.find((m) => String(m.target?.fileID) === targetFileId && m.propertyPath === prop.key);
+            const existing = owner.modifications.find((m) => String(m.target?.fileID) === targetFileId && m.propertyPath === prop.key);
             if (existing) {
                 // Update existing modification
                 let parsed = (0, compact_reader_1.parseCompactValue)(prop.value);
                 parsed = resolvePathReference(parsed, refs, structurePaths, pathLookupOptions);
                 if (typeof parsed === 'object' && parsed !== null && 'fileID' in parsed) {
+                    parsed = contextualizeObjectReference(parsed, existing.objectReference);
                     // Object reference — preserve original type if fileID and guid match
                     const origRef = existing.objectReference;
                     if (origRef &&

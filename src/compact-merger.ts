@@ -582,7 +582,8 @@ function mergeVariantSections(file: UnityFile, sections: CompactSection[], refs:
 
       if (existing) {
         // Update existing modification
-        const parsed = parseCompactValue(prop.value);
+        let parsed = parseCompactValue(prop.value);
+        parsed = resolvePathReference(parsed, refs);
         if (typeof parsed === 'object' && parsed !== null && 'fileID' in parsed) {
           // Object reference — preserve original type if fileID and guid match
           const origRef = existing.objectReference;

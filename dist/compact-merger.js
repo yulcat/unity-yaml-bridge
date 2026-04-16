@@ -563,7 +563,8 @@ function mergeVariantSections(file, sections, refs) {
             const existing = modifications.find((m) => String(m.target?.fileID) === targetFileId && m.propertyPath === prop.key);
             if (existing) {
                 // Update existing modification
-                const parsed = (0, compact_reader_1.parseCompactValue)(prop.value);
+                let parsed = (0, compact_reader_1.parseCompactValue)(prop.value);
+                parsed = resolvePathReference(parsed, refs);
                 if (typeof parsed === 'object' && parsed !== null && 'fileID' in parsed) {
                     // Object reference — preserve original type if fileID and guid match
                     const origRef = existing.objectReference;

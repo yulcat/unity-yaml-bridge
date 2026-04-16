@@ -315,6 +315,55 @@ MonoBehaviour:
 `;
 }
 
+function variantWithExistingAddedReferenceDocsYaml(): string {
+  return variantWithAddedReferenceDocsYaml().replace(
+    `  targetRef: {fileID: 0}
+  targetRefs: []`,
+    `  targetRef: {fileID: 1600}
+  targetRefs:
+  - {fileID: 1600}`
+  );
+}
+
+function addedRootCompact(
+  detailsHeader: string,
+  detailsBody: string,
+  refsBody: string
+): ReturnType<typeof readCompact> {
+  return readCompact(`# ubridge v1 | variant | base-guid:${BASE_GUID}
+--- STRUCTURE
+__added_root__
+├─ + Source [${IMAGE_GUID}]
+└─ + Target [${IMAGE_GUID}]
+--- DETAILS
+
+[${detailsHeader}]
+${detailsBody}
+--- REFS
+__instance = 900
+${refsBody}
+`);
+}
+
+function mergeAddedRootCompact(
+  yaml: string,
+  detailsHeader: string,
+  detailsBody: string,
+  refsBody: string
+) {
+  const ast = parseUnityYaml(yaml);
+  const compact = addedRootCompact(detailsHeader, detailsBody, refsBody);
+  const merged = mergeCompactChanges(ast, compact);
+  const sourceDoc = merged.documents.find(doc => doc.fileId === '1200');
+  return { merged, sourceDoc };
+}
+
+function fileIdOf(value: any): string {
+  return value && typeof value === 'object' && 'fileID' in value
+    ? String(value.fileID)
+    : String(value);
+}
+
 function nestedMenuPrefabYaml(): string {
   return `%YAML 1.1
 %TAG !u! tag:unity3d.com,2011:
@@ -475,25 +524,14 @@ console.log('\n=== Variant issue regressions ===\n');
 
 {
   console.log('\nIssue #3 follow-up: added-object component refs write to real docs');
-  const ast = parseUnityYaml(variantWithAddedReferenceDocsYaml());
-  const compact = readCompact(`# ubridge v1 | variant | base-guid:${BASE_GUID}
---- STRUCTURE
-__added_root__
-├─ + Source [${IMAGE_GUID}]
-└─ + Target [${IMAGE_GUID}]
---- DETAILS
-
-[Source:${IMAGE_GUID}]
-targetRef = ->Target:${IMAGE_GUID}
-targetRefs = [->Target:${IMAGE_GUID}, ->Target:${IMAGE_GUID}]
---- REFS
-__instance = 900
-Source:${IMAGE_GUID} = 1200
-Target:${IMAGE_GUID} = 1600
-`);
-
-  const merged = mergeCompactChanges(ast, compact);
-  const sourceDoc = merged.documents.find(doc => doc.fileId === '1200');
+  const { merged, sourceDoc } = mergeAddedRootCompact(
+    variantWithAddedReferenceDocsYaml(),
+    `Source:${IMAGE_GUID}`,
+    `targetRef = ->Target:${IMAGE_GUID}
+targetRefs = [->Target:${IMAGE_GUID}, ->Target:${IMAGE_GUID}]`,
+    `Source:${IMAGE_GUID} = 1200
+Target:${IMAGE_GUID} = 1600`
+  );
   const refs = sourceDoc?.properties.targetRefs;
 
   assert(String(sourceDoc?.properties.targetRef?.fileID) === '1600',
@@ -506,28 +544,173 @@ Target:${IMAGE_GUID} = 1600
 
 {
   console.log('\nIssue #3 follow-up: __added_root__ paths resolve for added-object docs');
-  const ast = parseUnityYaml(variantWithAddedReferenceDocsYaml());
-  const compact = readCompact(`# ubridge v1 | variant | base-guid:${BASE_GUID}
---- STRUCTURE
-__added_root__
-├─ + Source [${IMAGE_GUID}]
-└─ + Target [${IMAGE_GUID}]
---- DETAILS
-
-[__added_root__/Source:${IMAGE_GUID}]
-targetRef = ->__added_root__/Target:${IMAGE_GUID}
---- REFS
-__instance = 900
-__added_root__/Source:${IMAGE_GUID} = 1200
-__added_root__/Target:${IMAGE_GUID} = 1600
-`);
-
-  const merged = mergeCompactChanges(ast, compact);
-  const sourceDoc = merged.documents.find(doc => doc.fileId === '1200');
+  const { merged, sourceDoc } = mergeAddedRootCompact(
+    variantWithAddedReferenceDocsYaml(),
+    `__added_root__/Source:${IMAGE_GUID}`,
+    `targetRef = ->__added_root__/Target:${IMAGE_GUID}`,
+    `__added_root__/Source:${IMAGE_GUID} = 1200
+__added_root__/Target:${IMAGE_GUID} = 1600`
+  );
 
   assert(String(sourceDoc?.properties.targetRef?.fileID) === '1600',
     '__added_root__ reference path writes to added variant component doc',
     writeUnityYaml(merged));
+}
+
+{
+  console.log('\nIssue #3 follow-up: mixed __added_root__ path normalization');
+
+  {
+    const { merged, sourceDoc } = mergeAddedRootCompact(
+      variantWithAddedReferenceDocsYaml(),
+      `Source:${IMAGE_GUID}`,
+      `targetRef = ->__added_root__/Target:${IMAGE_GUID}`,
+      `Source:${IMAGE_GUID} = 1200
+Target:${IMAGE_GUID} = 1600`
+    );
+    assert(fileIdOf(sourceDoc?.properties.targetRef) === '1600',
+      'scalar ->__added_root__/ path resolves through non-prefixed REFS',
+      writeUnityYaml(merged));
+  }
+
+  {
+    const { sourceDoc } = mergeAddedRootCompact(
+      variantWithAddedReferenceDocsYaml(),
+      `Source:${IMAGE_GUID}`,
+      `targetRefs = [->__added_root__/Target:${IMAGE_GUID}, ->__added_root__/Target:${IMAGE_GUID}]`,
+      `Source:${IMAGE_GUID} = 1200
+Target:${IMAGE_GUID} = 1600`
+    );
+    const refs = sourceDoc?.properties.targetRefs;
+    assert(Array.isArray(refs) && refs.length === 2 && refs.every(ref => fileIdOf(ref) === '1600'),
+      'array ->__added_root__/ paths resolve through non-prefixed REFS',
+      JSON.stringify(refs));
+  }
+
+  {
+    const { sourceDoc } = mergeAddedRootCompact(
+      variantWithAddedReferenceDocsYaml(),
+      `Source:${IMAGE_GUID}`,
+      `targetRef = @__added_root__/Target:${IMAGE_GUID}`,
+      `Source:${IMAGE_GUID} = 1200
+Target:${IMAGE_GUID} = 1600`
+    );
+    assert(fileIdOf(sourceDoc?.properties.targetRef) === '1600',
+      '@__added_root__/ alias resolves through non-prefixed REFS');
+  }
+
+  {
+    const { sourceDoc } = mergeAddedRootCompact(
+      variantWithAddedReferenceDocsYaml(),
+      `__added_root__/Source:${IMAGE_GUID}`,
+      `targetRef = ->__added_root__/Target:${IMAGE_GUID}`,
+      `Source:${IMAGE_GUID} = 1200
+Target:${IMAGE_GUID} = 1600`
+    );
+    assert(fileIdOf(sourceDoc?.properties.targetRef) === '1600',
+      'prefixed DETAILS header matches non-prefixed REFS section target');
+  }
+
+  {
+    const { sourceDoc } = mergeAddedRootCompact(
+      variantWithAddedReferenceDocsYaml(),
+      `Source:${IMAGE_GUID}`,
+      `targetRef = ->Target:${IMAGE_GUID}`,
+      `__added_root__/Source:${IMAGE_GUID} = 1200
+__added_root__/Target:${IMAGE_GUID} = 1600`
+    );
+    assert(fileIdOf(sourceDoc?.properties.targetRef) === '1600',
+      'non-prefixed DETAILS and value paths resolve through prefixed REFS');
+  }
+
+  {
+    const { sourceDoc } = mergeAddedRootCompact(
+      variantWithAddedReferenceDocsYaml(),
+      `Source:${IMAGE_GUID}`,
+      `targetRefs = [->Target:${IMAGE_GUID}, ->__added_root__/Target:${IMAGE_GUID}, @__added_root__/Target:${IMAGE_GUID}]`,
+      `Source:${IMAGE_GUID} = 1200
+Target:${IMAGE_GUID} = 1600`
+    );
+    const refs = sourceDoc?.properties.targetRefs;
+    assert(Array.isArray(refs) && refs.length === 3 && refs.every(ref => fileIdOf(ref) === '1600'),
+      'mixed array of non-prefixed, prefixed, and @ refs resolves to one target',
+      JSON.stringify(refs));
+  }
+
+  {
+    const { sourceDoc } = mergeAddedRootCompact(
+      variantWithAddedReferenceDocsYaml(),
+      `Source:${IMAGE_GUID}`,
+      `event:
+  target = ->__added_root__/Target:${IMAGE_GUID}`,
+      `Source:${IMAGE_GUID} = 1200
+Target:${IMAGE_GUID} = 1600`
+    );
+    assert(fileIdOf(sourceDoc?.properties.event?.target) === '1600',
+      'nested object reference resolves with the same added-root aliases',
+      JSON.stringify(sourceDoc?.properties.event));
+  }
+
+  {
+    const { sourceDoc } = mergeAddedRootCompact(
+      variantWithAddedReferenceDocsYaml(),
+      `Source:${IMAGE_GUID}`,
+      `targetRef = ->__added_root__/Target:${IMAGE_GUID}`,
+      `Source:${IMAGE_GUID} = 1200
+Target:${IMAGE_GUID} = 1600
+__added_root__/Target:${IMAGE_GUID} = 1700`
+    );
+    assert(fileIdOf(sourceDoc?.properties.targetRef) === '1700',
+      'exact prefixed REFS key wins before added-root alias fallback');
+  }
+
+  {
+    const { sourceDoc } = mergeAddedRootCompact(
+      variantWithAddedReferenceDocsYaml(),
+      `Source:${IMAGE_GUID}`,
+      `targetRef = ->Target:${IMAGE_GUID}`,
+      `Source:${IMAGE_GUID} = 1200
+Target:${IMAGE_GUID} = 1600
+__added_root__/Target:${IMAGE_GUID} = 1700`
+    );
+    assert(fileIdOf(sourceDoc?.properties.targetRef) === '1600',
+      'exact non-prefixed REFS key wins before added-root alias fallback');
+  }
+}
+
+{
+  console.log('\nIssue #3 follow-up: no-edit added-root roundtrip stays stable');
+  const sourceYaml = variantWithExistingAddedReferenceDocsYaml();
+  const noEdit = mergeAddedRootCompact(
+    sourceYaml,
+    `Source:${IMAGE_GUID}`,
+    `targetRef = ->__added_root__/Target:${IMAGE_GUID}
+targetRefs = [->__added_root__/Target:${IMAGE_GUID}]`,
+    `Source:${IMAGE_GUID} = 1200
+Target:${IMAGE_GUID} = 1600`
+  );
+  const refs = noEdit.sourceDoc?.properties.targetRefs;
+
+  assert(fileIdOf(noEdit.sourceDoc?.properties.targetRef) === '1600',
+    'no-edit scalar with released mixed-prefix compact keeps fileID 1600',
+    writeUnityYaml(noEdit.merged));
+  assert(Array.isArray(refs) && refs.length === 1 && fileIdOf(refs[0]) === '1600',
+    'no-edit array with released mixed-prefix compact keeps fileID 1600',
+    JSON.stringify(refs));
+
+  const ast = parseUnityYaml(sourceYaml);
+  const compactText = writeCompact(ast);
+  const rewritten = mergeCompactChanges(ast, readCompact(compactText));
+  const rewrittenSourceDoc = rewritten.documents.find(doc => doc.fileId === '1200');
+  assert(compactText.includes(`targetRef = ->Target:${IMAGE_GUID}`),
+    'writer emits canonical non-prefixed refs for added-object DETAILS',
+    compactText);
+  assert(!compactText.includes(`->__added_root__/Target:${IMAGE_GUID}`),
+    'writer does not reintroduce __added_root__ in added-object reference values',
+    compactText);
+  assert(fileIdOf(rewrittenSourceDoc?.properties.targetRef) === '1600',
+    'parse -> compact -> write keeps added-object scalar reference unchanged',
+    writeUnityYaml(rewritten));
 }
 
 console.log(`\nSUMMARY: ${passedTests}/${totalTests} tests passed`);

@@ -30,10 +30,6 @@ function assertPass(name, condition, detail) {
   record(name, condition ? 'PASS' : 'FAIL', condition ? undefined : detail);
 }
 
-function assertExpectedFailure(name, failed, detail) {
-  record(name, failed ? 'EXPECTED_FAIL' : 'UNEXPECTED_PASS', detail);
-}
-
 function variantWithAddedReferenceDocsYaml() {
   return `%YAML 1.1
 %TAG !u! tag:unity3d.com,2011:
@@ -217,14 +213,14 @@ __added_root__/Target:${SCRIPT_GUID} = 1600`;
 }
 
 {
-  console.log('\nConfirmed current failures');
+  console.log('\nPreviously failing mixed-prefix cases');
   const refs = `Source:${SCRIPT_GUID} = 1200
 Target:${SCRIPT_GUID} = 1600`;
 
   const scalar = tryWrite(compactWith(`targetRef = ->__added_root__/Target:${SCRIPT_GUID}`, refs));
-  assertExpectedFailure(
-    'no-edit scalar ->__added_root__/ reference with non-prefixed REFS does not preserve fileID 1600',
-    !scalar.ok || fileIdOf(scalar.result.sourceDoc.properties.targetRef) !== '1600',
+  assertPass(
+    'no-edit scalar ->__added_root__/ reference with non-prefixed REFS preserves fileID 1600',
+    scalar.ok && fileIdOf(scalar.result.sourceDoc.properties.targetRef) === '1600',
     scalar.ok
       ? `resolved to ${fileIdOf(scalar.result.sourceDoc.properties.targetRef)}`
       : `threw ${scalar.error.message}`
@@ -232,16 +228,16 @@ Target:${SCRIPT_GUID} = 1600`;
 
   const array = tryWrite(compactWith(`targetRefs = [->__added_root__/Target:${SCRIPT_GUID}, ->__added_root__/Target:${SCRIPT_GUID}]`, refs));
   const arrayRefs = array.ok ? array.result.sourceDoc.properties.targetRefs || [] : [];
-  assertExpectedFailure(
-    'array ->__added_root__/ references with non-prefixed REFS do not preserve fileID 1600',
-    !array.ok || !Array.isArray(arrayRefs) || arrayRefs.some(ref => fileIdOf(ref) !== '1600'),
+  assertPass(
+    'array ->__added_root__/ references with non-prefixed REFS preserve fileID 1600',
+    array.ok && Array.isArray(arrayRefs) && arrayRefs.every(ref => fileIdOf(ref) === '1600'),
     array.ok ? `resolved to ${JSON.stringify(arrayRefs)}` : `threw ${array.error.message}`
   );
 
   const alias = tryWrite(compactWith(`targetRef = @__added_root__/Target:${SCRIPT_GUID}`, refs));
-  assertExpectedFailure(
-    '@__added_root__/ alias with non-prefixed REFS does not preserve fileID 1600',
-    !alias.ok || fileIdOf(alias.result.sourceDoc.properties.targetRef) !== '1600',
+  assertPass(
+    '@__added_root__/ alias with non-prefixed REFS preserves fileID 1600',
+    alias.ok && fileIdOf(alias.result.sourceDoc.properties.targetRef) === '1600',
     alias.ok ? `resolved to ${fileIdOf(alias.result.sourceDoc.properties.targetRef)}` : `threw ${alias.error.message}`
   );
 
@@ -254,6 +250,7 @@ __added_root__
 
 [__added_root__/Source:${SCRIPT_GUID}]
 targetRef = ->__added_root__/Target:${SCRIPT_GUID}
+targetRefs = [->__added_root__/Target:${SCRIPT_GUID}, ->__added_root__/Target:${SCRIPT_GUID}]
 --- REFS
 __instance = 900
 Source:${SCRIPT_GUID} = 1200
@@ -262,19 +259,22 @@ Target:${SCRIPT_GUID} = 1600
   const ast = parseUnityYaml(variantWithAddedReferenceDocsYaml());
   const merged = mergeCompactChanges(ast, prefixedSection);
   const sourceDoc = merged.documents.find(doc => doc.fileId === '1200');
-  assertExpectedFailure(
-    'prefixed DETAILS section header with non-prefixed REFS is skipped during variant write-back',
-    fileIdOf(sourceDoc.properties.targetRef) === '1600',
-    'property remained unchanged because the section target was not matched'
+  const prefixedSectionRefs = sourceDoc.properties.targetRefs || [];
+  assertPass(
+    'prefixed DETAILS section header matches non-prefixed REFS during variant write-back',
+    Array.isArray(prefixedSectionRefs) &&
+      prefixedSectionRefs.length === 2 &&
+      prefixedSectionRefs.every(ref => fileIdOf(ref) === '1600'),
+    `resolved to ${JSON.stringify(prefixedSectionRefs)}`
   );
 }
 
 console.log('\nSummary');
-for (const status of ['PASS', 'EXPECTED_FAIL', 'FAIL', 'UNEXPECTED_PASS']) {
+for (const status of ['PASS', 'FAIL']) {
   const count = results.filter(result => result.status === status).length;
   if (count > 0) console.log(`  ${status}: ${count}`);
 }
 console.log(`  accepted: ${passed}/${total}`);
 
-const hardFailures = results.filter(result => result.status === 'FAIL' || result.status === 'UNEXPECTED_PASS');
+const hardFailures = results.filter(result => result.status === 'FAIL');
 process.exit(hardFailures.length === 0 ? 0 : 1);

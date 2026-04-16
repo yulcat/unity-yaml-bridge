@@ -16,6 +16,7 @@ import {
 } from './types';
 import { GuidResolver } from './guid-resolver';
 import { parseUnityYaml } from './unity-yaml-parser';
+import { ADDED_ROOT_NAME, stripAddedRootPrefix } from './path-utils';
 
 /** Additional fields to filter from compact output for cleaner results */
 const COMPACT_OMIT_FIELDS = new Set([
@@ -1395,7 +1396,9 @@ function writeVariantCompact(file: UnityFile, lines: string[], resolver?: GuidRe
     const addedRoots = file.hierarchy.name === '__added_root__'
       ? file.hierarchy.children
       : [file.hierarchy];
-    const refMap = buildInternalRefMap(file, resolver);
+    const refMap = file.hierarchy.name === ADDED_ROOT_NAME
+      ? stripAddedRootPrefixFromRefMap(buildInternalRefMap(file, resolver))
+      : buildInternalRefMap(file, resolver);
     for (const addedRoot of addedRoots) {
       writeDetails(addedRoot, lines, '', resolver, true, refMap);
     }
@@ -1418,6 +1421,15 @@ function writeVariantCompact(file: UnityFile, lines: string[], resolver?: GuidRe
   }
 
   return lines.join('\n') + '\n';
+}
+
+/** Match variant added-object DETAILS/REFS, which are written without the virtual root. */
+function stripAddedRootPrefixFromRefMap(refMap: Map<string, string>): Map<string, string> {
+  const stripped = new Map<string, string>();
+  for (const [fileId, refPath] of refMap) {
+    stripped.set(fileId, stripAddedRootPrefix(refPath));
+  }
+  return stripped;
 }
 
 /** Load the source prefab map used to label a nested PrefabInstance's own modifications. */

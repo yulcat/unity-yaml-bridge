@@ -40,6 +40,7 @@ exports.writeCompact = writeCompact;
 const fs = __importStar(require("fs"));
 const types_1 = require("./types");
 const unity_yaml_parser_1 = require("./unity-yaml-parser");
+const path_utils_1 = require("./path-utils");
 /** Additional fields to filter from compact output for cleaner results */
 const COMPACT_OMIT_FIELDS = new Set([
     'm_Enabled',
@@ -1209,7 +1210,9 @@ function writeVariantCompact(file, lines, resolver) {
         const addedRoots = file.hierarchy.name === '__added_root__'
             ? file.hierarchy.children
             : [file.hierarchy];
-        const refMap = buildInternalRefMap(file, resolver);
+        const refMap = file.hierarchy.name === path_utils_1.ADDED_ROOT_NAME
+            ? stripAddedRootPrefixFromRefMap(buildInternalRefMap(file, resolver))
+            : buildInternalRefMap(file, resolver);
         for (const addedRoot of addedRoots) {
             writeDetails(addedRoot, lines, '', resolver, true, refMap);
         }
@@ -1229,6 +1232,14 @@ function writeVariantCompact(file, lines, resolver) {
         }
     }
     return lines.join('\n') + '\n';
+}
+/** Match variant added-object DETAILS/REFS, which are written without the virtual root. */
+function stripAddedRootPrefixFromRefMap(refMap) {
+    const stripped = new Map();
+    for (const [fileId, refPath] of refMap) {
+        stripped.set(fileId, (0, path_utils_1.stripAddedRootPrefix)(refPath));
+    }
+    return stripped;
 }
 /** Load the source prefab map used to label a nested PrefabInstance's own modifications. */
 function buildSourcePrefabMap(instance, resolver) {

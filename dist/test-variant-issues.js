@@ -43,8 +43,11 @@ const fs = __importStar(require("fs"));
 const os = __importStar(require("os"));
 const path = __importStar(require("path"));
 const guid_resolver_1 = require("./guid-resolver");
+const compact_reader_1 = require("./compact-reader");
+const compact_merger_1 = require("./compact-merger");
 const unity_yaml_parser_1 = require("./unity-yaml-parser");
 const compact_writer_1 = require("./compact-writer");
+const unity_yaml_writer_1 = require("./unity-yaml-writer");
 let totalTests = 0;
 let passedTests = 0;
 function assert(condition, message, detail) {
@@ -231,6 +234,112 @@ MonoBehaviour:
   m_Color: {r: 1, g: 1, b: 1, a: 1}
 `;
 }
+function variantWithAddedReferenceDocsYaml() {
+    return `%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1001 &900
+PrefabInstance:
+  m_ObjectHideFlags: 0
+  serializedVersion: 2
+  m_Modification:
+    serializedVersion: 3
+    m_TransformParent: {fileID: 0}
+    m_Modifications: []
+    m_RemovedComponents: []
+    m_RemovedGameObjects: []
+    m_AddedGameObjects: []
+    m_AddedComponents: []
+  m_SourcePrefab: {fileID: 100100000, guid: ${BASE_GUID}, type: 3}
+--- !u!1 &1000
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 1100}
+  - component: {fileID: 1200}
+  m_Layer: 0
+  m_Name: Source
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &1100
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1000}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &1200
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1000}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: ${IMAGE_GUID}, type: 3}
+  m_Name:
+  m_EditorClassIdentifier:
+  targetRef: {fileID: 0}
+  targetRefs: []
+--- !u!1 &1500
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 1550}
+  - component: {fileID: 1600}
+  m_Layer: 0
+  m_Name: Target
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &1550
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1500}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &1600
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1500}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: ${IMAGE_GUID}, type: 3}
+  m_Name:
+  m_EditorClassIdentifier:
+`;
+}
 function nestedMenuPrefabYaml() {
     return `%YAML 1.1
 %TAG !u! tag:unity3d.com,2011:
@@ -381,6 +490,51 @@ console.log('\n=== Variant issue regressions ===\n');
     assert(details.includes('Text_Quit'), 'DETAILS includes Text_Quit nested override', details);
     assert(details.includes('Text_Restore'), 'DETAILS includes Text_Restore nested override', details);
     assert(details.includes('[Text_Logout]'), 'DETAILS uses nested m_Name override as a readable header', details);
+}
+{
+    console.log('\nIssue #3 follow-up: added-object component refs write to real docs');
+    const ast = (0, unity_yaml_parser_1.parseUnityYaml)(variantWithAddedReferenceDocsYaml());
+    const compact = (0, compact_reader_1.readCompact)(`# ubridge v1 | variant | base-guid:${BASE_GUID}
+--- STRUCTURE
+__added_root__
+├─ + Source [${IMAGE_GUID}]
+└─ + Target [${IMAGE_GUID}]
+--- DETAILS
+
+[Source:${IMAGE_GUID}]
+targetRef = ->Target:${IMAGE_GUID}
+targetRefs = [->Target:${IMAGE_GUID}, ->Target:${IMAGE_GUID}]
+--- REFS
+__instance = 900
+Source:${IMAGE_GUID} = 1200
+Target:${IMAGE_GUID} = 1600
+`);
+    const merged = (0, compact_merger_1.mergeCompactChanges)(ast, compact);
+    const sourceDoc = merged.documents.find(doc => doc.fileId === '1200');
+    const refs = sourceDoc?.properties.targetRefs;
+    assert(String(sourceDoc?.properties.targetRef?.fileID) === '1600', 'null reference edited in an added variant component writes to component doc', (0, unity_yaml_writer_1.writeUnityYaml)(merged));
+    assert(Array.isArray(refs) && refs.length === 2 && refs.every(ref => String(ref.fileID) === '1600'), 'array references edited in an added variant component write to component doc', JSON.stringify(refs));
+}
+{
+    console.log('\nIssue #3 follow-up: __added_root__ paths resolve for added-object docs');
+    const ast = (0, unity_yaml_parser_1.parseUnityYaml)(variantWithAddedReferenceDocsYaml());
+    const compact = (0, compact_reader_1.readCompact)(`# ubridge v1 | variant | base-guid:${BASE_GUID}
+--- STRUCTURE
+__added_root__
+├─ + Source [${IMAGE_GUID}]
+└─ + Target [${IMAGE_GUID}]
+--- DETAILS
+
+[__added_root__/Source:${IMAGE_GUID}]
+targetRef = ->__added_root__/Target:${IMAGE_GUID}
+--- REFS
+__instance = 900
+__added_root__/Source:${IMAGE_GUID} = 1200
+__added_root__/Target:${IMAGE_GUID} = 1600
+`);
+    const merged = (0, compact_merger_1.mergeCompactChanges)(ast, compact);
+    const sourceDoc = merged.documents.find(doc => doc.fileId === '1200');
+    assert(String(sourceDoc?.properties.targetRef?.fileID) === '1600', '__added_root__ reference path writes to added variant component doc', (0, unity_yaml_writer_1.writeUnityYaml)(merged));
 }
 console.log(`\nSUMMARY: ${passedTests}/${totalTests} tests passed`);
 process.exit(passedTests === totalTests ? 0 : 1);

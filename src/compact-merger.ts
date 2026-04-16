@@ -85,7 +85,7 @@ export function mergeCompactChanges(original: UnityFile, compact: CompactFile): 
   }
 
   if (compact.type === 'variant') {
-    mergeVariantSections(result, compact.sections, compact.refs);
+    mergeVariantSections(result, compact.sections, compact.refs, structurePaths);
   } else {
     mergePrefabSections(result, compact.sections, compact.refs, structurePaths);
   }
@@ -334,7 +334,7 @@ function applyPropertiesToTarget(properties: CompactProperty[], target: Record<s
       const existing = target[prop.key];
       if (isPlainObject(existing) && prop.value.length > 0 && !prop.value.some(c => c.key === '__item__')) {
         // Recursively apply nested properties into existing object
-        applyPropertiesToTarget(prop.value, existing, refs);
+        applyPropertiesToTarget(prop.value, existing, refs, structurePaths);
       } else {
         // Reconstruct as new object or array, passing original for key remapping
         target[prop.key] = reconstructNestedValue(prop.value, existing, refs, structurePaths);
@@ -521,7 +521,12 @@ function remapWithOriginal(parsed: any, original: any): any {
 // ============================================================
 
 /** Merge sections for a variant file */
-function mergeVariantSections(file: UnityFile, sections: CompactSection[], refs: Map<string, string[]>): void {
+function mergeVariantSections(
+  file: UnityFile,
+  sections: CompactSection[],
+  refs: Map<string, string[]>,
+  structurePaths?: Set<string>
+): void {
   // Find the main PrefabInstance (the one with transformParent = {fileID: 0})
   const mainInstance = file.prefabInstances.find(pi =>
     String(pi.transformParent.fileID) === '0'
@@ -536,6 +541,11 @@ function mergeVariantSections(file: UnityFile, sections: CompactSection[], refs:
 
   const modifications = instanceDoc.properties.m_Modification?.m_Modifications;
   if (!Array.isArray(modifications)) return;
+
+  const docMap = new Map<string, UnityDocument>();
+  for (const doc of file.documents) {
+    docMap.set(doc.fileId, doc);
+  }
 
   // Build reverse REFS map: fileID → key (for lookup)
   const reverseRefs = new Map<string, string>();
@@ -572,6 +582,16 @@ function mergeVariantSections(file: UnityFile, sections: CompactSection[], refs:
 
     if (!targetFileId) continue;
 
+    const targetDoc = docMap.get(targetFileId);
+    if (targetDoc && !targetDoc.stripped && targetDoc.typeId !== 1001) {
+      if (section.componentType === 'Transform' || section.componentType === 'RectTransform') {
+        applyTransformProperties(section.properties, targetDoc, section.componentType === 'RectTransform');
+      } else {
+        applyComponentProperties(section.properties, targetDoc, refs, structurePaths);
+      }
+      continue;
+    }
+
     for (const prop of section.properties) {
       if (typeof prop.value !== 'string') continue;
 
@@ -583,7 +603,7 @@ function mergeVariantSections(file: UnityFile, sections: CompactSection[], refs:
       if (existing) {
         // Update existing modification
         let parsed = parseCompactValue(prop.value);
-        parsed = resolvePathReference(parsed, refs);
+        parsed = resolvePathReference(parsed, refs, structurePaths);
         if (typeof parsed === 'object' && parsed !== null && 'fileID' in parsed) {
           // Object reference — preserve original type if fileID and guid match
           const origRef = existing.objectReference;

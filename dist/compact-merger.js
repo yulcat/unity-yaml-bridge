@@ -115,7 +115,7 @@ function mergeCompactChanges(original, compact) {
         collectStructurePaths(compact.structure, '', structurePaths);
     }
     if (compact.type === 'variant') {
-        mergeVariantSections(result, compact.sections, compact.refs);
+        mergeVariantSections(result, compact.sections, compact.refs, structurePaths);
     }
     else {
         mergePrefabSections(result, compact.sections, compact.refs, structurePaths);
@@ -346,7 +346,7 @@ function applyPropertiesToTarget(properties, target, refs, structurePaths) {
             const existing = target[prop.key];
             if (isPlainObject(existing) && prop.value.length > 0 && !prop.value.some(c => c.key === '__item__')) {
                 // Recursively apply nested properties into existing object
-                applyPropertiesToTarget(prop.value, existing, refs);
+                applyPropertiesToTarget(prop.value, existing, refs, structurePaths);
             }
             else {
                 // Reconstruct as new object or array, passing original for key remapping
@@ -512,7 +512,7 @@ function remapWithOriginal(parsed, original) {
 // Variant merging — match sections by REFS or target fileID
 // ============================================================
 /** Merge sections for a variant file */
-function mergeVariantSections(file, sections, refs) {
+function mergeVariantSections(file, sections, refs, structurePaths) {
     // Find the main PrefabInstance (the one with transformParent = {fileID: 0})
     const mainInstance = file.prefabInstances.find(pi => String(pi.transformParent.fileID) === '0');
     if (!mainInstance)
@@ -524,6 +524,10 @@ function mergeVariantSections(file, sections, refs) {
     const modifications = instanceDoc.properties.m_Modification?.m_Modifications;
     if (!Array.isArray(modifications))
         return;
+    const docMap = new Map();
+    for (const doc of file.documents) {
+        docMap.set(doc.fileId, doc);
+    }
     // Build reverse REFS map: fileID → key (for lookup)
     const reverseRefs = new Map();
     for (const [key, fileIds] of refs) {
@@ -556,6 +560,16 @@ function mergeVariantSections(file, sections, refs) {
         }
         if (!targetFileId)
             continue;
+        const targetDoc = docMap.get(targetFileId);
+        if (targetDoc && !targetDoc.stripped && targetDoc.typeId !== 1001) {
+            if (section.componentType === 'Transform' || section.componentType === 'RectTransform') {
+                applyTransformProperties(section.properties, targetDoc, section.componentType === 'RectTransform');
+            }
+            else {
+                applyComponentProperties(section.properties, targetDoc, refs, structurePaths);
+            }
+            continue;
+        }
         for (const prop of section.properties) {
             if (typeof prop.value !== 'string')
                 continue;
@@ -564,7 +578,7 @@ function mergeVariantSections(file, sections, refs) {
             if (existing) {
                 // Update existing modification
                 let parsed = (0, compact_reader_1.parseCompactValue)(prop.value);
-                parsed = resolvePathReference(parsed, refs);
+                parsed = resolvePathReference(parsed, refs, structurePaths);
                 if (typeof parsed === 'object' && parsed !== null && 'fileID' in parsed) {
                     // Object reference — preserve original type if fileID and guid match
                     const origRef = existing.objectReference;

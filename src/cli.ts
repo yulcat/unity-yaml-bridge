@@ -20,6 +20,9 @@ function usage(): void {
   console.log(`unity-yaml-bridge CLI
 
 Usage:
+  ubridge --version
+    Print the package version.
+
   ubridge parse <file.prefab|.unity|.asset> [options]
     Convert a Unity YAML file to compact .ubridge format.
 
@@ -148,6 +151,14 @@ const argv = process.argv.slice(2);
 
 if (argv.length === 0 || argv[0] === '--help' || argv[0] === '-h') {
   usage();
+  process.exit(0);
+}
+
+if (argv[0] === '--version' || argv[0] === '-v') {
+  const packageJson = JSON.parse(
+    fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf-8')
+  );
+  console.log(packageJson.version);
   process.exit(0);
 }
 

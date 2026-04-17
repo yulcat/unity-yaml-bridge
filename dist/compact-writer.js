@@ -112,6 +112,8 @@ function writeCompact(file, options = {}) {
     writeRefsSection(file.hierarchy, lines, resolver, strippedMap);
     return lines.join('\n') + '\n';
 }
+/** Component types that should not be exposed as user-editable refs */
+const REF_SKIP_TYPES = new Set(['Transform', 'RectTransform', 'CanvasRenderer', 'GameObject']);
 /** Try to expand a nested prefab by loading and parsing its source */
 function expandNestedPrefab(node, ctx) {
     if (!node.nestedPrefab)
@@ -280,7 +282,7 @@ function buildInternalRefMap(file, resolver) {
     collectNodeFileIds(file.hierarchy, map, resolver);
     // Add stripped document entries for nested prefab components
     const piNodeNames = buildPINodeNames(file.hierarchy, resolver);
-    const SKIP_TYPES = new Set(['Transform', 'RectTransform', 'CanvasRenderer', 'GameObject']);
+    const nestedRootRefs = buildNestedRootComponentRefMap(file.documents, file.hierarchy, resolver);
     for (const doc of file.documents) {
         if (!doc.stripped)
             continue;
@@ -293,11 +295,13 @@ function buildInternalRefMap(file, resolver) {
         const nodeName = piNodeNames.get(piFileId);
         if (!nodeName)
             continue;
-        let typeName = doc.typeName;
-        if (doc.typeId === 114 && doc.properties.m_Script?.guid) {
-            typeName = resolveStrippedScriptName(doc.properties.m_Script.guid, resolver);
+        const rootRef = nestedRootRefs.get(doc.fileId);
+        if (rootRef) {
+            map.set(doc.fileId, `${rootRef.path}:${rootRef.typeName}`);
+            continue;
         }
-        if (SKIP_TYPES.has(typeName))
+        const typeName = resolveDocumentComponentType(doc, resolver);
+        if (REF_SKIP_TYPES.has(typeName))
             continue;
         map.set(doc.fileId, `${nodeName}:${typeName}`);
     }
@@ -357,7 +361,7 @@ function buildPINodeNames(node, resolver) {
 /** Build a map from PI instanceId → stripped component refs (excluding Transform/RectTransform/CanvasRenderer/GO) */
 function buildStrippedComponentMap(file, resolver) {
     const map = new Map();
-    const SKIP_TYPES = new Set(['Transform', 'RectTransform', 'CanvasRenderer', 'GameObject']);
+    const nestedRootRefs = buildNestedRootComponentRefMap(file.documents, file.hierarchy, resolver);
     // Map stripped GO fileID → owning PrefabInstance fileID
     const strippedGoToPi = new Map();
     for (const doc of file.documents) {
@@ -371,11 +375,15 @@ function buildStrippedComponentMap(file, resolver) {
         if (doc.typeId === 1) {
             strippedGoToPi.set(doc.fileId, piFileId);
         }
-        let typeName = doc.typeName;
-        if (doc.typeId === 114 && doc.properties.m_Script?.guid) {
-            typeName = resolveStrippedScriptName(doc.properties.m_Script.guid, resolver);
+        const rootRef = nestedRootRefs.get(doc.fileId);
+        if (rootRef) {
+            if (!map.has(piFileId))
+                map.set(piFileId, []);
+            map.get(piFileId).push({ typeName: rootRef.typeName, fileId: doc.fileId, path: rootRef.path });
+            continue;
         }
-        if (SKIP_TYPES.has(typeName))
+        const typeName = resolveDocumentComponentType(doc, resolver);
+        if (REF_SKIP_TYPES.has(typeName))
             continue;
         if (!map.has(piFileId))
             map.set(piFileId, []);
@@ -398,17 +406,98 @@ function buildStrippedComponentMap(file, resolver) {
         const owningPiFileId = strippedGoToPi.get(goFileId);
         if (!owningPiFileId)
             continue;
-        let typeName = doc.typeName;
-        if (doc.typeId === 114 && doc.properties.m_Script?.guid) {
-            typeName = resolveStrippedScriptName(doc.properties.m_Script.guid, resolver);
-        }
-        if (SKIP_TYPES.has(typeName))
+        const typeName = resolveDocumentComponentType(doc, resolver);
+        if (REF_SKIP_TYPES.has(typeName))
             continue;
         if (!map.has(owningPiFileId))
             map.set(owningPiFileId, []);
         map.get(owningPiFileId).push({ typeName, fileId: doc.fileId });
     }
     return map;
+}
+/** Resolve a UnityDocument's component type, including MonoBehaviour script names when possible. */
+function resolveDocumentComponentType(doc, resolver) {
+    if (doc.typeId === 114 && doc.properties.m_Script?.guid) {
+        return resolveStrippedScriptName(doc.properties.m_Script.guid, resolver);
+    }
+    return doc.typeName;
+}
+/** Load a source prefab by GUID, with a small per-call cache. */
+function loadSourceFile(guid, resolver, cache) {
+    if (cache.has(guid))
+        return cache.get(guid);
+    const sourcePath = resolver.resolveFilePath(guid);
+    if (!sourcePath || !fs.existsSync(sourcePath)) {
+        cache.set(guid, null);
+        return null;
+    }
+    try {
+        const sourceFile = (0, unity_yaml_parser_1.parseUnityYaml)(fs.readFileSync(sourcePath, 'utf-8'));
+        cache.set(guid, sourceFile);
+        return sourceFile;
+    }
+    catch {
+        cache.set(guid, null);
+        return null;
+    }
+}
+/** Resolve a stripped component through its source prefab if it belongs to the source root GO. */
+function resolveSourceRootComponentType(strippedDoc, resolver, sourceCache) {
+    const sourceRef = strippedDoc.properties.m_CorrespondingSourceObject;
+    const sourceGuid = sourceRef?.guid;
+    const sourceFileId = sourceRef?.fileID;
+    if (!sourceGuid || sourceFileId === undefined || sourceFileId === null)
+        return null;
+    const sourceFile = loadSourceFile(String(sourceGuid), resolver, sourceCache);
+    if (!sourceFile?.hierarchy)
+        return null;
+    const sourceDoc = sourceFile.documents.find(doc => doc.fileId === String(sourceFileId));
+    if (!sourceDoc || sourceDoc.stripped)
+        return null;
+    const typeName = resolveDocumentComponentType(sourceDoc, resolver);
+    if (REF_SKIP_TYPES.has(typeName))
+        return null;
+    const goRef = sourceDoc.properties.m_GameObject;
+    if (!goRef || String(goRef.fileID) !== sourceFile.hierarchy.fileId)
+        return null;
+    return typeName;
+}
+/**
+ * Build stripped-doc refs for components on nested prefab roots.
+ *
+ * Unity may serialize stripped MonoBehaviours without enough fields to identify
+ * their script. The corresponding source prefab still has the real component
+ * attachment, so use it only when the source object is on that prefab's root GO.
+ */
+function buildNestedRootComponentRefMap(docs, hierarchy, resolver) {
+    const result = new Map();
+    if (!hierarchy || !resolver)
+        return result;
+    const piNodePaths = buildPINodeNames(hierarchy, resolver);
+    const sourceCache = new Map();
+    for (const doc of docs) {
+        if (!doc.stripped)
+            continue;
+        if (doc.typeId === 1 || doc.typeId === 4 || doc.typeId === 224 || doc.typeId === 1001)
+            continue;
+        const piRef = doc.properties.m_PrefabInstance;
+        if (!piRef)
+            continue;
+        const piFileId = String(piRef.fileID);
+        const path = piNodePaths.get(piFileId);
+        if (!path)
+            continue;
+        const typeName = resolveSourceRootComponentType(doc, resolver, sourceCache);
+        if (!typeName)
+            continue;
+        result.set(doc.fileId, {
+            typeName,
+            fileId: doc.fileId,
+            prefabInstanceId: piFileId,
+            path,
+        });
+    }
+    return result;
 }
 /** Resolve a script GUID to a class name, with fallback to MonoBehaviour_<guid8> */
 function resolveStrippedScriptName(guid, resolver) {
@@ -453,7 +542,7 @@ function writeNodeRefs(node, lines, resolver, strippedMap, parentPath = '') {
     if (node.nestedPrefab && strippedMap) {
         const strippedRefs = strippedMap.get(node.nestedPrefab.instanceId) || [];
         for (const ref of strippedRefs) {
-            lines.push(`${currentPath}:${ref.typeName} = ${ref.fileId}`);
+            lines.push(`${ref.path || currentPath}:${ref.typeName} = ${ref.fileId}`);
         }
     }
     // Nested prefab instance
@@ -716,6 +805,7 @@ function buildBaseDocMap(baseDocs, resolver, baseHierarchy) {
     if (baseHierarchy) {
         collectNestedNodeNames(baseHierarchy, piNodeNames, resolver);
     }
+    const nestedRootRefs = buildNestedRootComponentRefMap(baseDocs, baseHierarchy, resolver);
     // Index all docs by fileId
     const byId = new Map();
     for (const doc of baseDocs) {
@@ -758,13 +848,9 @@ function buildBaseDocMap(baseDocs, resolver, baseHierarchy) {
             continue;
         const piFileId = String(piRef.fileID);
         // Get GO name from the hierarchy's nested prefab node
-        const nodeName = piNodeNames.get(piFileId) || '';
-        let typeName = doc.typeName;
-        if (doc.typeId === 114 && doc.properties.m_Script?.guid) {
-            const resolved = resolver?.resolve(doc.properties.m_Script.guid);
-            if (resolved)
-                typeName = resolved;
-        }
+        const rootRef = nestedRootRefs.get(doc.fileId);
+        const nodeName = rootRef?.path || piNodeNames.get(piFileId) || '';
+        const typeName = rootRef?.typeName || resolveDocumentComponentType(doc, resolver);
         map.set(doc.fileId, {
             fileId: doc.fileId,
             typeId: doc.typeId,

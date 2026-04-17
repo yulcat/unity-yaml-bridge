@@ -11,6 +11,7 @@
  */
 
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import { parseUnityYaml } from './unity-yaml-parser';
 import { writeCompact } from './compact-writer';
@@ -29,6 +30,11 @@ if (fs.existsSync(projectPath)) {
 }
 
 const ISSUE3_SCRIPT_GUID = '11111111111111111111111111111111';
+const ISSUE5_BASE_GUID = '55555555555555555555555555555555';
+const ISSUE5_NESTED_GUID = '66666666666666666666666666666666';
+const ISSUE5_PARENT_SCRIPT_GUID = '77777777777777777777777777777777';
+const ISSUE5_SIMPLE_FSM_GUID = '88888888888888888888888888888888';
+const ISSUE5_BUTTON_GUID = '4e29b1a8efbd4b44bd927f3ae6b005da';
 
 function issue3RegularPrefabYaml(): string {
   return `%YAML 1.1
@@ -148,6 +154,192 @@ PrefabInstance:
 `;
 }
 
+function issue5NestedButtonSourceYaml(): string {
+  return `%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1 &1000
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 2000}
+  - component: {fileID: 3000}
+  - component: {fileID: 4000}
+  m_Layer: 0
+  m_Name: BTN_Start
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!224 &2000
+RectTransform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1000}
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &3000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1000}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: ${ISSUE5_SIMPLE_FSM_GUID}, type: 3}
+  m_Name:
+  m_EditorClassIdentifier:
+--- !u!114 &4000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1000}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: ${ISSUE5_BUTTON_GUID}, type: 3}
+  m_Name:
+  m_EditorClassIdentifier:
+`;
+}
+
+function issue5ParentPrefabYaml(): string {
+  return `%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1 &100
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 200}
+  - component: {fileID: 300}
+  m_Layer: 0
+  m_Name: MyPage
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!224 &200
+RectTransform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 100}
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Children:
+  - {fileID: 2100}
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &300
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 100}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: ${ISSUE5_PARENT_SCRIPT_GUID}, type: 3}
+  m_Name:
+  m_EditorClassIdentifier:
+  fsmRef: {fileID: 3010}
+  buttonRef: {fileID: 3020}
+--- !u!1001 &900
+PrefabInstance:
+  m_ObjectHideFlags: 0
+  serializedVersion: 2
+  m_Modification:
+    serializedVersion: 3
+    m_TransformParent: {fileID: 200}
+    m_Modifications:
+    - target: {fileID: 1000, guid: ${ISSUE5_NESTED_GUID}, type: 3}
+      propertyPath: m_Name
+      value: BTN_Start
+      objectReference: {fileID: 0}
+    m_RemovedComponents: []
+    m_RemovedGameObjects: []
+    m_AddedGameObjects: []
+    m_AddedComponents: []
+  m_SourcePrefab: {fileID: 100100000, guid: ${ISSUE5_NESTED_GUID}, type: 3}
+--- !u!224 &2100 stripped
+RectTransform:
+  m_CorrespondingSourceObject: {fileID: 2000, guid: ${ISSUE5_NESTED_GUID}, type: 3}
+  m_PrefabInstance: {fileID: 900}
+  m_PrefabAsset: {fileID: 0}
+--- !u!114 &3010 stripped
+MonoBehaviour:
+  m_CorrespondingSourceObject: {fileID: 3000, guid: ${ISSUE5_NESTED_GUID}, type: 3}
+  m_PrefabInstance: {fileID: 900}
+  m_PrefabAsset: {fileID: 0}
+--- !u!114 &3020 stripped
+MonoBehaviour:
+  m_CorrespondingSourceObject: {fileID: 4000, guid: ${ISSUE5_NESTED_GUID}, type: 3}
+  m_PrefabInstance: {fileID: 900}
+  m_PrefabAsset: {fileID: 0}
+`;
+}
+
+function issue5VariantParentYaml(): string {
+  return `%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1001 &9900
+PrefabInstance:
+  m_ObjectHideFlags: 0
+  serializedVersion: 2
+  m_Modification:
+    serializedVersion: 3
+    m_TransformParent: {fileID: 0}
+    m_Modifications:
+    - target: {fileID: 300, guid: ${ISSUE5_BASE_GUID}, type: 3}
+      propertyPath: fsmRef
+      value:
+      objectReference: {fileID: 3010}
+    - target: {fileID: 300, guid: ${ISSUE5_BASE_GUID}, type: 3}
+      propertyPath: buttonRef
+      value:
+      objectReference: {fileID: 3020}
+    m_RemovedComponents: []
+    m_RemovedGameObjects: []
+    m_AddedGameObjects: []
+    m_AddedComponents: []
+  m_SourcePrefab: {fileID: 100100000, guid: ${ISSUE5_BASE_GUID}, type: 3}
+`;
+}
+
+function makeIssue5Resolver(): GuidResolver {
+  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ubridge-issue5-'));
+  const nestedPath = path.join(projectRoot, 'BTN_Start.prefab');
+  const basePath = path.join(projectRoot, 'MyPage.prefab');
+  fs.writeFileSync(nestedPath, issue5NestedButtonSourceYaml());
+  fs.writeFileSync(basePath, issue5ParentPrefabYaml());
+
+  const issue5Resolver = new GuidResolver();
+  issue5Resolver.add(ISSUE5_SIMPLE_FSM_GUID, 'SimpleFSMController');
+  issue5Resolver.add(ISSUE5_PARENT_SCRIPT_GUID, 'PageController');
+  issue5Resolver.addAsset(ISSUE5_NESTED_GUID, nestedPath, 'BTN_Start');
+  issue5Resolver.addAsset(ISSUE5_BASE_GUID, basePath, 'MyPage');
+  return issue5Resolver;
+}
+
 let totalTests = 0;
 let passedTests = 0;
 
@@ -218,6 +410,79 @@ console.log('='.repeat(60));
     pass('Button/Button_Text:TextMeshProUGUI = 8027481463030904456 in REFS');
   } else {
     fail('Stripped component in REFS', `Got: ${tmproRef}`);
+  }
+}
+
+// ============================================================
+// Test 2b: Issue #5 — nested prefab root components resolve via source prefab
+// ============================================================
+
+console.log('\n' + '='.repeat(60));
+console.log('TEST: Issue #5 — nested prefab root components in regular parent REFS');
+console.log('='.repeat(60));
+
+{
+  const issue5Resolver = makeIssue5Resolver();
+  const ast = parseUnityYaml(issue5ParentPrefabYaml());
+  const compactStr = writeCompact(ast, { guidResolver: issue5Resolver });
+  const compact = readCompact(compactStr);
+
+  const fsmRef = compact.refs.get('MyPage/BTN_Start:SimpleFSMController')?.[0];
+  const buttonRef = compact.refs.get('MyPage/BTN_Start:Button')?.[0];
+
+  if (compactStr.includes('fsmRef = ->MyPage/BTN_Start:SimpleFSMController') && fsmRef === '3010') {
+    pass('Nested root SimpleFSMController writes path ref and REFS key');
+  } else {
+    fail('Nested root SimpleFSMController path ref', `REFS:${fsmRef || 'missing'}\n${compactStr}`);
+  }
+
+  if (compactStr.includes('buttonRef = ->MyPage/BTN_Start:Button') && buttonRef === '3020') {
+    pass('Nested root Button writes path ref and REFS key');
+  } else {
+    fail('Nested root Button path ref', `REFS:${buttonRef || 'missing'}\n${compactStr}`);
+  }
+
+  const merged = mergeCompactChanges(ast, compact);
+  const output = writeUnityYaml(merged);
+  if (output.includes('fsmRef: {fileID: 3010}') && output.includes('buttonRef: {fileID: 3020}')) {
+    pass('Nested root component path refs round-trip to original fileIDs');
+  } else {
+    fail('Nested root component write-back', output);
+  }
+}
+
+console.log('\n' + '='.repeat(60));
+console.log('TEST: Issue #5 — nested prefab root components in variant parent REFS');
+console.log('='.repeat(60));
+
+{
+  const issue5Resolver = makeIssue5Resolver();
+  const ast = parseUnityYaml(issue5VariantParentYaml());
+  const compactStr = writeCompact(ast, { guidResolver: issue5Resolver });
+  const compact = readCompact(compactStr);
+
+  const fsmRef = compact.refs.get('MyPage/BTN_Start:SimpleFSMController')?.[0];
+  const buttonRef = compact.refs.get('MyPage/BTN_Start:Button')?.[0];
+
+  if (compactStr.includes('fsmRef = ->MyPage/BTN_Start:SimpleFSMController') && fsmRef === '3010') {
+    pass('Variant nested root SimpleFSMController writes path ref and REFS key');
+  } else {
+    fail('Variant nested root SimpleFSMController path ref', `REFS:${fsmRef || 'missing'}\n${compactStr}`);
+  }
+
+  if (compactStr.includes('buttonRef = ->MyPage/BTN_Start:Button') && buttonRef === '3020') {
+    pass('Variant nested root Button writes path ref and REFS key');
+  } else {
+    fail('Variant nested root Button path ref', `REFS:${buttonRef || 'missing'}\n${compactStr}`);
+  }
+
+  const merged = mergeCompactChanges(ast, compact);
+  const output = writeUnityYaml(merged);
+  if (output.includes('objectReference: {fileID: 3010}') &&
+      output.includes('objectReference: {fileID: 3020}')) {
+    pass('Variant nested root component path refs round-trip to original fileIDs');
+  } else {
+    fail('Variant nested root component write-back', output);
   }
 }
 

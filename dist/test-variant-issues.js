@@ -90,6 +90,7 @@ const BASE_GUID = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 const NESTED_GUID = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
 const IMAGE_GUID = 'f70555f144d8491a825f0804e09c671c';
 const TMP_GUID = 'f4688fdb7df04437aeb418b961361dc5';
+const SIMPLE_FSM_GUID = 'cccccccccccccccccccccccccccccccc';
 function basePrefabYaml() {
     return `%YAML 1.1
 %TAG !u! tag:unity3d.com,2011:
@@ -234,6 +235,94 @@ MonoBehaviour:
   m_Name:
   m_EditorClassIdentifier:
   m_Color: {r: 1, g: 1, b: 1, a: 1}
+`;
+}
+function prefabWithComponentListOnlyMonoBehaviourYaml() {
+    return `%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1 &100
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 200}
+  - component: {fileID: 300}
+  - component: {fileID: 400}
+  m_Layer: 5
+  m_Name: PopupSize
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!224 &200
+RectTransform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 100}
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+  m_AnchorMin: {x: 0.5, y: 0.5}
+  m_AnchorMax: {x: 0.5, y: 0.5}
+  m_AnchoredPosition: {x: 0, y: 0}
+  m_SizeDelta: {x: 100, y: 100}
+  m_Pivot: {x: 0.5, y: 0.5}
+--- !u!225 &300
+CanvasGroup:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 100}
+  m_Enabled: 1
+  m_Alpha: 1
+  m_Interactable: 1
+  m_BlocksRaycasts: 1
+  m_IgnoreParentGroups: 0
+--- !u!114 &400
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: ${SIMPLE_FSM_GUID}, type: 3}
+  m_Name:
+  m_EditorClassIdentifier: Crumble.Feature::Crumble.UI.SimpleFSMController
+  _currentState: 1
+`;
+}
+function variantOfComponentListOnlyMonoBehaviourYaml() {
+    return `%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1001 &900
+PrefabInstance:
+  m_ObjectHideFlags: 0
+  serializedVersion: 2
+  m_Modification:
+    serializedVersion: 3
+    m_TransformParent: {fileID: 0}
+    m_Modifications:
+    - target: {fileID: 300, guid: ${BASE_GUID}, type: 3}
+      propertyPath: m_Alpha
+      value: 0.5
+      objectReference: {fileID: 0}
+    m_RemovedComponents: []
+    m_RemovedGameObjects: []
+    m_AddedGameObjects: []
+    m_AddedComponents: []
+  m_SourcePrefab: {fileID: 100100000, guid: ${BASE_GUID}, type: 3}
 `;
 }
 function variantWithAddedReferenceDocsYaml() {
@@ -682,6 +771,27 @@ PrefabInstance:
 `;
 }
 console.log('\n=== Variant issue regressions ===\n');
+{
+    console.log('Issue #4: STRUCTURE uses GameObject m_Component entries for prefab components');
+    const resolver = makeResolver([
+        { path: 'SimpleFSMController.cs', guid: SIMPLE_FSM_GUID, content: 'public class SimpleFSMController {}\n' },
+    ]);
+    const ast = (0, unity_yaml_parser_1.parseUnityYaml)(prefabWithComponentListOnlyMonoBehaviourYaml());
+    const compact = (0, compact_writer_1.writeCompact)(ast, { guidResolver: resolver });
+    const structure = getSection(compact, 'STRUCTURE');
+    assert(structure.includes('PopupSize [CanvasGroup, SimpleFSMController]'), 'STRUCTURE includes SimpleFSMController from the GameObject component list', structure);
+}
+{
+    console.log('\nIssue #4: variant STRUCTURE keeps base component-list MonoBehaviours');
+    const resolver = makeResolver([
+        { path: 'PopupBase.prefab', guid: BASE_GUID, content: prefabWithComponentListOnlyMonoBehaviourYaml() },
+        { path: 'SimpleFSMController.cs', guid: SIMPLE_FSM_GUID, content: 'public class SimpleFSMController {}\n' },
+    ]);
+    const ast = (0, unity_yaml_parser_1.parseUnityYaml)(variantOfComponentListOnlyMonoBehaviourYaml());
+    const compact = (0, compact_writer_1.writeCompact)(ast, { guidResolver: resolver });
+    const structure = getSection(compact, 'STRUCTURE');
+    assert(structure.includes('PopupSize [CanvasGroup*, SimpleFSMController]'), 'variant STRUCTURE includes SimpleFSMController from the base prefab component list', structure);
+}
 {
     console.log('Issue #1: root-level added GOs are kept in STRUCTURE');
     const resolver = makeResolver([

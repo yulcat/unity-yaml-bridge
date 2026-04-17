@@ -662,19 +662,59 @@ function buildHierarchy(docs, options) {
             transformParent.set(t.fileId, String(father.fileID));
         }
     }
-    // Build component map: GO fileId -> Component docs
+    // Build component map: GO fileId -> Component docs.
+    // The GameObject's m_Component list is the authoritative attachment list;
+    // m_GameObject back-references can be missing or unusable in some files.
     const goToComponents = new Map();
-    for (const doc of docs) {
-        if (doc.typeId === 1 || doc.typeId === 4 || doc.typeId === 224 || doc.typeId === 1001)
+    const goComponentIds = new Map();
+    function isAttachableComponent(doc) {
+        return doc.typeId !== 1 &&
+            doc.typeId !== 4 &&
+            doc.typeId !== 224 &&
+            doc.typeId !== 1001 &&
+            !doc.stripped;
+    }
+    function referencedComponentId(entry) {
+        const ref = entry?.component || entry;
+        if (!ref || ref.fileID === undefined || ref.fileID === null)
+            return undefined;
+        const id = String(ref.fileID);
+        return id === '0' ? undefined : id;
+    }
+    function addComponentToGameObject(goId, componentDoc) {
+        if (!goToComponents.has(goId))
+            goToComponents.set(goId, []);
+        if (!goComponentIds.has(goId))
+            goComponentIds.set(goId, new Set());
+        const seen = goComponentIds.get(goId);
+        if (seen.has(componentDoc.fileId))
+            return;
+        goToComponents.get(goId).push(componentDoc);
+        seen.add(componentDoc.fileId);
+    }
+    for (const go of gameObjects) {
+        const componentRefs = go.properties.m_Component;
+        if (!Array.isArray(componentRefs))
             continue;
-        if (doc.stripped)
+        for (const componentRef of componentRefs) {
+            const componentId = referencedComponentId(componentRef);
+            if (!componentId)
+                continue;
+            const componentDoc = byId.get(componentId);
+            if (!componentDoc || !isAttachableComponent(componentDoc))
+                continue;
+            addComponentToGameObject(go.fileId, componentDoc);
+        }
+    }
+    // Compatibility fallback for files where component docs exist but the owning
+    // GameObject does not list them in m_Component.
+    for (const doc of docs) {
+        if (!isAttachableComponent(doc))
             continue;
         const goRef = doc.properties.m_GameObject;
         if (goRef && goRef.fileID) {
             const goId = String(goRef.fileID);
-            if (!goToComponents.has(goId))
-                goToComponents.set(goId, []);
-            goToComponents.get(goId).push(doc);
+            addComponentToGameObject(goId, doc);
         }
     }
     // Build nodes recursively

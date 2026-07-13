@@ -986,6 +986,10 @@ interface BaseDocInfo {
 interface ResolvedBaseChain {
   file: UnityFile;
   inheritedModifiedTargets: Set<string>;
+  /** Intermediate variants ordered from the concrete base toward the leaf. */
+  variantLayers: { guid: string; file: UnityFile }[];
+  /** GUID aliases by which descendants may refer to concrete-base objects. */
+  sourceAliases: string[];
 }
 
 /** Follow variant-of-variant sources until a concrete hierarchy is found. */
@@ -1002,11 +1006,15 @@ function resolveBaseChain(
 
   try {
     const file = parseUnityYaml(fs.readFileSync(sourcePath, 'utf-8'));
-    if (file.hierarchy) {
-      return { file, inheritedModifiedTargets: new Set() };
+    if (file.type !== 'variant') {
+      return {
+        file,
+        inheritedModifiedTargets: new Set(),
+        variantLayers: [],
+        sourceAliases: [guid],
+      };
     }
 
-    if (file.type !== 'variant') return null;
     const mainInstance = file.prefabInstances.find(instance =>
       String(instance.transformParent.fileID) === '0'
     );
@@ -1018,6 +1026,8 @@ function resolveBaseChain(
     for (const modification of mainInstance.modifications) {
       parent.inheritedModifiedTargets.add(String(modification.target.fileID));
     }
+    parent.variantLayers.push({ guid, file });
+    parent.sourceAliases.push(guid);
     return parent;
   } catch {
     return null;
@@ -1575,6 +1585,23 @@ interface VariantRemovalOverlay {
   gameObjects: Set<string>;
 }
 
+function mergeRemovalOverlays(overlays: VariantRemovalOverlay[]): VariantRemovalOverlay {
+  const components = new Map<string, string[]>();
+  const gameObjects = new Set<string>();
+  for (const overlay of overlays) {
+    for (const [key, values] of overlay.components) {
+      if (!components.has(key)) components.set(key, []);
+      components.get(key)!.push(...values);
+    }
+    for (const key of overlay.gameObjects) gameObjects.add(key);
+  }
+  return { components, gameObjects };
+}
+
+function sourceAliasList(sourceGuid: string | string[]): string[] {
+  return Array.isArray(sourceGuid) ? sourceGuid : [sourceGuid];
+}
+
 function buildVariantRemovalOverlay(
   file: UnityFile,
   mainInstance: PrefabInstanceInfo | undefined,
@@ -1612,35 +1639,42 @@ function buildVariantRemovalOverlay(
 function appendAddedComponentNames(
   names: string[],
   instanceId: string,
-  sourceGuid: string,
+  sourceGuid: string | string[],
   targetFileId: string,
   overlay?: AddedComponentOverlay
 ): string[] {
-  const added = overlay?.byInstance.get(`${instanceId}:${targetFileId}`)
-    || overlay?.byUniqueSource.get(`${sourceGuid}:${targetFileId}`)
-    || [];
-  return names.concat(added);
+  const exact = overlay?.byInstance.get(`${instanceId}:${targetFileId}`) || [];
+  const inherited = sourceAliasList(sourceGuid).flatMap(guid =>
+    overlay?.byUniqueSource.get(`${guid}:${targetFileId}`) || []
+  );
+  return names.concat(exact, inherited.filter(name => !exact.includes(name)));
 }
 
 function appendRemovedComponentNames(
   names: string[],
-  sourceGuid: string,
+  sourceGuid: string | string[],
   targetFileId: string,
   overlay?: VariantRemovalOverlay
 ): string[] {
-  const removed = overlay?.components.get(`${sourceGuid}:${targetFileId}`) || [];
+  const removed = sourceAliasList(sourceGuid).flatMap(guid =>
+    overlay?.components.get(`${guid}:${targetFileId}`) || []
+  );
   const removedTypes = new Set(removed.map(name => name.substring(1)));
-  const kept = names.filter(name => !removedTypes.has(name.replace(/\*$/, '')));
+  const kept = names.filter(name =>
+    !removedTypes.has(name.replace(/^\+/, '').replace(/\*$/, ''))
+  );
   return kept.concat(removed);
 }
 
 function variantNodeName(
   name: string,
-  sourceGuid: string,
+  sourceGuid: string | string[],
   fileId: string,
   overlay?: VariantRemovalOverlay
 ): string {
-  return overlay?.gameObjects.has(`${sourceGuid}:${fileId}`) ? `-${name}` : name;
+  return sourceAliasList(sourceGuid).some(guid =>
+    overlay?.gameObjects.has(`${guid}:${fileId}`)
+  ) ? `-${name}` : name;
 }
 
 function writeAddedComponentDetails(
@@ -1675,6 +1709,65 @@ function writeAddedComponentRefs(
   }
 }
 
+interface LayerAddedObject {
+  node: GameObjectNode;
+  /** GUID used by descendant variants to refer to this added object. */
+  originGuid: string;
+}
+
+type AddedObjectsMap = Map<string, LayerAddedObject[]>;
+
+function collectAddedObjects(
+  file: UnityFile,
+  originGuid: string,
+  concreteBaseHierarchy: GameObjectNode | undefined,
+  result: AddedObjectsMap
+): void {
+  if (!file.hierarchy) return;
+  const mainInstance = file.prefabInstances.find(instance =>
+    String(instance.transformParent.fileID) === '0'
+  );
+  const parentGuid = mainInstance?.sourcePrefab.guid || '';
+  const roots = file.hierarchy.name === '__added_root__'
+    ? file.hierarchy.children
+    : [file.hierarchy];
+  const docById = new Map(file.documents.map(doc => [doc.fileId, doc]));
+
+  for (const root of roots) {
+    const transformDoc = file.documents.find(doc =>
+      !doc.stripped && (doc.typeId === 4 || doc.typeId === 224) &&
+      String(doc.properties.m_GameObject?.fileID) === root.fileId
+    );
+    if (!transformDoc) continue;
+
+    const fatherId = String(transformDoc.properties.m_Father?.fileID || '0');
+    const strippedParent = docById.get(fatherId);
+    let targetGuid = parentGuid;
+    let targetTransformId = '';
+    if (fatherId === '0') {
+      targetTransformId = concreteBaseHierarchy?.transform.fileId || '';
+    } else if (strippedParent?.stripped) {
+      const sourceRef = strippedParent.properties.m_CorrespondingSourceObject;
+      targetGuid = sourceRef?.guid || parentGuid;
+      targetTransformId = String(sourceRef?.fileID || '');
+    }
+    if (!targetTransformId) continue;
+
+    const key = `${targetGuid}:${targetTransformId}`;
+    if (!result.has(key)) result.set(key, []);
+    result.get(key)!.push({ node: root, originGuid });
+  }
+}
+
+function findAddedObjects(
+  map: AddedObjectsMap | undefined,
+  sourceGuids: string | string[],
+  transformId: string
+): LayerAddedObject[] {
+  if (!map) return [];
+  return sourceAliasList(sourceGuids).flatMap(guid => map.get(`${guid}:${transformId}`) || []);
+}
+
 /** Write variant compact format with resolved paths */
 function writeVariantCompact(file: UnityFile, lines: string[], resolver?: GuidResolver): string {
   const mainInstance = file.prefabInstances.find(pi =>
@@ -1693,6 +1786,8 @@ function writeVariantCompact(file: UnityFile, lines: string[], resolver?: GuidRe
   let basePrefabInstances: PrefabInstanceInfo[] = [];
   let nestedResolved: Map<string, string> | null = null;
   const inheritedModifiedTargets = new Set<string>();
+  let inheritedVariantLayers: { guid: string; file: UnityFile }[] = [];
+  let baseSourceAliases: string[] = [baseGuid];
 
   if (resolver && baseGuid) {
     const resolvedBase = resolveBaseChain(baseGuid, resolver);
@@ -1702,6 +1797,8 @@ function writeVariantCompact(file: UnityFile, lines: string[], resolver?: GuidRe
         for (const target of resolvedBase.inheritedModifiedTargets) {
           inheritedModifiedTargets.add(target);
         }
+        inheritedVariantLayers = resolvedBase.variantLayers;
+        baseSourceAliases = resolvedBase.sourceAliases;
         baseHierarchy = baseFile.hierarchy;
         basePrefabInstances = baseFile.prefabInstances;
         baseMap = buildBaseDocMap(baseFile.documents, resolver, baseHierarchy);
@@ -1735,46 +1832,55 @@ function writeVariantCompact(file: UnityFile, lines: string[], resolver?: GuidRe
     modifiedTargets.add(String(mod.target.fileID));
   }
 
-  const addedComponents = resolveAddedComponents(file, mainInstance, baseMap, resolver);
-  const addedComponentOverlay = buildAddedComponentOverlay(addedComponents, file.prefabInstances);
-  const removalOverlay = buildVariantRemovalOverlay(file, mainInstance, baseMap, resolver);
-
-  // Build added objects map: base transform fileID → [added GO nodes]
-  const addedObjectsMap = new Map<string, GameObjectNode[]>();
-  if (file.hierarchy) {
-    const addedRoots = file.hierarchy.name === '__added_root__'
-      ? file.hierarchy.children
-      : [file.hierarchy];
-
-    const docById = new Map<string, UnityDocument>();
-    for (const doc of file.documents) {
-      docById.set(doc.fileId, doc);
-    }
-
-    for (const addedRoot of addedRoots) {
-      // Find this GO's transform to determine attachment point
-      const transformDoc = file.documents.find(d =>
-        !d.stripped && (d.typeId === 4 || d.typeId === 224) &&
-        String(d.properties.m_GameObject?.fileID) === addedRoot.fileId
-      );
-      if (!transformDoc) continue;
-
-      const fatherId = String(transformDoc.properties.m_Father?.fileID);
-      const strippedParent = docById.get(fatherId);
-      let baseTransformId = '';
-      if (fatherId === '0') {
-        baseTransformId = baseHierarchy?.transform.fileId || '';
-      } else if (strippedParent?.stripped) {
-        baseTransformId = String(strippedParent.properties.m_CorrespondingSourceObject?.fileID);
+  const structuralEntries: { file: UnityFile; sourceMap: Map<string, BaseDocInfo> | null }[] = [];
+  let compositeSourceMap = baseMap ? new Map(baseMap) : null;
+  for (const layer of inheritedVariantLayers) {
+    structuralEntries.push({ file: layer.file, sourceMap: compositeSourceMap });
+    const layerMap = buildBaseDocMap(layer.file.documents, resolver, layer.file.hierarchy);
+    // Rebind locally serialized added components to their inherited target GO.
+    // Descendant variants remove these by the component's local fileID under
+    // the middle variant GUID, while the visible node still comes from a parent.
+    for (const instance of layer.file.prefabInstances) {
+      for (const added of instance.addedComponents) {
+        const componentId = String(added.addedComponent.fileID);
+        const targetId = String(added.targetGameObject.fileID);
+        const componentInfo = layerMap.get(componentId);
+        const targetInfo = compositeSourceMap?.get(targetId);
+        if (!componentInfo || !targetInfo) continue;
+        layerMap.set(componentId, {
+          ...componentInfo,
+          goName: targetInfo.goName,
+          goPath: targetInfo.goPath,
+          goFileId: targetInfo.typeId === 1 ? targetInfo.fileId : targetInfo.goFileId,
+        });
       }
-      if (!baseTransformId) continue;
-
-      if (!addedObjectsMap.has(baseTransformId)) {
-        addedObjectsMap.set(baseTransformId, []);
-      }
-      addedObjectsMap.get(baseTransformId)!.push(addedRoot);
     }
+    if (!compositeSourceMap) compositeSourceMap = new Map();
+    for (const [id, info] of layerMap) compositeSourceMap.set(id, info);
   }
+  structuralEntries.push({ file, sourceMap: compositeSourceMap });
+
+  const allInstances = structuralEntries.flatMap(entry => entry.file.prefabInstances);
+  const overlayAddedComponents = structuralEntries.flatMap(entry => {
+    const structuralMain = entry.file.prefabInstances.find(instance =>
+      String(instance.transformParent.fileID) === '0'
+    );
+    return resolveAddedComponents(entry.file, structuralMain, entry.sourceMap, resolver);
+  });
+  const addedComponentOverlay = buildAddedComponentOverlay(overlayAddedComponents, allInstances);
+  const addedComponents = resolveAddedComponents(file, mainInstance, compositeSourceMap, resolver);
+  const removalOverlay = mergeRemovalOverlays(structuralEntries.map(entry => {
+    const structuralMain = entry.file.prefabInstances.find(instance =>
+      String(instance.transformParent.fileID) === '0'
+    );
+    return buildVariantRemovalOverlay(entry.file, structuralMain, entry.sourceMap, resolver);
+  }));
+
+  const addedObjectsMap: AddedObjectsMap = new Map();
+  for (const layer of inheritedVariantLayers) {
+    collectAddedObjects(layer.file, layer.guid, baseHierarchy, addedObjectsMap);
+  }
+  collectAddedObjects(file, '', baseHierarchy, addedObjectsMap);
 
   // Structure section
   lines.push('--- STRUCTURE');
@@ -1790,7 +1896,7 @@ function writeVariantCompact(file: UnityFile, lines: string[], resolver?: GuidRe
     writeVariantStructureTree(
       baseHierarchy, lines, '', true, modifiedTargets, baseMap, resolver,
       variantExpansionCtx, addedObjectsMap, addedComponentOverlay, removalOverlay,
-      mainInstance.fileId, baseGuid
+      mainInstance.fileId, baseSourceAliases
     );
   } else {
     lines.push(`(variant of ${baseGuid || 'unknown'})`);
@@ -1913,11 +2019,11 @@ function writeVariantStructureTree(
   baseMap: Map<string, BaseDocInfo>,
   resolver?: GuidResolver,
   expansionCtx?: NestedExpansionContext,
-  addedObjectsMap?: Map<string, GameObjectNode[]>,
+  addedObjectsMap?: AddedObjectsMap,
   addedComponentOverlay?: AddedComponentOverlay,
   removalOverlay?: VariantRemovalOverlay,
   ownerInstanceId: string = '',
-  sourceGuid: string = ''
+  sourceGuid: string | string[] = ''
 ): void {
   const componentNames = appendRemovedComponentNames(
     appendAddedComponentNames(
@@ -1943,7 +2049,7 @@ function writeVariantStructureTree(
   }
 
   // Collect added objects for this node's transform
-  const addedNodes = addedObjectsMap?.get(node.transform.fileId) || [];
+  const addedNodes = findAddedObjects(addedObjectsMap, sourceGuid, node.transform.fileId);
   const totalChildren = node.children.length + addedNodes.length;
   let childIdx = 0;
 
@@ -2022,14 +2128,27 @@ function writeVariantStructureTree(
 
   // Write added objects with + prefix
   for (let i = 0; i < addedNodes.length; i++) {
-    const added = addedNodes[i];
+    const addedEntry = addedNodes[i];
+    const added = addedEntry.node;
     childIdx++;
     const isLast = childIdx === totalChildren;
     const connector = isLast ? '└─' : '├─';
     const childPrefix = isLast ? '   ' : '│  ';
 
-    const addedComps = buildComponentNames(added.components, resolver);
-    let childLine = `${prefix}${connector} +${added.name}`;
+    const addedComps = appendRemovedComponentNames(
+      appendAddedComponentNames(
+        buildComponentNames(added.components, resolver),
+        ownerInstanceId,
+        addedEntry.originGuid,
+        added.fileId,
+        addedComponentOverlay
+      ),
+      addedEntry.originGuid,
+      added.fileId,
+      removalOverlay
+    );
+    const displayedName = variantNodeName(added.name, addedEntry.originGuid, added.fileId, removalOverlay);
+    let childLine = `${prefix}${connector} ${displayedName.startsWith('-') ? displayedName : `+${displayedName}`}`;
 
     if (added.nestedPrefab) {
       const sourceName = resolveSourceName(added, resolver);
@@ -2039,8 +2158,13 @@ function writeVariantStructureTree(
     if (addedComps.length > 0) childLine += ` [${addedComps.join(', ')}]`;
     lines.push(childLine);
 
-    if (added.children.length > 0) {
-      writeAddedObjectsTree(added, lines, prefix + childPrefix, resolver);
+    if (added.children.length > 0 || findAddedObjects(
+      addedObjectsMap, addedEntry.originGuid, added.transform.fileId
+    ).length > 0) {
+      writeAddedObjectsTree(
+        added, lines, prefix + childPrefix, resolver, addedObjectsMap,
+        addedComponentOverlay, removalOverlay, ownerInstanceId, addedEntry.originGuid
+      );
     }
   }
 }
@@ -2050,16 +2174,41 @@ function writeAddedObjectsTree(
   node: GameObjectNode,
   lines: string[],
   prefix: string,
-  resolver?: GuidResolver
+  resolver?: GuidResolver,
+  addedObjectsMap?: AddedObjectsMap,
+  addedComponentOverlay?: AddedComponentOverlay,
+  removalOverlay?: VariantRemovalOverlay,
+  ownerInstanceId: string = '',
+  originGuid: string = ''
 ): void {
-  for (let i = 0; i < node.children.length; i++) {
-    const child = node.children[i];
-    const isLast = i === node.children.length - 1;
+  const inheritedChildren = findAddedObjects(addedObjectsMap, originGuid, node.transform.fileId);
+  const children: LayerAddedObject[] = [
+    ...node.children.map(child => ({ node: child, originGuid })),
+    ...inheritedChildren,
+  ];
+
+  for (let i = 0; i < children.length; i++) {
+    const childEntry = children[i];
+    const child = childEntry.node;
+    const childOriginGuid = childEntry.originGuid;
+    const isLast = i === children.length - 1;
     const connector = isLast ? '└─' : '├─';
     const childPrefix = isLast ? '   ' : '│  ';
 
-    const compNames = buildComponentNames(child.components, resolver);
-    let childLine = `${prefix}${connector} +${child.name}`;
+    const compNames = appendRemovedComponentNames(
+      appendAddedComponentNames(
+        buildComponentNames(child.components, resolver),
+        ownerInstanceId,
+        childOriginGuid,
+        child.fileId,
+        addedComponentOverlay
+      ),
+      childOriginGuid,
+      child.fileId,
+      removalOverlay
+    );
+    const displayedName = variantNodeName(child.name, childOriginGuid, child.fileId, removalOverlay);
+    let childLine = `${prefix}${connector} ${displayedName.startsWith('-') ? displayedName : `+${displayedName}`}`;
 
     if (child.nestedPrefab) {
       const sourceName = resolveSourceName(child, resolver);
@@ -2069,8 +2218,13 @@ function writeAddedObjectsTree(
     if (compNames.length > 0) childLine += ` [${compNames.join(', ')}]`;
     lines.push(childLine);
 
-    if (child.children.length > 0) {
-      writeAddedObjectsTree(child, lines, prefix + childPrefix, resolver);
+    if (child.children.length > 0 || findAddedObjects(
+      addedObjectsMap, childOriginGuid, child.transform.fileId
+    ).length > 0) {
+      writeAddedObjectsTree(
+        child, lines, prefix + childPrefix, resolver, addedObjectsMap,
+        addedComponentOverlay, removalOverlay, ownerInstanceId, childOriginGuid
+      );
     }
   }
 }

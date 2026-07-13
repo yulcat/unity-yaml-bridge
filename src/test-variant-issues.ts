@@ -874,6 +874,186 @@ PrefabInstance:
 `;
 }
 
+function structuralMiddleVariantYaml(): string {
+  return `%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1001 &900
+PrefabInstance:
+  m_ObjectHideFlags: 0
+  serializedVersion: 2
+  m_Modification:
+    serializedVersion: 3
+    m_TransformParent: {fileID: 0}
+    m_Modifications: []
+    m_RemovedComponents:
+    - {fileID: 500, guid: ${BASE_GUID}, type: 3}
+    m_RemovedGameObjects: []
+    m_AddedGameObjects:
+    - targetCorrespondingSourceObject: {fileID: 200, guid: ${BASE_GUID}, type: 3}
+      insertIndex: -1
+      addedObject: {fileID: 720}
+    m_AddedComponents:
+    - targetCorrespondingSourceObject: {fileID: 100, guid: ${BASE_GUID}, type: 3}
+      insertIndex: -1
+      addedObject: {fileID: 700}
+  m_SourcePrefab: {fileID: 100100000, guid: ${BASE_GUID}, type: 3}
+--- !u!1 &600 stripped
+GameObject:
+  m_CorrespondingSourceObject: {fileID: 100, guid: ${BASE_GUID}, type: 3}
+  m_PrefabInstance: {fileID: 900}
+  m_PrefabAsset: {fileID: 0}
+--- !u!4 &610 stripped
+Transform:
+  m_CorrespondingSourceObject: {fileID: 200, guid: ${BASE_GUID}, type: 3}
+  m_PrefabInstance: {fileID: 900}
+  m_PrefabAsset: {fileID: 0}
+--- !u!114 &700
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 600}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: ${SIMPLE_FSM_GUID}, type: 3}
+  m_Name:
+  m_EditorClassIdentifier:
+  label: inherited middle component
+--- !u!1 &710
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 720}
+  - component: {fileID: 730}
+  m_Layer: 0
+  m_Name: MiddleAdded
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &720
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 710}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Children: []
+  m_Father: {fileID: 610}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &730
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 710}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: ${SIMPLE_FSM_GUID}, type: 3}
+  m_Name:
+  m_EditorClassIdentifier:
+  label: component on middle-added object
+`;
+}
+
+function emptyLeafVariantYaml(removedMiddleObject: boolean = false): string {
+  const removed = removedMiddleObject
+    ? `\n    - {fileID: 710, guid: ${MIDDLE_VARIANT_GUID}, type: 3}`
+    : ' []';
+  return `%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1001 &950
+PrefabInstance:
+  m_ObjectHideFlags: 0
+  serializedVersion: 2
+  m_Modification:
+    serializedVersion: 3
+    m_TransformParent: {fileID: 0}
+    m_Modifications: []
+    m_RemovedComponents: []
+    m_RemovedGameObjects:${removed}
+    m_AddedGameObjects: []
+    m_AddedComponents: []
+  m_SourcePrefab: {fileID: 100100000, guid: ${MIDDLE_VARIANT_GUID}, type: 3}
+`;
+}
+
+function leafRemovingMiddleComponentYaml(): string {
+  return emptyLeafVariantYaml().replace(
+    '    m_RemovedComponents: []',
+    `    m_RemovedComponents:\n    - {fileID: 700, guid: ${MIDDLE_VARIANT_GUID}, type: 3}`
+  );
+}
+
+function leafExtendingMiddleObjectYaml(): string {
+  return `%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1001 &950
+PrefabInstance:
+  m_ObjectHideFlags: 0
+  serializedVersion: 2
+  m_Modification:
+    serializedVersion: 3
+    m_TransformParent: {fileID: 0}
+    m_Modifications: []
+    m_RemovedComponents:
+    - {fileID: 730, guid: ${MIDDLE_VARIANT_GUID}, type: 3}
+    m_RemovedGameObjects: []
+    m_AddedGameObjects:
+    - targetCorrespondingSourceObject: {fileID: 720, guid: ${MIDDLE_VARIANT_GUID}, type: 3}
+      insertIndex: -1
+      addedObject: {fileID: 970}
+    m_AddedComponents: []
+  m_SourcePrefab: {fileID: 100100000, guid: ${MIDDLE_VARIANT_GUID}, type: 3}
+--- !u!4 &965 stripped
+Transform:
+  m_CorrespondingSourceObject: {fileID: 720, guid: ${MIDDLE_VARIANT_GUID}, type: 3}
+  m_PrefabInstance: {fileID: 950}
+  m_PrefabAsset: {fileID: 0}
+--- !u!1 &971
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 970}
+  m_Layer: 0
+  m_Name: LeafAddedUnderMiddle
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &970
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 971}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Children: []
+  m_Father: {fileID: 965}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+`;
+}
+
 function regularPrefabWithNestedAddedComponentYaml(): string {
   return `%YAML 1.1
 %TAG !u! tag:unity3d.com,2011:
@@ -1169,6 +1349,45 @@ BaseRoot
   const modification = modifications.find((mod: any) => mod.propertyPath === 'm_Color.a');
   assert(String(modification?.value) === '0.75',
     'editing a chained variant writes to the leaf PrefabInstance', writeUnityYaml(merged));
+}
+
+{
+  console.log('\nLeaf variant inherits structural additions/removals from a middle variant');
+  const resolver = makeResolver([
+    { path: 'Base.prefab', guid: BASE_GUID, content: basePrefabYaml() },
+    { path: 'Middle.prefab', guid: MIDDLE_VARIANT_GUID, content: structuralMiddleVariantYaml() },
+    { path: 'SimpleFSMController.cs', guid: SIMPLE_FSM_GUID, content: 'public class SimpleFSMController {}\n' },
+  ]);
+  const ast = parseUnityYaml(emptyLeafVariantYaml());
+  const structure = getSection(writeCompact(ast, { guidResolver: resolver }), 'STRUCTURE');
+
+  assert(structure.includes('BaseRoot [+SimpleFSMController]'),
+    'middle-variant added component is visible in leaf STRUCTURE', structure);
+  assert(structure.includes('BaseChild [-Image]'),
+    'middle-variant removed component is visible in leaf STRUCTURE', structure);
+  assert(structure.includes('+MiddleAdded'),
+    'middle-variant added GameObject is visible in leaf STRUCTURE', structure);
+
+  const removingLeaf = parseUnityYaml(emptyLeafVariantYaml(true));
+  const removingStructure = getSection(writeCompact(removingLeaf, { guidResolver: resolver }), 'STRUCTURE');
+  assert(removingStructure.includes('-MiddleAdded'),
+    'leaf removal can target a GameObject added by the middle variant', removingStructure);
+
+  const componentRemovingLeaf = parseUnityYaml(leafRemovingMiddleComponentYaml());
+  const componentRemovingStructure = getSection(
+    writeCompact(componentRemovingLeaf, { guidResolver: resolver }), 'STRUCTURE'
+  );
+  assert(componentRemovingStructure.includes('BaseRoot [-SimpleFSMController]'),
+    'leaf removal can target a component added by the middle variant', componentRemovingStructure);
+
+  const extendingLeaf = parseUnityYaml(leafExtendingMiddleObjectYaml());
+  const extendingStructure = getSection(
+    writeCompact(extendingLeaf, { guidResolver: resolver }), 'STRUCTURE'
+  );
+  assert(extendingStructure.includes('+MiddleAdded [-SimpleFSMController]'),
+    'leaf removal applies to a component on a middle-added GameObject', extendingStructure);
+  assert(extendingStructure.includes('└─ +LeafAddedUnderMiddle'),
+    'leaf can add a child beneath a middle-added GameObject', extendingStructure);
 }
 
 {

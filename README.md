@@ -213,6 +213,7 @@ npx tsx src/test-compact-roundtrip.ts
 - ✅ Variant/nested-prefab added-component properties (`m_AddedComponents`)
 - ✅ Removed GameObject/component markers in variant structure
 - ✅ Variant-of-variant base hierarchy resolution
+- ✅ Intermediate-variant GameObject/component additions and removals
 - ✅ REFS section (self-contained files)
 - ✅ Auto fileID generation for new elements
 - ✅ Compact edit → YAML write-back

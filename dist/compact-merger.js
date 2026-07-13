@@ -48,8 +48,10 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.generateFileId = generateFileId;
 exports.mergeCompactChanges = mergeCompactChanges;
 const crypto = __importStar(require("crypto"));
+const types_1 = require("./types");
 const compact_reader_1 = require("./compact-reader");
 const path_utils_1 = require("./path-utils");
+const guid_resolver_1 = require("./guid-resolver");
 /** Deep clone a UnityFile for safe mutation, preserving non-enumerable markers (__flow, __multiLine) */
 function cloneUnityFile(file) {
     return deepClone(file);
@@ -96,10 +98,220 @@ function collectStructurePaths(node, parentPath, paths) {
     paths.add(currentPath);
     // Also add with each component
     for (const comp of node.components) {
-        paths.add(`${currentPath}:${comp}`);
+        const componentName = comp.replace(/^[+*-]/, '').replace(/\*$/, '');
+        paths.add(`${currentPath}:${componentName}`);
     }
     for (const child of node.children) {
         collectStructurePaths(child, currentPath, paths);
+    }
+}
+const NEW_COMPONENT_STRUCTURAL_FIELDS = new Set([
+    'm_CorrespondingSourceObject',
+    'm_PrefabInstance',
+    'm_PrefabAsset',
+    'm_GameObject',
+]);
+/** Generate a fileID that does not collide with any existing or newly created document. */
+function generateUniqueFileId(file) {
+    const used = new Set(file.documents.map(doc => doc.fileId));
+    let id = generateFileId();
+    while (used.has(id))
+        id = generateFileId();
+    return id;
+}
+function getSingleRef(refs, key) {
+    return (0, path_utils_1.findPathMapEntry)(refs, key, { allowAddedRootAliases: true })?.value[0];
+}
+function findScriptReference(section, componentType, resolver) {
+    const scriptProperty = section.properties.find(prop => prop.key === 'm_Script' && typeof prop.value === 'string');
+    if (scriptProperty && typeof scriptProperty.value === 'string') {
+        const parsed = (0, compact_reader_1.parseCompactValue)(scriptProperty.value);
+        if (parsed && typeof parsed === 'object' && parsed.guid)
+            return parsed;
+    }
+    const guid = /^[a-f0-9]{32}$/i.test(componentType)
+        ? componentType
+        : (resolver || new guid_resolver_1.GuidResolver()).resolveGuid(componentType);
+    if (!guid)
+        return undefined;
+    return { fileID: 11500000, guid, type: 3 };
+}
+function resolveNewComponentType(section, resolver) {
+    const nativeEntry = Object.entries(types_1.UNITY_TYPE_MAP).find(([id, name]) => name === section.componentType && ![1, 4, 114, 224, 1001].includes(Number(id)));
+    if (nativeEntry) {
+        return { typeId: Number(nativeEntry[0]), typeName: nativeEntry[1] };
+    }
+    const script = findScriptReference(section, section.componentType, resolver);
+    if (script)
+        return { typeId: 114, typeName: 'MonoBehaviour', script };
+    throw new Error(`Cannot determine Unity type for new component ${section.goPath}:${section.componentType}. ` +
+        'Use a built-in component name, pass a project GuidResolver, or add an m_Script reference.');
+}
+function createComponentProperties(typeId, gameObjectFileId, script) {
+    const properties = {
+        m_ObjectHideFlags: 0,
+        m_CorrespondingSourceObject: { fileID: 0 },
+        m_PrefabInstance: { fileID: 0 },
+        m_PrefabAsset: { fileID: 0 },
+        m_GameObject: { fileID: gameObjectFileId },
+    };
+    if (typeId === 114) {
+        properties.m_Enabled = 1;
+        properties.m_EditorHideFlags = 0;
+        properties.m_Script = script;
+        properties.m_Name = '';
+        properties.m_EditorClassIdentifier = '';
+    }
+    return properties;
+}
+function appendGameObjectComponent(goDoc, componentId) {
+    if (!Array.isArray(goDoc.properties.m_Component))
+        goDoc.properties.m_Component = [];
+    goDoc.properties.m_Component.push({ component: { fileID: componentId } });
+}
+function addHierarchyComponent(file, goPath, document, componentType, scriptGuid) {
+    if (!file.hierarchy)
+        return;
+    const goMap = new Map();
+    flattenHierarchy(file.hierarchy, goMap);
+    const node = goMap.get(goPath)?.[0];
+    if (!node)
+        return;
+    const info = {
+        typeName: document.typeName,
+        typeId: document.typeId,
+        fileId: document.fileId,
+        scriptGuid,
+        scriptName: document.typeId === 114 ? componentType : undefined,
+        properties: document.properties,
+        stripped: false,
+    };
+    node.components.push(info);
+}
+function findOrCreateStrippedGameObject(file, targetFileId, sourceGuid, ownerInstanceId) {
+    const existing = file.documents.find(doc => doc.typeId === 1 && doc.stripped &&
+        String(doc.properties.m_CorrespondingSourceObject?.fileID) === targetFileId &&
+        (doc.properties.m_CorrespondingSourceObject?.guid || '') === sourceGuid &&
+        String(doc.properties.m_PrefabInstance?.fileID) === ownerInstanceId);
+    if (existing)
+        return existing;
+    const document = {
+        typeId: 1,
+        typeName: 'GameObject',
+        fileId: generateUniqueFileId(file),
+        stripped: true,
+        properties: {
+            m_CorrespondingSourceObject: { fileID: targetFileId, guid: sourceGuid, type: 3 },
+            m_PrefabInstance: { fileID: ownerInstanceId },
+            m_PrefabAsset: { fileID: 0 },
+        },
+    };
+    file.documents.push(document);
+    return document;
+}
+function attachInheritedAddedComponent(file, compact, section, componentId, referencedGoId, existingStrippedGo) {
+    const ownerInstanceId = getSingleRef(compact.refs, `${section.goPath}:__instance`)
+        || (existingStrippedGo
+            ? String(existingStrippedGo.properties.m_PrefabInstance?.fileID || '')
+            : getSingleRef(compact.refs, '__instance'));
+    if (!ownerInstanceId) {
+        throw new Error(`Missing PrefabInstance owner for new component ${section.goPath}:${section.componentType}.`);
+    }
+    const sourceGuid = getSingleRef(compact.refs, `${section.goPath}:__source`)
+        || existingStrippedGo?.properties.m_CorrespondingSourceObject?.guid
+        || compact.baseGuid;
+    if (!sourceGuid) {
+        throw new Error(`Missing source GUID for inherited GameObject ${section.goPath}.`);
+    }
+    const ownerDoc = file.documents.find(doc => doc.typeId === 1001 && doc.fileId === ownerInstanceId);
+    const ownerInfo = file.prefabInstances.find(instance => instance.fileId === ownerInstanceId);
+    if (!ownerDoc || !ownerInfo) {
+        throw new Error(`PrefabInstance ${ownerInstanceId} not found for new component.`);
+    }
+    const targetGoId = existingStrippedGo
+        ? String(existingStrippedGo.properties.m_CorrespondingSourceObject?.fileID || '')
+        : referencedGoId;
+    if (!targetGoId) {
+        throw new Error(`Missing corresponding source GameObject for ${section.goPath}.`);
+    }
+    const strippedGo = existingStrippedGo
+        || findOrCreateStrippedGameObject(file, targetGoId, sourceGuid, ownerInstanceId);
+    const modification = ownerDoc.properties.m_Modification || (ownerDoc.properties.m_Modification = {});
+    if (!Array.isArray(modification.m_AddedComponents))
+        modification.m_AddedComponents = [];
+    modification.m_AddedComponents.push({
+        targetCorrespondingSourceObject: { fileID: targetGoId, guid: sourceGuid, type: 3 },
+        insertIndex: -1,
+        addedObject: { fileID: componentId },
+    });
+    ownerInfo.addedComponents.push({
+        targetGameObject: { fileID: targetGoId, guid: sourceGuid, type: 3 },
+        insertIndex: -1,
+        addedComponent: { fileID: componentId },
+    });
+    return strippedGo.fileId;
+}
+/** Allocate all requested components before applying properties so cross-references are order-independent. */
+function createAddedComponents(file, compact, structurePaths, options) {
+    const existingDocumentIds = new Set(file.documents.map(doc => doc.fileId));
+    const addedSections = compact.sections.filter(section => {
+        if (!section.isAdded)
+            return false;
+        const key = section.componentType
+            ? `${section.goPath}:${section.componentType}`
+            : section.goPath;
+        const existingId = getSingleRef(compact.refs, key);
+        return !existingId || !existingDocumentIds.has(existingId);
+    });
+    if (addedSections.length === 0)
+        return;
+    const pending = [];
+    const docMap = new Map(file.documents.map(doc => [doc.fileId, doc]));
+    const createdKeys = new Set();
+    for (const section of addedSections) {
+        if (!section.componentType) {
+            throw new Error(`New component section must include a component type: ${section.goPath}`);
+        }
+        const componentKey = `${section.goPath}:${section.componentType}`;
+        if (!(0, path_utils_1.findPathSetEntry)(structurePaths, componentKey, { allowAddedRootAliases: true })) {
+            throw new Error(`New component ${componentKey} must also be listed in STRUCTURE with a + marker.`);
+        }
+        if (createdKeys.has(componentKey) || getSingleRef(compact.refs, componentKey)) {
+            throw new Error(`Component already exists or is duplicated: ${componentKey}`);
+        }
+        const targetGoId = getSingleRef(compact.refs, section.goPath);
+        if (!targetGoId)
+            throw new Error(`GameObject not found for new component: ${section.goPath}`);
+        const type = resolveNewComponentType(section, options.guidResolver);
+        const componentId = generateUniqueFileId(file);
+        let owningGoId = targetGoId;
+        const localGoDoc = docMap.get(targetGoId);
+        if (localGoDoc && localGoDoc.typeId === 1 && !localGoDoc.stripped) {
+            appendGameObjectComponent(localGoDoc, componentId);
+        }
+        else if ((localGoDoc && localGoDoc.typeId === 1 && localGoDoc.stripped)
+            || compact.type === 'variant') {
+            owningGoId = attachInheritedAddedComponent(file, compact, section, componentId, targetGoId, localGoDoc?.typeId === 1 && localGoDoc.stripped ? localGoDoc : undefined);
+        }
+        else {
+            throw new Error(`GameObject not found for new component: ${section.goPath}`);
+        }
+        const document = {
+            typeId: type.typeId,
+            typeName: type.typeName,
+            fileId: componentId,
+            stripped: false,
+            properties: createComponentProperties(type.typeId, owningGoId, type.script),
+        };
+        file.documents.push(document);
+        docMap.set(componentId, document);
+        compact.refs.set(componentKey, [componentId]);
+        createdKeys.add(componentKey);
+        addHierarchyComponent(file, section.goPath, document, section.componentType, type.script?.guid);
+        pending.push({ section, document });
+    }
+    for (const { section, document } of pending) {
+        applyComponentProperties(section.properties.filter(prop => !NEW_COMPONENT_STRUCTURAL_FIELDS.has(prop.key)), document, compact.refs, structurePaths, { allowAddedRootAliases: true });
     }
 }
 /**
@@ -107,7 +319,7 @@ function collectStructurePaths(node, parentPath, paths) {
  * Returns a new UnityFile with the changes applied.
  * The original is not modified.
  */
-function mergeCompactChanges(original, compact) {
+function mergeCompactChanges(original, compact, options = {}) {
     const result = cloneUnityFile(original);
     // Collect all GO paths from STRUCTURE tree — used to distinguish
     // valid new references (GO exists in hierarchy) from typos
@@ -115,13 +327,35 @@ function mergeCompactChanges(original, compact) {
     if (compact.structure) {
         collectStructurePaths(compact.structure, '', structurePaths);
     }
+    createAddedComponents(result, compact, structurePaths, options);
     if (compact.type === 'variant') {
         mergeVariantSections(result, compact.sections, compact.refs, structurePaths);
     }
     else {
         mergePrefabSections(result, compact.sections, compact.refs, structurePaths);
     }
+    syncPrefabInstanceState(result);
     return result;
+}
+/** Keep the parsed PrefabInstance view consistent with the mutated YAML documents. */
+function syncPrefabInstanceState(file) {
+    const instanceDocs = new Map(file.documents.filter(doc => doc.typeId === 1001).map(doc => [doc.fileId, doc]));
+    for (const instance of file.prefabInstances) {
+        const modification = instanceDocs.get(instance.fileId)?.properties.m_Modification;
+        if (!modification)
+            continue;
+        instance.modifications = (modification.m_Modifications || []).map((entry) => ({
+            target: entry.target,
+            propertyPath: entry.propertyPath || '',
+            value: entry.value ?? '',
+            objectReference: entry.objectReference || { fileID: 0 },
+        }));
+        instance.addedComponents = (modification.m_AddedComponents || []).map((entry) => ({
+            targetGameObject: entry.targetCorrespondingSourceObject,
+            addedComponent: entry.addedObject,
+            insertIndex: entry.insertIndex ?? -1,
+        }));
+    }
 }
 // ============================================================
 // Prefab merging — match sections by REFS fileID or GO name + component type
@@ -594,6 +828,7 @@ function mergeVariantSections(file, sections, refs, structurePaths) {
         // Resolve target fileID from REFS or section header
         let targetFileId;
         let ownerInstanceId;
+        let targetSourceGuid;
         let refsOccurrenceIndex = 0;
         if (section.goPath.startsWith('&')) {
             // Legacy format: [&fileID]
@@ -611,6 +846,7 @@ function mergeVariantSections(file, sections, refs, structurePaths) {
                 targetFileId = refsEntry.value[idx];
                 refsIndexMap.set(refsEntry.key, idx + 1);
                 ownerInstanceId = getRefsValue(refs, `${refsEntry.key}:__instance`, pathLookupOptions);
+                targetSourceGuid = getRefsValue(refs, `${refsEntry.key}:__source`, pathLookupOptions);
             }
         }
         if (!targetFileId)
@@ -659,9 +895,39 @@ function mergeVariantSections(file, sections, refs, structurePaths) {
                     }
                 }
             }
-            // Note: adding NEW modifications would require generating proper target refs.
-            // For Phase 1, we only support editing existing modifications.
+            else {
+                let parsed = (0, compact_reader_1.parseCompactValue)(prop.value);
+                parsed = resolvePathReference(parsed, refs, structurePaths, pathLookupOptions);
+                const ownerInfo = file.prefabInstances.find(instance => instance.fileId === owner.instanceFileId);
+                const sourceGuid = targetSourceGuid
+                    || owner.modifications.find(mod => modificationTargetsFileId(mod, targetFileId))?.target?.guid
+                    || ownerInfo?.sourcePrefab.guid
+                    || mainInstance.sourcePrefab.guid
+                    || compactBaseGuid(file);
+                const target = { fileID: targetFileId };
+                if (sourceGuid) {
+                    target.guid = sourceGuid;
+                    target.type = 3;
+                }
+                const modification = {
+                    target,
+                    propertyPath: prop.key,
+                    value: '',
+                    objectReference: { fileID: 0 },
+                };
+                if (parsed && typeof parsed === 'object' && 'fileID' in parsed) {
+                    modification.objectReference = parsed;
+                }
+                else {
+                    modification.value = String(parsed ?? '');
+                }
+                owner.modifications.push(modification);
+            }
         }
     }
+}
+/** Best-effort source GUID fallback for legacy compact files without :__source metadata. */
+function compactBaseGuid(file) {
+    return file.variantSource?.guid;
 }
 //# sourceMappingURL=compact-merger.js.map

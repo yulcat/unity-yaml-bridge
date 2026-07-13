@@ -4,7 +4,7 @@
  *
  * Usage:
  *   ubridge parse <file.prefab> [--project <path>] [--verbose]
- *   ubridge write <file.ubridge> --yaml <original.prefab> [-o <output.prefab>]
+ *   ubridge write <file.ubridge> --yaml <original.prefab> [--project <path>] [-o <output.prefab>]
  */
 
 import * as fs from 'fs';
@@ -36,6 +36,7 @@ Usage:
 
     Options:
       --yaml <file>      Original Unity YAML file (required)
+      --project <path>   Unity project root for new script component resolution
       -o <file>          Output file (default: stdout)
 
 Examples:
@@ -133,7 +134,16 @@ function cmdWrite(args: string[], flags: Map<string, string>): void {
   const ast = parseUnityYaml(yamlContent);
 
   // Merge and write
-  const merged = mergeCompactChanges(ast, compactFile);
+  let resolver: GuidResolver | undefined;
+  const projectPath = flags.get('--project');
+  if (projectPath) {
+    const resolved = path.resolve(projectPath);
+    if (!fs.existsSync(resolved)) die(`Project path not found: ${resolved}`);
+    resolver = new GuidResolver();
+    resolver.scanProject(resolved);
+  }
+
+  const merged = mergeCompactChanges(ast, compactFile, { guidResolver: resolver });
   const output = writeUnityYaml(merged);
 
   // Output

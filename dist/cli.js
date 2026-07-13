@@ -5,7 +5,7 @@
  *
  * Usage:
  *   ubridge parse <file.prefab> [--project <path>] [--verbose]
- *   ubridge write <file.ubridge> --yaml <original.prefab> [-o <output.prefab>]
+ *   ubridge write <file.ubridge> --yaml <original.prefab> [--project <path>] [-o <output.prefab>]
  */
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
@@ -69,6 +69,7 @@ Usage:
 
     Options:
       --yaml <file>      Original Unity YAML file (required)
+      --project <path>   Unity project root for new script component resolution
       -o <file>          Output file (default: stdout)
 
 Examples:
@@ -160,7 +161,16 @@ function cmdWrite(args, flags) {
     const compactFile = (0, compact_reader_1.readCompact)(ubridgeContent);
     const ast = (0, unity_yaml_parser_1.parseUnityYaml)(yamlContent);
     // Merge and write
-    const merged = (0, compact_merger_1.mergeCompactChanges)(ast, compactFile);
+    let resolver;
+    const projectPath = flags.get('--project');
+    if (projectPath) {
+        const resolved = path.resolve(projectPath);
+        if (!fs.existsSync(resolved))
+            die(`Project path not found: ${resolved}`);
+        resolver = new guid_resolver_1.GuidResolver();
+        resolver.scanProject(resolved);
+    }
+    const merged = (0, compact_merger_1.mergeCompactChanges)(ast, compactFile, { guidResolver: resolver });
     const output = (0, unity_yaml_writer_1.writeUnityYaml)(merged);
     // Output
     const outputPath = flags.get('-o');

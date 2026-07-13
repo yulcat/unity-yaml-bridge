@@ -825,6 +825,7 @@ function resolveBaseChain(guid, resolver, visited = new Set()) {
         const file = (0, unity_yaml_parser_1.parseUnityYaml)(fs.readFileSync(sourcePath, 'utf-8'));
         if (file.type !== 'variant') {
             return {
+                guid,
                 file,
                 inheritedModifiedTargets: new Set(),
                 variantLayers: [],
@@ -854,7 +855,7 @@ function resolveBaseChain(guid, resolver, visited = new Set()) {
  * This allows us to resolve variant modification targets to readable paths.
  * Also includes stripped docs (nested prefab objects with explicit entries).
  */
-function buildBaseDocMap(baseDocs, resolver, baseHierarchy) {
+function buildBaseDocMap(baseDocs, resolver, baseHierarchy, defaultSourceGuid = '') {
     const map = new Map();
     const goPaths = new Map();
     if (baseHierarchy)
@@ -894,6 +895,7 @@ function buildBaseDocMap(baseDocs, resolver, baseHierarchy) {
             fileId: doc.fileId,
             typeId: doc.typeId,
             typeName,
+            sourceGuid: defaultSourceGuid,
             goName: doc.typeId === 1 ? (doc.properties.m_Name || 'Unnamed') : goName,
             goPath: doc.typeId === 1
                 ? (goPaths.get(doc.fileId) || doc.properties.m_Name || 'Unnamed')
@@ -917,6 +919,7 @@ function buildBaseDocMap(baseDocs, resolver, baseHierarchy) {
             fileId: doc.fileId,
             typeId: doc.typeId,
             typeName,
+            sourceGuid: doc.properties.m_CorrespondingSourceObject?.guid || defaultSourceGuid,
             goName: nodeName,
             goPath: nodeName,
             goFileId: '',
@@ -1245,7 +1248,6 @@ function resolveTargetKey(targetFileId, baseMap) {
     if (!info)
         return null;
     if (info.typeId === 1) {
-        // GameObject — just the name
         return info.goName;
     }
     if (info.typeId === 4 || info.typeId === 224) {
@@ -1254,6 +1256,11 @@ function resolveTargetKey(targetFileId, baseMap) {
     }
     // Component
     return `${info.goName}:${info.typeName}`;
+}
+/** Resolve a base target with its full hierarchy path for unambiguous REFS. */
+function resolveTargetPathKey(info) {
+    const goPath = info.goPath || info.goName;
+    return info.typeId === 1 ? goPath : `${goPath}:${info.typeName}`;
 }
 /** Resolve serialized m_AddedComponents entries to their real local documents. */
 function resolveAddedComponents(file, mainInstance, mainSourceMap, resolver) {
@@ -1462,7 +1469,7 @@ function writeVariantCompact(file, lines, resolver) {
                 baseSourceAliases = resolvedBase.sourceAliases;
                 baseHierarchy = baseFile.hierarchy;
                 basePrefabInstances = baseFile.prefabInstances;
-                baseMap = buildBaseDocMap(baseFile.documents, resolver, baseHierarchy);
+                baseMap = buildBaseDocMap(baseFile.documents, resolver, baseHierarchy, resolvedBase.guid);
                 // Resolve nested prefab targets that aren't in baseMap
                 const unresolvedTargets = new Map();
                 for (const mod of mainInstance.modifications) {
@@ -1494,7 +1501,7 @@ function writeVariantCompact(file, lines, resolver) {
     let compositeSourceMap = baseMap ? new Map(baseMap) : null;
     for (const layer of inheritedVariantLayers) {
         structuralEntries.push({ file: layer.file, sourceMap: compositeSourceMap });
-        const layerMap = buildBaseDocMap(layer.file.documents, resolver, layer.file.hierarchy);
+        const layerMap = buildBaseDocMap(layer.file.documents, resolver, layer.file.hierarchy, layer.guid);
         // Rebind locally serialized added components to their inherited target GO.
         // Descendant variants remove these by the component's local fileID under
         // the middle variant GUID, while the visible node still comes from a parent.
@@ -1580,6 +1587,7 @@ function writeVariantCompact(file, lines, resolver) {
     lines.push('--- REFS');
     lines.push(`__instance = ${mainInstance.fileId}`);
     writeVariantRefs(mainInstance, lines, baseMap, nestedResolved);
+    writeVariantBaseRefs(baseMap, lines, mainInstance.fileId);
     writeNestedPrefabInstanceRefs(file.prefabInstances, mainInstance, lines, resolver);
     writeAddedComponentRefs(addedComponents, lines);
     // Write refs for added objects
@@ -1611,7 +1619,7 @@ function buildSourcePrefabMap(instance, resolver) {
         return null;
     try {
         const sourceFile = (0, unity_yaml_parser_1.parseUnityYaml)(fs.readFileSync(sourcePath, 'utf-8'));
-        return buildBaseDocMap(sourceFile.documents, resolver, sourceFile.hierarchy);
+        return buildBaseDocMap(sourceFile.documents, resolver, sourceFile.hierarchy, sourceGuid);
     }
     catch {
         return null;
@@ -1880,6 +1888,44 @@ function writeVariantRefs(instance, lines, baseMap, nestedResolved, preferNameOv
         const refKey = resolveVariantReferenceKey(refId, baseMap, nestedResolved);
         if (refKey) {
             emitRef(refKey, refId, false);
+        }
+    }
+}
+/**
+ * Emit every resolvable base target, not only targets that already have overrides.
+ * This lets compact edits create a brand-new override or add a component without
+ * requiring the user to discover raw Unity fileIDs/GUIDs.
+ */
+function writeVariantBaseRefs(baseMap, lines, ownerInstanceId) {
+    if (!baseMap)
+        return;
+    const refsStart = lines.lastIndexOf('--- REFS');
+    const existing = new Set(lines.slice(refsStart + 1));
+    const keyCounts = new Map();
+    for (const info of baseMap.values()) {
+        const key = resolveTargetPathKey(info);
+        keyCounts.set(key, (keyCounts.get(key) || 0) + 1);
+    }
+    for (const info of baseMap.values()) {
+        const key = resolveTargetPathKey(info);
+        if (keyCounts.get(key) !== 1)
+            continue;
+        const refLine = `${key} = ${info.fileId}`;
+        if (!existing.has(refLine)) {
+            lines.push(refLine);
+            existing.add(refLine);
+        }
+        const ownerLine = `${key}:__instance = ${ownerInstanceId}`;
+        if (!existing.has(ownerLine)) {
+            lines.push(ownerLine);
+            existing.add(ownerLine);
+        }
+        if (info.sourceGuid) {
+            const sourceLine = `${key}:__source = ${info.sourceGuid}`;
+            if (!existing.has(sourceLine)) {
+                lines.push(sourceLine);
+                existing.add(sourceLine);
+            }
         }
     }
 }

@@ -12,6 +12,11 @@
  */
 import { UnityFile } from './types';
 import { CompactFile } from './compact-reader';
+import { GuidResolver } from './guid-resolver';
+export interface CompactMergeOptions {
+    /** Project GUID resolver, required to add a custom script by class name. */
+    guidResolver?: GuidResolver;
+}
 /**
  * Generate a random int64 fileID like Unity does.
  * Uses crypto.randomBytes for proper randomness.
@@ -23,5 +28,5 @@ export declare function generateFileId(): string;
  * Returns a new UnityFile with the changes applied.
  * The original is not modified.
  */
-export declare function mergeCompactChanges(original: UnityFile, compact: CompactFile): UnityFile;
+export declare function mergeCompactChanges(original: UnityFile, compact: CompactFile, options?: CompactMergeOptions): UnityFile;
 //# sourceMappingURL=compact-merger.d.ts.map

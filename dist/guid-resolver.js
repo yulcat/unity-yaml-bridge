@@ -165,6 +165,14 @@ class GuidResolver {
     resolve(guid) {
         return this.map.get(guid);
     }
+    /** Resolve a human-readable script/component name back to its GUID. */
+    resolveGuid(name) {
+        for (const [guid, resolvedName] of this.map) {
+            if (resolvedName === name)
+                return guid;
+        }
+        return undefined;
+    }
     /** Resolve a GUID to the asset file path */
     resolveFilePath(guid) {
         return this.assetPaths.get(guid);

@@ -238,6 +238,48 @@ When an AI adds a new GameObject or component in STRUCTURE/DETAILS that has no m
 - The generated ID is always a positive 64-bit integer
 - If the file is re-exported, the new REFS entries will include the generated IDs
 
+### Adding a Component
+
+Add the component with a `+` marker in STRUCTURE and use a `[+ Path:Type]`
+DETAILS header. Native Unity component names are recognized directly:
+
+```
+--- STRUCTURE
+Root [+BoxCollider]
+--- DETAILS
+[+ Root:BoxCollider]
+m_Enabled = 1
+m_Size = (1, 2, 3)
+```
+
+For a scripted component, pass `--project` to `ubridge write` so the class name
+can be mapped back to its script GUID. An explicit script reference also works:
+
+```
+[+ Root:HealthController]
+m_Script = {11500000, 0123456789abcdef0123456789abcdef, 3}
+health = 100
+```
+
+The bridge creates the component document and updates `m_Component`. On an
+inherited variant object it also creates/reuses the stripped GameObject document
+and appends the correct `m_AddedComponents` entry.
+
+### Adding a Variant Override
+
+Add a property to an existing DETAILS section, or add a new section for any
+component listed in REFS:
+
+```
+[Root:SphereCollider]
+m_Radius = 2.5
+```
+
+Variant REFS include untouched base targets plus internal `:__source` and
+`:__instance` ownership metadata. AI agents should still leave REFS unchanged;
+the bridge uses this metadata to append the new `m_Modifications` entry to the
+correct PrefabInstance.
+
 ## Prefab Variant Format
 
 For variants, the file shows the full inherited tree from the base prefab with override markers.

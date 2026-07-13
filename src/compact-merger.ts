@@ -12,9 +12,15 @@
  */
 
 import * as crypto from 'crypto';
-import { UnityFile, GameObjectNode, UnityDocument, UNITY_TYPE_MAP } from './types';
+import { UnityFile, GameObjectNode, UnityDocument, UNITY_TYPE_MAP, ComponentInfo } from './types';
 import { CompactFile, CompactSection, CompactProperty, parseCompactValue } from './compact-reader';
 import { PathLookupOptions, findPathMapEntry, findPathSetEntry } from './path-utils';
+import { GuidResolver } from './guid-resolver';
+
+export interface CompactMergeOptions {
+  /** Project GUID resolver, required to add a custom script by class name. */
+  guidResolver?: GuidResolver;
+}
 
 /** Deep clone a UnityFile for safe mutation, preserving non-enumerable markers (__flow, __multiLine) */
 function cloneUnityFile(file: UnityFile): UnityFile {
@@ -63,10 +69,282 @@ function collectStructurePaths(node: import('./compact-reader').CompactStructure
   paths.add(currentPath);
   // Also add with each component
   for (const comp of node.components) {
-    paths.add(`${currentPath}:${comp}`);
+    const componentName = comp.replace(/^[+*-]/, '').replace(/\*$/, '');
+    paths.add(`${currentPath}:${componentName}`);
   }
   for (const child of node.children) {
     collectStructurePaths(child, currentPath, paths);
+  }
+}
+
+interface PendingAddedComponent {
+  section: CompactSection;
+  document: UnityDocument;
+}
+
+const NEW_COMPONENT_STRUCTURAL_FIELDS = new Set([
+  'm_CorrespondingSourceObject',
+  'm_PrefabInstance',
+  'm_PrefabAsset',
+  'm_GameObject',
+]);
+
+/** Generate a fileID that does not collide with any existing or newly created document. */
+function generateUniqueFileId(file: UnityFile): string {
+  const used = new Set(file.documents.map(doc => doc.fileId));
+  let id = generateFileId();
+  while (used.has(id)) id = generateFileId();
+  return id;
+}
+
+function getSingleRef(refs: Map<string, string[]>, key: string): string | undefined {
+  return findPathMapEntry(refs, key, { allowAddedRootAliases: true })?.value[0];
+}
+
+function findScriptReference(
+  section: CompactSection,
+  componentType: string,
+  resolver?: GuidResolver
+): Record<string, any> | undefined {
+  const scriptProperty = section.properties.find(prop =>
+    prop.key === 'm_Script' && typeof prop.value === 'string'
+  );
+  if (scriptProperty && typeof scriptProperty.value === 'string') {
+    const parsed = parseCompactValue(scriptProperty.value);
+    if (parsed && typeof parsed === 'object' && parsed.guid) return parsed;
+  }
+
+  const guid = /^[a-f0-9]{32}$/i.test(componentType)
+    ? componentType
+    : (resolver || new GuidResolver()).resolveGuid(componentType);
+  if (!guid) return undefined;
+  return { fileID: 11500000, guid, type: 3 };
+}
+
+function resolveNewComponentType(
+  section: CompactSection,
+  resolver?: GuidResolver
+): { typeId: number; typeName: string; script?: Record<string, any> } {
+  const nativeEntry = Object.entries(UNITY_TYPE_MAP).find(([id, name]) =>
+    name === section.componentType && ![1, 4, 114, 224, 1001].includes(Number(id))
+  );
+  if (nativeEntry) {
+    return { typeId: Number(nativeEntry[0]), typeName: nativeEntry[1] };
+  }
+
+  const script = findScriptReference(section, section.componentType, resolver);
+  if (script) return { typeId: 114, typeName: 'MonoBehaviour', script };
+
+  throw new Error(
+    `Cannot determine Unity type for new component ${section.goPath}:${section.componentType}. ` +
+    'Use a built-in component name, pass a project GuidResolver, or add an m_Script reference.'
+  );
+}
+
+function createComponentProperties(
+  typeId: number,
+  gameObjectFileId: string,
+  script?: Record<string, any>
+): Record<string, any> {
+  const properties: Record<string, any> = {
+    m_ObjectHideFlags: 0,
+    m_CorrespondingSourceObject: { fileID: 0 },
+    m_PrefabInstance: { fileID: 0 },
+    m_PrefabAsset: { fileID: 0 },
+    m_GameObject: { fileID: gameObjectFileId },
+  };
+  if (typeId === 114) {
+    properties.m_Enabled = 1;
+    properties.m_EditorHideFlags = 0;
+    properties.m_Script = script;
+    properties.m_Name = '';
+    properties.m_EditorClassIdentifier = '';
+  }
+  return properties;
+}
+
+function appendGameObjectComponent(goDoc: UnityDocument, componentId: string): void {
+  if (!Array.isArray(goDoc.properties.m_Component)) goDoc.properties.m_Component = [];
+  goDoc.properties.m_Component.push({ component: { fileID: componentId } });
+}
+
+function addHierarchyComponent(
+  file: UnityFile,
+  goPath: string,
+  document: UnityDocument,
+  componentType: string,
+  scriptGuid?: string
+): void {
+  if (!file.hierarchy) return;
+  const goMap = new Map<string, GameObjectNode[]>();
+  flattenHierarchy(file.hierarchy, goMap);
+  const node = goMap.get(goPath)?.[0];
+  if (!node) return;
+  const info: ComponentInfo = {
+    typeName: document.typeName,
+    typeId: document.typeId,
+    fileId: document.fileId,
+    scriptGuid,
+    scriptName: document.typeId === 114 ? componentType : undefined,
+    properties: document.properties,
+    stripped: false,
+  };
+  node.components.push(info);
+}
+
+function findOrCreateStrippedGameObject(
+  file: UnityFile,
+  targetFileId: string,
+  sourceGuid: string,
+  ownerInstanceId: string
+): UnityDocument {
+  const existing = file.documents.find(doc =>
+    doc.typeId === 1 && doc.stripped &&
+    String(doc.properties.m_CorrespondingSourceObject?.fileID) === targetFileId &&
+    (doc.properties.m_CorrespondingSourceObject?.guid || '') === sourceGuid &&
+    String(doc.properties.m_PrefabInstance?.fileID) === ownerInstanceId
+  );
+  if (existing) return existing;
+
+  const document: UnityDocument = {
+    typeId: 1,
+    typeName: 'GameObject',
+    fileId: generateUniqueFileId(file),
+    stripped: true,
+    properties: {
+      m_CorrespondingSourceObject: { fileID: targetFileId, guid: sourceGuid, type: 3 },
+      m_PrefabInstance: { fileID: ownerInstanceId },
+      m_PrefabAsset: { fileID: 0 },
+    },
+  };
+  file.documents.push(document);
+  return document;
+}
+
+function attachInheritedAddedComponent(
+  file: UnityFile,
+  compact: CompactFile,
+  section: CompactSection,
+  componentId: string,
+  referencedGoId: string,
+  existingStrippedGo?: UnityDocument
+): string {
+  const ownerInstanceId = getSingleRef(compact.refs, `${section.goPath}:__instance`)
+    || (existingStrippedGo
+      ? String(existingStrippedGo.properties.m_PrefabInstance?.fileID || '')
+      : getSingleRef(compact.refs, '__instance'));
+  if (!ownerInstanceId) {
+    throw new Error(`Missing PrefabInstance owner for new component ${section.goPath}:${section.componentType}.`);
+  }
+  const sourceGuid = getSingleRef(compact.refs, `${section.goPath}:__source`)
+    || existingStrippedGo?.properties.m_CorrespondingSourceObject?.guid
+    || compact.baseGuid;
+  if (!sourceGuid) {
+    throw new Error(`Missing source GUID for inherited GameObject ${section.goPath}.`);
+  }
+
+  const ownerDoc = file.documents.find(doc => doc.typeId === 1001 && doc.fileId === ownerInstanceId);
+  const ownerInfo = file.prefabInstances.find(instance => instance.fileId === ownerInstanceId);
+  if (!ownerDoc || !ownerInfo) {
+    throw new Error(`PrefabInstance ${ownerInstanceId} not found for new component.`);
+  }
+  const targetGoId = existingStrippedGo
+    ? String(existingStrippedGo.properties.m_CorrespondingSourceObject?.fileID || '')
+    : referencedGoId;
+  if (!targetGoId) {
+    throw new Error(`Missing corresponding source GameObject for ${section.goPath}.`);
+  }
+  const strippedGo = existingStrippedGo
+    || findOrCreateStrippedGameObject(file, targetGoId, sourceGuid, ownerInstanceId);
+  const modification = ownerDoc.properties.m_Modification || (ownerDoc.properties.m_Modification = {});
+  if (!Array.isArray(modification.m_AddedComponents)) modification.m_AddedComponents = [];
+  modification.m_AddedComponents.push({
+    targetCorrespondingSourceObject: { fileID: targetGoId, guid: sourceGuid, type: 3 },
+    insertIndex: -1,
+    addedObject: { fileID: componentId },
+  });
+  ownerInfo.addedComponents.push({
+    targetGameObject: { fileID: targetGoId, guid: sourceGuid, type: 3 },
+    insertIndex: -1,
+    addedComponent: { fileID: componentId },
+  });
+  return strippedGo.fileId;
+}
+
+/** Allocate all requested components before applying properties so cross-references are order-independent. */
+function createAddedComponents(
+  file: UnityFile,
+  compact: CompactFile,
+  structurePaths: Set<string>,
+  options: CompactMergeOptions
+): void {
+  const existingDocumentIds = new Set(file.documents.map(doc => doc.fileId));
+  const addedSections = compact.sections.filter(section => {
+    if (!section.isAdded) return false;
+    const key = section.componentType
+      ? `${section.goPath}:${section.componentType}`
+      : section.goPath;
+    const existingId = getSingleRef(compact.refs, key);
+    return !existingId || !existingDocumentIds.has(existingId);
+  });
+  if (addedSections.length === 0) return;
+
+  const pending: PendingAddedComponent[] = [];
+  const docMap = new Map(file.documents.map(doc => [doc.fileId, doc]));
+  const createdKeys = new Set<string>();
+
+  for (const section of addedSections) {
+    if (!section.componentType) {
+      throw new Error(`New component section must include a component type: ${section.goPath}`);
+    }
+    const componentKey = `${section.goPath}:${section.componentType}`;
+    if (!findPathSetEntry(structurePaths, componentKey, { allowAddedRootAliases: true })) {
+      throw new Error(`New component ${componentKey} must also be listed in STRUCTURE with a + marker.`);
+    }
+    if (createdKeys.has(componentKey) || getSingleRef(compact.refs, componentKey)) {
+      throw new Error(`Component already exists or is duplicated: ${componentKey}`);
+    }
+
+    const targetGoId = getSingleRef(compact.refs, section.goPath);
+    if (!targetGoId) throw new Error(`GameObject not found for new component: ${section.goPath}`);
+    const type = resolveNewComponentType(section, options.guidResolver);
+    const componentId = generateUniqueFileId(file);
+    let owningGoId = targetGoId;
+    const localGoDoc = docMap.get(targetGoId);
+
+    if (localGoDoc && localGoDoc.typeId === 1 && !localGoDoc.stripped) {
+      appendGameObjectComponent(localGoDoc, componentId);
+    } else if ((localGoDoc && localGoDoc.typeId === 1 && localGoDoc.stripped)
+        || compact.type === 'variant') {
+      owningGoId = attachInheritedAddedComponent(
+        file, compact, section, componentId, targetGoId,
+        localGoDoc?.typeId === 1 && localGoDoc.stripped ? localGoDoc : undefined
+      );
+    } else {
+      throw new Error(`GameObject not found for new component: ${section.goPath}`);
+    }
+
+    const document: UnityDocument = {
+      typeId: type.typeId,
+      typeName: type.typeName,
+      fileId: componentId,
+      stripped: false,
+      properties: createComponentProperties(type.typeId, owningGoId, type.script),
+    };
+    file.documents.push(document);
+    docMap.set(componentId, document);
+    compact.refs.set(componentKey, [componentId]);
+    createdKeys.add(componentKey);
+    addHierarchyComponent(file, section.goPath, document, section.componentType, type.script?.guid);
+    pending.push({ section, document });
+  }
+
+  for (const { section, document } of pending) {
+    applyComponentProperties(
+      section.properties.filter(prop => !NEW_COMPONENT_STRUCTURAL_FIELDS.has(prop.key)),
+      document, compact.refs, structurePaths,
+      { allowAddedRootAliases: true }
+    );
   }
 }
 
@@ -75,7 +353,11 @@ function collectStructurePaths(node: import('./compact-reader').CompactStructure
  * Returns a new UnityFile with the changes applied.
  * The original is not modified.
  */
-export function mergeCompactChanges(original: UnityFile, compact: CompactFile): UnityFile {
+export function mergeCompactChanges(
+  original: UnityFile,
+  compact: CompactFile,
+  options: CompactMergeOptions = {}
+): UnityFile {
   const result = cloneUnityFile(original);
 
   // Collect all GO paths from STRUCTURE tree — used to distinguish
@@ -85,13 +367,39 @@ export function mergeCompactChanges(original: UnityFile, compact: CompactFile): 
     collectStructurePaths(compact.structure, '', structurePaths);
   }
 
+  createAddedComponents(result, compact, structurePaths, options);
+
   if (compact.type === 'variant') {
     mergeVariantSections(result, compact.sections, compact.refs, structurePaths);
   } else {
     mergePrefabSections(result, compact.sections, compact.refs, structurePaths);
   }
 
+  syncPrefabInstanceState(result);
+
   return result;
+}
+
+/** Keep the parsed PrefabInstance view consistent with the mutated YAML documents. */
+function syncPrefabInstanceState(file: UnityFile): void {
+  const instanceDocs = new Map(
+    file.documents.filter(doc => doc.typeId === 1001).map(doc => [doc.fileId, doc])
+  );
+  for (const instance of file.prefabInstances) {
+    const modification = instanceDocs.get(instance.fileId)?.properties.m_Modification;
+    if (!modification) continue;
+    instance.modifications = (modification.m_Modifications || []).map((entry: any) => ({
+      target: entry.target,
+      propertyPath: entry.propertyPath || '',
+      value: entry.value ?? '',
+      objectReference: entry.objectReference || { fileID: 0 },
+    }));
+    instance.addedComponents = (modification.m_AddedComponents || []).map((entry: any) => ({
+      targetGameObject: entry.targetCorrespondingSourceObject,
+      addedComponent: entry.addedObject,
+      insertIndex: entry.insertIndex ?? -1,
+    }));
+  }
 }
 
 // ============================================================
@@ -672,6 +980,7 @@ function mergeVariantSections(
     // Resolve target fileID from REFS or section header
     let targetFileId: string | undefined;
     let ownerInstanceId: string | undefined;
+    let targetSourceGuid: string | undefined;
     let refsOccurrenceIndex = 0;
 
     if (section.goPath.startsWith('&')) {
@@ -689,6 +998,7 @@ function mergeVariantSections(
         targetFileId = refsEntry.value[idx];
         refsIndexMap.set(refsEntry.key, idx + 1);
         ownerInstanceId = getRefsValue(refs, `${refsEntry.key}:__instance`, pathLookupOptions);
+        targetSourceGuid = getRefsValue(refs, `${refsEntry.key}:__source`, pathLookupOptions);
       }
     }
 
@@ -745,8 +1055,41 @@ function mergeVariantSections(
           }
         }
       }
-      // Note: adding NEW modifications would require generating proper target refs.
-      // For Phase 1, we only support editing existing modifications.
+      else {
+        let parsed = parseCompactValue(prop.value);
+        parsed = resolvePathReference(parsed, refs, structurePaths, pathLookupOptions);
+        const ownerInfo = file.prefabInstances.find(instance =>
+          instance.fileId === owner.instanceFileId
+        );
+        const sourceGuid = targetSourceGuid
+          || owner.modifications.find(mod => modificationTargetsFileId(mod, targetFileId!))?.target?.guid
+          || ownerInfo?.sourcePrefab.guid
+          || mainInstance.sourcePrefab.guid
+          || compactBaseGuid(file);
+        const target: Record<string, any> = { fileID: targetFileId };
+        if (sourceGuid) {
+          target.guid = sourceGuid;
+          target.type = 3;
+        }
+
+        const modification: Record<string, any> = {
+          target,
+          propertyPath: prop.key,
+          value: '',
+          objectReference: { fileID: 0 },
+        };
+        if (parsed && typeof parsed === 'object' && 'fileID' in parsed) {
+          modification.objectReference = parsed;
+        } else {
+          modification.value = String(parsed ?? '');
+        }
+        owner.modifications.push(modification);
+      }
     }
   }
+}
+
+/** Best-effort source GUID fallback for legacy compact files without :__source metadata. */
+function compactBaseGuid(file: UnityFile): string | undefined {
+  return file.variantSource?.guid;
 }

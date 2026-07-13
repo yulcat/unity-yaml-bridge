@@ -139,6 +139,14 @@ export class GuidResolver {
     return this.map.get(guid);
   }
 
+  /** Resolve a human-readable script/component name back to its GUID. */
+  resolveGuid(name: string): string | undefined {
+    for (const [guid, resolvedName] of this.map) {
+      if (resolvedName === name) return guid;
+    }
+    return undefined;
+  }
+
   /** Resolve a GUID to the asset file path */
   resolveFilePath(guid: string): string | undefined {
     return this.assetPaths.get(guid);

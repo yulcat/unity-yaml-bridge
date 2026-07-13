@@ -214,6 +214,7 @@ npx tsx src/test-compact-roundtrip.ts
 - ✅ Removed GameObject/component markers in variant structure
 - ✅ Variant-of-variant base hierarchy resolution
 - ✅ Intermediate-variant GameObject/component additions and removals
+- ✅ New component creation and new PrefabInstance overrides from compact edits
 - ✅ REFS section (self-contained files)
 - ✅ Auto fileID generation for new elements
 - ✅ Compact edit → YAML write-back

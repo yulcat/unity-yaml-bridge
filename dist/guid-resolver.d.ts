@@ -21,6 +21,8 @@ export declare class GuidResolver {
     private readAssetMetaFile;
     /** Resolve a GUID to a human-readable name */
     resolve(guid: string): string | undefined;
+    /** Resolve a human-readable script/component name back to its GUID. */
+    resolveGuid(name: string): string | undefined;
     /** Resolve a GUID to the asset file path */
     resolveFilePath(guid: string): string | undefined;
     /** Add a manual mapping */

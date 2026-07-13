@@ -124,12 +124,12 @@ function parseStructureLine(line: string): CompactStructureNode {
 
   // Check for variant markers
   let marker: '*' | '+' | '-' | undefined;
-  if (cleaned.startsWith('+ ')) {
+  if (cleaned.startsWith('+')) {
     marker = '+';
-    cleaned = cleaned.substring(2);
-  } else if (cleaned.startsWith('- ')) {
+    cleaned = cleaned.substring(1).trimStart();
+  } else if (cleaned.startsWith('-')) {
     marker = '-';
-    cleaned = cleaned.substring(2);
+    cleaned = cleaned.substring(1).trimStart();
   }
 
   // Extract components [Comp1, Comp2]

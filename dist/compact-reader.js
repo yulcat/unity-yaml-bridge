@@ -80,13 +80,13 @@ function parseStructureLine(line) {
     let cleaned = line.replace(/[├└│─]/g, '').trim();
     // Check for variant markers
     let marker;
-    if (cleaned.startsWith('+ ')) {
+    if (cleaned.startsWith('+')) {
         marker = '+';
-        cleaned = cleaned.substring(2);
+        cleaned = cleaned.substring(1).trimStart();
     }
-    else if (cleaned.startsWith('- ')) {
+    else if (cleaned.startsWith('-')) {
         marker = '-';
-        cleaned = cleaned.substring(2);
+        cleaned = cleaned.substring(1).trimStart();
     }
     // Extract components [Comp1, Comp2]
     let components = [];

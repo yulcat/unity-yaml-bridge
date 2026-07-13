@@ -59,6 +59,7 @@ function makeResolver(assets: { path: string; guid: string; content: string }[])
 
 const BASE_GUID = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 const NESTED_GUID = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+const MIDDLE_VARIANT_GUID = 'dddddddddddddddddddddddddddddddd';
 const IMAGE_GUID = 'f70555f144d8491a825f0804e09c671c';
 const TMP_GUID = 'f4688fdb7df04437aeb418b961361dc5';
 const SIMPLE_FSM_GUID = 'cccccccccccccccccccccccccccccccc';
@@ -767,7 +768,408 @@ PrefabInstance:
 `;
 }
 
+function variantWithAddedComponentYaml(nested: boolean): string {
+  const nestedInstance = nested ? `--- !u!1001 &901
+PrefabInstance:
+  m_ObjectHideFlags: 0
+  serializedVersion: 2
+  m_Modification:
+    serializedVersion: 3
+    m_TransformParent: {fileID: 200}
+    m_Modifications: []
+    m_RemovedComponents: []
+    m_RemovedGameObjects: []
+    m_AddedGameObjects: []
+    m_AddedComponents:
+    - targetCorrespondingSourceObject: {fileID: 100, guid: ${NESTED_GUID}, type: 3}
+      insertIndex: -1
+      addedObject: {fileID: 700}
+  m_SourcePrefab: {fileID: 100100000, guid: ${NESTED_GUID}, type: 3}
+` : '';
+  const mainAdded = nested ? '    m_AddedComponents: []' : `    m_AddedComponents:
+    - targetCorrespondingSourceObject: {fileID: 100, guid: ${BASE_GUID}, type: 3}
+      insertIndex: -1
+      addedObject: {fileID: 700}`;
+  const ownerInstance = nested ? '901' : '900';
+  const sourceGuid = nested ? NESTED_GUID : BASE_GUID;
+
+  return `%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1001 &900
+PrefabInstance:
+  m_ObjectHideFlags: 0
+  serializedVersion: 2
+  m_Modification:
+    serializedVersion: 3
+    m_TransformParent: {fileID: 0}
+    m_Modifications: []
+    m_RemovedComponents: []
+    m_RemovedGameObjects: []
+    m_AddedGameObjects: []
+${mainAdded}
+  m_SourcePrefab: {fileID: 100100000, guid: ${BASE_GUID}, type: 3}
+${nestedInstance}--- !u!1 &600 stripped
+GameObject:
+  m_CorrespondingSourceObject: {fileID: 100, guid: ${sourceGuid}, type: 3}
+  m_PrefabInstance: {fileID: ${ownerInstance}}
+  m_PrefabAsset: {fileID: 0}
+--- !u!114 &700
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 600}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: ${SIMPLE_FSM_GUID}, type: 3}
+  m_Name:
+  m_EditorClassIdentifier:
+  currentState: 3
+  label: Original added component
+`;
+}
+
+function variantWithRemovalsYaml(): string {
+  return `%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1001 &900
+PrefabInstance:
+  m_ObjectHideFlags: 0
+  serializedVersion: 2
+  m_Modification:
+    serializedVersion: 3
+    m_TransformParent: {fileID: 0}
+    m_Modifications: []
+    m_RemovedComponents:
+    - {fileID: 500, guid: ${BASE_GUID}, type: 3}
+    m_RemovedGameObjects:
+    - {fileID: 300, guid: ${BASE_GUID}, type: 3}
+    m_AddedGameObjects: []
+    m_AddedComponents: []
+  m_SourcePrefab: {fileID: 100100000, guid: ${BASE_GUID}, type: 3}
+`;
+}
+
+function chainedVariantYaml(sourceGuid: string, value: string): string {
+  return `%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1001 &900
+PrefabInstance:
+  m_ObjectHideFlags: 0
+  serializedVersion: 2
+  m_Modification:
+    serializedVersion: 3
+    m_TransformParent: {fileID: 0}
+    m_Modifications:
+    - target: {fileID: 500, guid: ${sourceGuid}, type: 3}
+      propertyPath: m_Color.a
+      value: ${value}
+      objectReference: {fileID: 0}
+    m_RemovedComponents: []
+    m_RemovedGameObjects: []
+    m_AddedGameObjects: []
+    m_AddedComponents: []
+  m_SourcePrefab: {fileID: 100100000, guid: ${sourceGuid}, type: 3}
+`;
+}
+
+function regularPrefabWithNestedAddedComponentYaml(): string {
+  return `%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1 &10
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 20}
+  m_Layer: 0
+  m_Name: Host
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &20
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 10}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Children:
+  - {fileID: 610}
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!1001 &901
+PrefabInstance:
+  m_ObjectHideFlags: 0
+  serializedVersion: 2
+  m_Modification:
+    serializedVersion: 3
+    m_TransformParent: {fileID: 20}
+    m_Modifications:
+    - target: {fileID: 100, guid: ${NESTED_GUID}, type: 3}
+      propertyPath: m_Name
+      value: NestedWidget
+      objectReference: {fileID: 0}
+    m_RemovedComponents: []
+    m_RemovedGameObjects: []
+    m_AddedGameObjects: []
+    m_AddedComponents:
+    - targetCorrespondingSourceObject: {fileID: 100, guid: ${NESTED_GUID}, type: 3}
+      insertIndex: -1
+      addedObject: {fileID: 700}
+  m_SourcePrefab: {fileID: 100100000, guid: ${NESTED_GUID}, type: 3}
+--- !u!1 &600 stripped
+GameObject:
+  m_CorrespondingSourceObject: {fileID: 100, guid: ${NESTED_GUID}, type: 3}
+  m_PrefabInstance: {fileID: 901}
+  m_PrefabAsset: {fileID: 0}
+--- !u!4 &610 stripped
+Transform:
+  m_CorrespondingSourceObject: {fileID: 200, guid: ${NESTED_GUID}, type: 3}
+  m_PrefabInstance: {fileID: 901}
+  m_PrefabAsset: {fileID: 0}
+--- !u!114 &700
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 600}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: ${SIMPLE_FSM_GUID}, type: 3}
+  m_Name:
+  m_EditorClassIdentifier:
+  label: Nested regular original
+`;
+}
+
+function regularPrefabWithDuplicateNestedSourceYaml(): string {
+  const secondInstance = `--- !u!1001 &902
+PrefabInstance:
+  m_ObjectHideFlags: 0
+  serializedVersion: 2
+  m_Modification:
+    serializedVersion: 3
+    m_TransformParent: {fileID: 20}
+    m_Modifications:
+    - target: {fileID: 100, guid: ${NESTED_GUID}, type: 3}
+      propertyPath: m_Name
+      value: NestedWidget2
+      objectReference: {fileID: 0}
+    m_RemovedComponents: []
+    m_RemovedGameObjects: []
+    m_AddedGameObjects: []
+    m_AddedComponents: []
+  m_SourcePrefab: {fileID: 100100000, guid: ${NESTED_GUID}, type: 3}
+--- !u!1 &601 stripped
+GameObject:
+  m_CorrespondingSourceObject: {fileID: 100, guid: ${NESTED_GUID}, type: 3}
+  m_PrefabInstance: {fileID: 902}
+  m_PrefabAsset: {fileID: 0}
+--- !u!4 &620 stripped
+Transform:
+  m_CorrespondingSourceObject: {fileID: 200, guid: ${NESTED_GUID}, type: 3}
+  m_PrefabInstance: {fileID: 902}
+  m_PrefabAsset: {fileID: 0}
+`;
+  return regularPrefabWithNestedAddedComponentYaml()
+    .replace('  - {fileID: 610}\n', '  - {fileID: 610}\n  - {fileID: 620}\n')
+    .replace('--- !u!1 &600 stripped\n', `${secondInstance}--- !u!1 &600 stripped\n`);
+}
+
+function regularPrefabWithNestedRemovalsYaml(): string {
+  return regularPrefabWithNestedAddedComponentYaml()
+    .replace(
+      '    m_RemovedComponents: []\n    m_RemovedGameObjects: []\n',
+      `    m_RemovedComponents:\n    - {fileID: 500, guid: ${NESTED_GUID}, type: 3}\n    m_RemovedGameObjects:\n    - {fileID: 300, guid: ${NESTED_GUID}, type: 3}\n`
+    );
+}
+
 console.log('\n=== Variant issue regressions ===\n');
+
+{
+  console.log('Added component on an inherited root-variant GameObject');
+  const resolver = makeResolver([
+    { path: 'Base.prefab', guid: BASE_GUID, content: basePrefabYaml() },
+    { path: 'SimpleFSMController.cs', guid: SIMPLE_FSM_GUID, content: 'public class SimpleFSMController {}\n' },
+  ]);
+  const ast = parseUnityYaml(variantWithAddedComponentYaml(false));
+  const compactText = writeCompact(ast, { guidResolver: resolver });
+  const structure = getSection(compactText, 'STRUCTURE');
+  const details = getSection(compactText, 'DETAILS');
+  const refs = getSection(compactText, 'REFS');
+
+  assert(ast.prefabInstances[0].addedComponents.length === 1,
+    'parser preserves root PrefabInstance m_AddedComponents');
+  assert(structure.includes('BaseRoot [+SimpleFSMController]'),
+    'STRUCTURE marks a component added to an inherited GameObject', structure);
+  assert(details.includes('[+ BaseRoot:SimpleFSMController]') &&
+    details.includes('label = Original added component'),
+    'DETAILS contains properties from the real added-component document', details);
+  assert(refs.includes('BaseRoot:SimpleFSMController = 700'),
+    'REFS maps the added component to its local document', refs);
+
+  const edited = compactText.replace('label = Original added component', 'label = Edited added component');
+  const merged = mergeCompactChanges(ast, readCompact(edited));
+  const component = merged.documents.find(doc => doc.fileId === '700');
+  assert(component?.properties.label === 'Edited added component',
+    'editing added-component DETAILS updates the real local document', writeUnityYaml(merged));
+}
+
+{
+  console.log('\nAdded component owned by a non-root nested PrefabInstance');
+  const resolver = makeResolver([
+    { path: 'Base.prefab', guid: BASE_GUID, content: basePrefabYaml() },
+    { path: 'Nested.prefab', guid: NESTED_GUID, content: nestedTextPrefabYaml() },
+    { path: 'SimpleFSMController.cs', guid: SIMPLE_FSM_GUID, content: 'public class SimpleFSMController {}\n' },
+  ]);
+  const ast = parseUnityYaml(variantWithAddedComponentYaml(true));
+  const compactText = writeCompact(ast, { guidResolver: resolver });
+  const details = getSection(compactText, 'DETAILS');
+  const refs = getSection(compactText, 'REFS');
+  const nestedInstance = ast.prefabInstances.find(instance => instance.fileId === '901');
+
+  assert(nestedInstance?.addedComponents.length === 1,
+    'parser preserves nested PrefabInstance m_AddedComponents');
+  assert(details.includes('[+ NestedWidget:SimpleFSMController]') &&
+    details.includes('currentState = 3'),
+    'DETAILS includes a nested instance added component', details);
+  assert(refs.includes('NestedWidget:SimpleFSMController = 700') &&
+    refs.includes('NestedWidget:SimpleFSMController:__instance = 901'),
+    'REFS records nested added-component identity and owner', refs);
+
+  const edited = compactText.replace('currentState = 3', 'currentState = 8');
+  const merged = mergeCompactChanges(ast, readCompact(edited));
+  const component = merged.documents.find(doc => doc.fileId === '700');
+  assert(component?.properties.currentState === 8,
+    'nested added-component edit updates its real local document', writeUnityYaml(merged));
+}
+
+{
+  console.log('\nAdded component in a nested instance of a regular prefab');
+  const resolver = makeResolver([
+    { path: 'Nested.prefab', guid: NESTED_GUID, content: nestedTextPrefabYaml() },
+    { path: 'SimpleFSMController.cs', guid: SIMPLE_FSM_GUID, content: 'public class SimpleFSMController {}\n' },
+  ]);
+  const ast = parseUnityYaml(regularPrefabWithNestedAddedComponentYaml());
+  const compactText = writeCompact(ast, { guidResolver: resolver });
+  const structure = getSection(compactText, 'STRUCTURE');
+  const details = getSection(compactText, 'DETAILS');
+
+  assert(ast.type === 'prefab', 'fixture remains a regular prefab rather than a variant');
+  assert(structure.includes('NestedWidget {Nested} [TextMeshProUGUI, +SimpleFSMController]'),
+    'regular prefab STRUCTURE overlays nested added component', structure);
+  assert(details.includes('[+ NestedWidget:SimpleFSMController]') &&
+    details.includes('label = Nested regular original'),
+    'regular prefab DETAILS includes nested added-component properties', details);
+
+  const edited = compactText.replace('label = Nested regular original', 'label = Nested regular edited');
+  const merged = mergeCompactChanges(ast, readCompact(edited));
+  const component = merged.documents.find(doc => doc.fileId === '700');
+  assert(component?.properties.label === 'Nested regular edited',
+    'regular prefab nested added-component edit writes to local document', writeUnityYaml(merged));
+}
+
+{
+  console.log('\nSame source prefab instantiated twice does not leak added-component overlays');
+  const resolver = makeResolver([
+    { path: 'Nested.prefab', guid: NESTED_GUID, content: nestedTextPrefabYaml() },
+    { path: 'SimpleFSMController.cs', guid: SIMPLE_FSM_GUID, content: 'public class SimpleFSMController {}\n' },
+  ]);
+  const ast = parseUnityYaml(regularPrefabWithDuplicateNestedSourceYaml());
+  const structure = getSection(writeCompact(ast, { guidResolver: resolver }), 'STRUCTURE');
+  const markerCount = (structure.match(/\+SimpleFSMController/g) || []).length;
+
+  assert(structure.includes('NestedWidget {Nested} [TextMeshProUGUI, +SimpleFSMController]'),
+    'added component appears on its owning nested instance', structure);
+  assert(structure.includes('NestedWidget2 {Nested} [TextMeshProUGUI]') && markerCount === 1,
+    'added component does not leak to another instance of the same source prefab', structure);
+}
+
+{
+  console.log('\nNested removals in a regular prefab are visible in STRUCTURE');
+  const resolver = makeResolver([
+    { path: 'Nested.prefab', guid: NESTED_GUID, content: nestedTextPrefabYaml() },
+    { path: 'SimpleFSMController.cs', guid: SIMPLE_FSM_GUID, content: 'public class SimpleFSMController {}\n' },
+  ]);
+  const ast = parseUnityYaml(regularPrefabWithNestedRemovalsYaml());
+  const structure = getSection(writeCompact(ast, { guidResolver: resolver }), 'STRUCTURE');
+
+  assert(structure.includes('NestedWidget {Nested} [+SimpleFSMController, -TextMeshProUGUI]'),
+    'regular prefab marks a component removed from a nested instance', structure);
+  assert(structure.includes('-TargetLabel [TextMeshProUGUI]'),
+    'regular prefab marks a GameObject removed from a nested instance', structure);
+}
+
+{
+  console.log('\nRemoved GameObjects and components are visible in STRUCTURE');
+  const resolver = makeResolver([
+    { path: 'Base.prefab', guid: BASE_GUID, content: basePrefabYaml() },
+  ]);
+  const ast = parseUnityYaml(variantWithRemovalsYaml());
+  const compactText = writeCompact(ast, { guidResolver: resolver });
+  const structure = getSection(compactText, 'STRUCTURE');
+  const parsedCompact = readCompact(compactText);
+  const removedChild = parsedCompact.structure?.children.find(child => child.name === 'BaseChild');
+
+  assert(ast.prefabInstances[0].removedGameObjects.length === 1,
+    'parser preserves m_RemovedGameObjects');
+  assert(structure.includes('-BaseChild [-Image]'),
+    'STRUCTURE marks removed GameObject and removed component', structure);
+  assert(removedChild?.marker === '-',
+    'compact reader preserves writer-style no-space removal marker', JSON.stringify(removedChild));
+}
+
+{
+  console.log('\nWriter-style added marker survives compact parsing');
+  const compact = readCompact(`# ubridge v1 | variant | base-guid:${BASE_GUID}
+--- STRUCTURE
+BaseRoot
+└─ +AddedChild [Image]
+--- DETAILS
+--- REFS
+`);
+  assert(compact.structure?.children[0]?.marker === '+' &&
+    compact.structure.children[0].name === 'AddedChild',
+    'compact reader accepts +AddedChild emitted by the writer', JSON.stringify(compact.structure));
+}
+
+{
+  console.log('\nVariant-of-variant resolves through to the concrete base hierarchy');
+  const middle = chainedVariantYaml(BASE_GUID, '0.5');
+  const resolver = makeResolver([
+    { path: 'Base.prefab', guid: BASE_GUID, content: basePrefabYaml() },
+    { path: 'Middle.prefab', guid: MIDDLE_VARIANT_GUID, content: middle },
+  ]);
+  const ast = parseUnityYaml(chainedVariantYaml(MIDDLE_VARIANT_GUID, '0.25'));
+  const compactText = writeCompact(ast, { guidResolver: resolver });
+  const structure = getSection(compactText, 'STRUCTURE');
+  const details = getSection(compactText, 'DETAILS');
+
+  assert(structure.includes('BaseRoot') && structure.includes('BaseChild [Image*]'),
+    'variant chain emits the ultimate base tree with inherited override marker', structure);
+  assert(details.includes('[BaseChild:Image]') && details.includes('m_Color.a = 0.25'),
+    'leaf variant override resolves against the ultimate base component', details);
+
+  const edited = compactText.replace('m_Color.a = 0.25', 'm_Color.a = 0.75');
+  const merged = mergeCompactChanges(ast, readCompact(edited));
+  const modifications = merged.documents.find(doc => doc.fileId === '900')
+    ?.properties.m_Modification?.m_Modifications || [];
+  const modification = modifications.find((mod: any) => mod.propertyPath === 'm_Color.a');
+  assert(String(modification?.value) === '0.75',
+    'editing a chained variant writes to the leaf PrefabInstance', writeUnityYaml(merged));
+}
 
 {
   console.log('Issue #4: STRUCTURE uses GameObject m_Component entries for prefab components');

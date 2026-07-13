@@ -635,6 +635,12 @@ function extractPrefabInstances(docs: UnityDocument[]): PrefabInstanceInfo[] {
         transformParent: (mod.m_TransformParent || { fileID: '0' }) as FileReference,
         modifications,
         removedComponents: (mod.m_RemovedComponents || []) as FileReference[],
+        removedGameObjects: (mod.m_RemovedGameObjects || []) as FileReference[],
+        addedComponents: (mod.m_AddedComponents || []).map((entry: any) => ({
+          targetGameObject: entry.targetCorrespondingSourceObject || { fileID: '0' },
+          addedComponent: entry.addedObject || { fileID: '0' },
+          insertIndex: Number(entry.insertIndex ?? -1),
+        })),
       };
     });
 }

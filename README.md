@@ -210,6 +210,9 @@ npx tsx src/test-compact-roundtrip.ts
 
 - ✅ Prefab parsing & round-trip (0% diff on 1M+ lines)
 - ✅ Prefab variant support
+- ✅ Variant/nested-prefab added-component properties (`m_AddedComponents`)
+- ✅ Removed GameObject/component markers in variant structure
+- ✅ Variant-of-variant base hierarchy resolution
 - ✅ REFS section (self-contained files)
 - ✅ Auto fileID generation for new elements
 - ✅ Compact edit → YAML write-back

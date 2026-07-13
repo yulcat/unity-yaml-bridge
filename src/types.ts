@@ -88,6 +88,20 @@ export interface PrefabInstanceInfo {
   modifications: PropertyModification[];
   /** Removed components */
   removedComponents: FileReference[];
+  /** GameObjects removed from the source prefab by this instance */
+  removedGameObjects: FileReference[];
+  /** Components added to inherited GameObjects by this instance */
+  addedComponents: AddedComponentInfo[];
+}
+
+/** A component added to an inherited GameObject by a PrefabInstance */
+export interface AddedComponentInfo {
+  /** Source-prefab GameObject receiving the component */
+  targetGameObject: FileReference;
+  /** Local component document created for the addition */
+  addedComponent: FileReference;
+  /** Unity component-list insertion index (-1 means append) */
+  insertIndex: number;
 }
 
 /** A single property modification in a PrefabInstance */

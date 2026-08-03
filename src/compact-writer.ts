@@ -113,8 +113,9 @@ export function writeCompact(file: UnityFile, options: CompactWriterOptions = {}
 
   // REFS section
   lines.push('--- REFS');
-  const strippedMap = buildStrippedComponentMap(file, resolver);
-  writeRefsSection(file.hierarchy, lines, resolver, strippedMap);
+  const nestedObjectRefs = buildNestedSourceObjectRefMap(file.documents, file.hierarchy, resolver);
+  const strippedMap = buildStrippedComponentMap(file, resolver, nestedObjectRefs);
+  writeRefsSection(file.hierarchy, lines, resolver, strippedMap, nestedObjectRefs);
   writeAddedComponentRefs(nestedAddedComponents, lines);
 
   return lines.join('\n') + '\n';
@@ -372,23 +373,27 @@ function buildInternalRefMap(
 
   // Add stripped document entries for nested prefab components
   const piNodeNames = buildPINodeNames(file.hierarchy, resolver);
-  const nestedRootRefs = buildNestedRootComponentRefMap(file.documents, file.hierarchy, resolver);
+  const nestedObjectRefs = buildNestedSourceObjectRefMap(file.documents, file.hierarchy, resolver);
 
   for (const doc of file.documents) {
     if (!doc.stripped) continue;
-    if (map.has(doc.fileId)) continue;
-
     const piRef = doc.properties.m_PrefabInstance;
     if (!piRef) continue;
     const piFileId = String(piRef.fileID);
     const nodeName = piNodeNames.get(piFileId);
     if (!nodeName) continue;
 
-    const rootRef = nestedRootRefs.get(doc.fileId);
-    if (rootRef) {
-      map.set(doc.fileId, `${rootRef.path}:${rootRef.typeName}`);
+    const objectRef = nestedObjectRefs.get(doc.fileId);
+    if (objectRef) {
+      if (objectRef.typeName === 'GameObject') {
+        map.set(doc.fileId, objectRef.path);
+      } else if (!REF_SKIP_TYPES.has(objectRef.typeName)) {
+        map.set(doc.fileId, `${objectRef.path}:${objectRef.typeName}`);
+      }
       continue;
     }
+
+    if (map.has(doc.fileId)) continue;
 
     const typeName = resolveDocumentComponentType(doc, resolver);
     if (REF_SKIP_TYPES.has(typeName)) continue;
@@ -474,8 +479,8 @@ interface StrippedComponentRef {
   path?: string;
 }
 
-/** Path-addressable component on a nested prefab instance root. */
-interface NestedRootComponentRef {
+/** Path-addressable serialized object from a nested prefab source. */
+interface NestedSourceObjectRef {
   typeName: string;
   fileId: string;
   prefabInstanceId: string;
@@ -485,10 +490,11 @@ interface NestedRootComponentRef {
 /** Build a map from PI instanceId → stripped component refs (excluding Transform/RectTransform/CanvasRenderer/GO) */
 function buildStrippedComponentMap(
   file: UnityFile,
-  resolver?: GuidResolver
+  resolver?: GuidResolver,
+  nestedObjectRefs: Map<string, NestedSourceObjectRef> =
+    buildNestedSourceObjectRefMap(file.documents, file.hierarchy, resolver)
 ): Map<string, StrippedComponentRef[]> {
   const map = new Map<string, StrippedComponentRef[]>();
-  const nestedRootRefs = buildNestedRootComponentRefMap(file.documents, file.hierarchy, resolver);
 
   // Map stripped GO fileID → owning PrefabInstance fileID
   const strippedGoToPi = new Map<string, string>();
@@ -505,10 +511,10 @@ function buildStrippedComponentMap(
       strippedGoToPi.set(doc.fileId, piFileId);
     }
 
-    const rootRef = nestedRootRefs.get(doc.fileId);
-    if (rootRef) {
+    const objectRef = nestedObjectRefs.get(doc.fileId);
+    if (objectRef && !REF_SKIP_TYPES.has(objectRef.typeName)) {
       if (!map.has(piFileId)) map.set(piFileId, []);
-      map.get(piFileId)!.push({ typeName: rootRef.typeName, fileId: doc.fileId, path: rootRef.path });
+      map.get(piFileId)!.push({ typeName: objectRef.typeName, fileId: doc.fileId, path: objectRef.path });
       continue;
     }
 
@@ -576,69 +582,107 @@ function loadSourceFile(
   }
 }
 
-/** Resolve a stripped component through its source prefab if it belongs to the source root GO. */
-function resolveSourceRootComponentType(
-  strippedDoc: UnityDocument,
-  resolver: GuidResolver,
-  sourceCache: Map<string, UnityFile | null>
-): string | null {
-  const sourceRef = strippedDoc.properties.m_CorrespondingSourceObject;
-  const sourceGuid = sourceRef?.guid;
-  const sourceFileId = sourceRef?.fileID;
-  if (!sourceGuid || sourceFileId === undefined || sourceFileId === null) return null;
-
-  const sourceFile = loadSourceFile(String(sourceGuid), resolver, sourceCache);
-  if (!sourceFile?.hierarchy) return null;
-
-  const sourceDoc = sourceFile.documents.find(doc => doc.fileId === String(sourceFileId));
-  if (!sourceDoc || sourceDoc.stripped) return null;
-
-  const typeName = resolveDocumentComponentType(sourceDoc, resolver);
-  if (REF_SKIP_TYPES.has(typeName)) return null;
-
-  const goRef = sourceDoc.properties.m_GameObject;
-  if (!goRef || String(goRef.fileID) !== sourceFile.hierarchy.fileId) return null;
-
-  return typeName;
-}
 
 /**
- * Build stripped-doc refs for components on nested prefab roots.
- *
- * Unity may serialize stripped MonoBehaviours without enough fields to identify
- * their script. The corresponding source prefab still has the real component
- * attachment, so use it only when the source object is on that prefab's root GO.
+ * Resolve every explicitly serialized member of a nested prefab instance to
+ * its real source-relative path. This includes root/child GameObjects,
+ * transforms, and components, and is deliberately independent of YAML order.
  */
-function buildNestedRootComponentRefMap(
+function buildNestedSourceObjectRefMap(
   docs: UnityDocument[],
   hierarchy: GameObjectNode | undefined,
   resolver?: GuidResolver
-): Map<string, NestedRootComponentRef> {
-  const result = new Map<string, NestedRootComponentRef>();
-  if (!hierarchy || !resolver) return result;
+): Map<string, NestedSourceObjectRef> {
+  const result = new Map<string, NestedSourceObjectRef>();
+  if (!hierarchy) return result;
 
   const piNodePaths = buildPINodeNames(hierarchy, resolver);
+
+  // Without a project resolver we cannot recover child paths, but Unity's
+  // standard root m_Name override still identifies the source-root GO without
+  // relying on document order. Prefer an omitted key to a guessed child key.
+  if (!resolver) {
+    for (const instanceDoc of docs) {
+      if (instanceDoc.typeId !== 1001) continue;
+      const instancePath = piNodePaths.get(instanceDoc.fileId);
+      if (!instancePath) continue;
+      const mods = instanceDoc.properties.m_Modification?.m_Modifications || [];
+      const rootNameMod = mods.find((mod: any) => mod.propertyPath === 'm_Name');
+      const rootSourceId = String(rootNameMod?.target?.fileID || '');
+      if (!rootSourceId) continue;
+      const rootStub = docs.find(doc =>
+        doc.typeId === 1 && doc.stripped &&
+        String(doc.properties.m_PrefabInstance?.fileID) === instanceDoc.fileId &&
+        String(doc.properties.m_CorrespondingSourceObject?.fileID) === rootSourceId
+      );
+      if (!rootStub) continue;
+      result.set(rootStub.fileId, {
+        typeName: 'GameObject',
+        fileId: rootStub.fileId,
+        prefabInstanceId: instanceDoc.fileId,
+        path: instancePath,
+      });
+    }
+    return result;
+  }
+
   const sourceCache = new Map<string, UnityFile | null>();
+  const lookupCache = new Map<string, {
+    file: UnityFile;
+    docsById: Map<string, UnityDocument>;
+    goPaths: Map<string, string>;
+  }>();
 
   for (const doc of docs) {
     if (!doc.stripped) continue;
-    if (doc.typeId === 1 || doc.typeId === 4 || doc.typeId === 224 || doc.typeId === 1001) continue;
-
     const piRef = doc.properties.m_PrefabInstance;
-    if (!piRef) continue;
+    const sourceRef = doc.properties.m_CorrespondingSourceObject;
+    if (!piRef || !sourceRef?.guid || sourceRef.fileID === undefined) continue;
 
     const piFileId = String(piRef.fileID);
-    const path = piNodePaths.get(piFileId);
-    if (!path) continue;
+    const instancePath = piNodePaths.get(piFileId);
+    if (!instancePath) continue;
 
-    const typeName = resolveSourceRootComponentType(doc, resolver, sourceCache);
-    if (!typeName) continue;
+    const sourceGuid = String(sourceRef.guid);
+    let lookup = lookupCache.get(sourceGuid);
+    if (!lookup) {
+      const sourceFile = loadSourceFile(sourceGuid, resolver, sourceCache);
+      if (!sourceFile?.hierarchy) continue;
+      const goPaths = new Map<string, string>();
+      collectGoPaths(sourceFile.hierarchy, '', goPaths);
+      lookup = {
+        file: sourceFile,
+        docsById: new Map(sourceFile.documents.map(candidate => [candidate.fileId, candidate])),
+        goPaths,
+      };
+      lookupCache.set(sourceGuid, lookup);
+    }
+
+    const sourceFile = lookup.file;
+    const sourceDoc = lookup.docsById.get(String(sourceRef.fileID));
+    if (!sourceDoc || sourceDoc.stripped) continue;
+
+    const sourceGoId = sourceDoc.typeId === 1
+      ? sourceDoc.fileId
+      : String(sourceDoc.properties.m_GameObject?.fileID || '');
+    const sourceGoPath = lookup.goPaths.get(sourceGoId);
+    if (!sourceGoPath) continue;
+
+    const sourceRootPath = sourceFile.hierarchy!.name;
+    const relativePath = sourceGoPath === sourceRootPath
+      ? ''
+      : sourceGoPath.startsWith(`${sourceRootPath}/`)
+        ? sourceGoPath.substring(sourceRootPath.length + 1)
+        : sourceGoPath;
+    const resolvedPath = relativePath ? `${instancePath}/${relativePath}` : instancePath;
 
     result.set(doc.fileId, {
-      typeName,
+      typeName: sourceDoc.typeId === 1
+        ? 'GameObject'
+        : resolveDocumentComponentType(sourceDoc, resolver),
       fileId: doc.fileId,
       prefabInstanceId: piFileId,
-      path,
+      path: resolvedPath,
     });
   }
 
@@ -659,9 +703,24 @@ function writeRefsSection(
   node: GameObjectNode,
   lines: string[],
   resolver?: GuidResolver,
-  strippedMap?: Map<string, StrippedComponentRef[]>
+  strippedMap?: Map<string, StrippedComponentRef[]>,
+  nestedObjectRefs?: Map<string, NestedSourceObjectRef>
 ): void {
-  writeNodeRefs(node, lines, resolver, strippedMap, '');
+  const start = lines.length;
+  writeNodeRefs(node, lines, resolver, strippedMap, nestedObjectRefs, '');
+
+  if (nestedObjectRefs) {
+    const existing = new Set(lines.slice(start));
+    for (const ref of nestedObjectRefs.values()) {
+      if (ref.typeName !== 'GameObject' && ref.typeName !== 'Transform' && ref.typeName !== 'RectTransform') continue;
+      const key = ref.typeName === 'GameObject' ? ref.path : `${ref.path}:${ref.typeName}`;
+      const line = `${key} = ${ref.fileId}`;
+      if (!existing.has(line)) {
+        lines.push(line);
+        existing.add(line);
+      }
+    }
+  }
 }
 
 /** Write refs entries for a single node and its descendants */
@@ -670,6 +729,7 @@ function writeNodeRefs(
   lines: string[],
   resolver?: GuidResolver,
   strippedMap?: Map<string, StrippedComponentRef[]>,
+  nestedObjectRefs?: Map<string, NestedSourceObjectRef>,
   parentPath: string = ''
 ): void {
   let name = node.name;
@@ -682,12 +742,24 @@ function writeNodeRefs(
   const currentPath = parentPath ? `${parentPath}/${name}` : name;
 
   // GO fileId
-  if (node.fileId && node.fileId !== '0') {
+  const nestedRefs = node.nestedPrefab && nestedObjectRefs
+    ? [...nestedObjectRefs.values()].filter(ref =>
+        ref.prefabInstanceId === node.nestedPrefab!.instanceId && ref.path === currentPath
+      )
+    : [];
+  const nestedGoRef = nestedRefs.find(ref => ref.typeName === 'GameObject');
+  if (nestedGoRef) {
+    lines.push(`${currentPath} = ${nestedGoRef.fileId}`);
+  } else if (!node.nestedPrefab && node.fileId && node.fileId !== '0') {
     lines.push(`${currentPath} = ${node.fileId}`);
   }
 
   // Transform fileId
-  if (node.transform.fileId) {
+  const transformTypeName = node.transform.isRect ? 'RectTransform' : 'Transform';
+  const nestedTransformRef = nestedRefs.find(ref => ref.typeName === transformTypeName);
+  if (nestedTransformRef) {
+    lines.push(`${currentPath}:${transformTypeName} = ${nestedTransformRef.fileId}`);
+  } else if (node.transform.fileId) {
     const typeName = node.transform.isRect ? 'RectTransform' : 'Transform';
     lines.push(`${currentPath}:${typeName} = ${node.transform.fileId}`);
   }
@@ -714,7 +786,7 @@ function writeNodeRefs(
 
   // Recurse children
   for (const child of node.children) {
-    writeNodeRefs(child, lines, resolver, strippedMap, currentPath);
+    writeNodeRefs(child, lines, resolver, strippedMap, nestedObjectRefs, currentPath);
   }
 }
 
@@ -1059,7 +1131,7 @@ function buildBaseDocMap(
   if (baseHierarchy) {
     collectNestedNodeNames(baseHierarchy, piNodeNames, resolver);
   }
-  const nestedRootRefs = buildNestedRootComponentRefMap(baseDocs, baseHierarchy, resolver);
+  const nestedObjectRefs = buildNestedSourceObjectRefMap(baseDocs, baseHierarchy, resolver);
 
   // Index all docs by fileId
   const byId = new Map<string, UnityDocument>();
@@ -1111,10 +1183,10 @@ function buildBaseDocMap(
     const piFileId = String(piRef.fileID);
 
     // Get GO name from the hierarchy's nested prefab node
-    const rootRef = nestedRootRefs.get(doc.fileId);
-    const nodeName = rootRef?.path || piNodeNames.get(piFileId) || '';
+    const objectRef = nestedObjectRefs.get(doc.fileId);
+    const nodeName = objectRef?.path || piNodeNames.get(piFileId) || '';
 
-    const typeName = rootRef?.typeName || resolveDocumentComponentType(doc, resolver);
+    const typeName = objectRef?.typeName || resolveDocumentComponentType(doc, resolver);
 
     map.set(doc.fileId, {
       fileId: doc.fileId,
@@ -1924,9 +1996,16 @@ function writeVariantCompact(file: UnityFile, lines: string[], resolver?: GuidRe
   writeVariantDetails(mainInstance, lines, baseMap, resolver, nestedResolved);
   writeNestedPrefabInstanceDetails(file.prefabInstances, mainInstance, lines, resolver);
 
-  const addedComponentRefMap = file.hierarchy
+  const rawAddedComponentRefMap = file.hierarchy
     ? buildInternalRefMap(file, resolver)
     : new Map<string, string>();
+  // __added_root__ is a parser-only virtual node. Added-object DETAILS and REFS
+  // are both rendered without it, so added-component property values must use
+  // the same canonical paths. Otherwise parse can emit a reference that its
+  // own REFS section never contains.
+  const addedComponentRefMap = file.hierarchy?.name === ADDED_ROOT_NAME
+    ? stripAddedRootPrefixFromRefMap(rawAddedComponentRefMap)
+    : rawAddedComponentRefMap;
   for (const component of addedComponents) {
     addedComponentRefMap.set(component.document.fileId, `${component.goPath}:${component.componentName}`);
   }

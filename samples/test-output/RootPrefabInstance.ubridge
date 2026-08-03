@@ -91,6 +91,179 @@ m_Text = "<color=#FEF41F>5\uCD08 </color>\uD6C4 \uB2E4\uC74C \uB2E8\uACC4\uC5D0
 [CloseCount]
 m_Name = CloseCount
 
+[+ &3027258665254570915:MonoBehaviour_4d0390bd]
+updateType = 0
+isSpeedBased = 0
+hasOnStart = 0
+hasOnPlay = 0
+hasOnUpdate = 0
+hasOnStepComplete = 0
+hasOnComplete = 0
+hasOnTweenCreated = 0
+hasOnRewind = 0
+onStart:
+  m_PersistentCalls:
+    m_Calls = []
+onPlay:
+  m_PersistentCalls:
+    m_Calls = []
+onUpdate:
+  m_PersistentCalls:
+    m_Calls = []
+onStepComplete:
+  m_PersistentCalls:
+    m_Calls = []
+onComplete:
+  m_PersistentCalls:
+    m_Calls = []
+onTweenCreated:
+  m_PersistentCalls:
+    m_Calls = []
+onRewind:
+  m_PersistentCalls:
+    m_Calls = []
+targetIsSelf = 1
+targetGO = {0}
+tweenTargetIsTargetGO = 1
+delay = 0
+duration = 1
+easeType = 5
+easeCurve:
+  serializedVersion = 2
+  m_Curve:
+    - serializedVersion = 3
+      time = 0
+      value = 0
+      inSlope = 0
+      outSlope = 0
+      tangentMode = 0
+      weightedMode = 0
+      inWeight = 0
+      outWeight = 0
+    - serializedVersion = 3
+      time = 1
+      value = 1
+      inSlope = 0
+      outSlope = 0
+      tangentMode = 0
+      weightedMode = 0
+      inWeight = 0
+      outWeight = 0
+  m_PreInfinity = 2
+  m_PostInfinity = 2
+  m_RotationOrder = 4
+loopType = 1
+loops = -1
+id = 
+isRelative = 0
+isFrom = 0
+isIndependentUpdate = 0
+autoKill = 1
+autoGenerate = 1
+isActive = 1
+isValid = 1
+target = ->Btns/CloseCount:MonoBehaviour_5f7201a1
+animationType = 7
+targetType = 10
+forcedTargetType = 0
+autoPlay = 1
+useTargetAsV3 = 0
+endValueFloat = 0.7
+endValueV3 = (0, 0, 0)
+endValueV2 = (0, 0)
+endValueColor = (1, 1, 1, 1)
+endValueString = 
+endValueRect:
+  serializedVersion = 2
+  x = 0
+  y = 0
+  width = 0
+  height = 0
+endValueTransform = {0}
+optionalBool0 = 0
+optionalBool1 = 0
+optionalFloat0 = 0
+optionalInt0 = 0
+optionalRotationMode = 0
+optionalScrambleMode = 0
+optionalShakeRandomnessMode = 0
+optionalString = 
+
+[+ &3027258665254570915:MonoBehaviour_0848bff1]
+m_BlurFactor = 1
+m_Style = 1
+m_EffectColor = (0, 0, 0, 0.29803923)
+m_EffectDistance = (0, -3)
+m_UseGraphicAlpha = 1
+
+[+ &5877011176819543437:MonoBehaviour_23bc9fef]
+_fsmListToControl = [->Btns/NoStage:0921f83142d681c4aa95961733cf8fcb]
+_transitions:
+  - State = 0
+    Name = default
+    Duration = 0
+    Ease = 0
+  - State = 1
+    Name = No Next Stage
+    Duration = 0
+    Ease = 0
+_currentState = -1
+
+[+ &5877011176819543437:Animator]
+m_Avatar = {0}
+m_Controller = {9100000, 0614ecda6d8b60c458a987b9164e4afe, 2}
+m_CullingMode = 0
+m_UpdateMode = 0
+m_ApplyRootMotion = 0
+m_LinearVelocityBlending = 0
+m_StabilizeFeet = 0
+m_AnimatePhysics = 0
+m_WarningMessage = 
+m_HasTransformHierarchy = 1
+m_AllowConstantClipSamplingOptimization = 1
+m_KeepAnimatorStateOnDisable = 0
+m_WriteDefaultValuesOnDisable = 0
+
+[+ &5877011176819543437:MonoBehaviour_abdafd9d]
+_rewardCells:
+  - {651531090603441033}
+  - {4926182550321959209}
+  - {3865889683135955272}
+  - {8257797610552251395}
+  - {6516796592190458174}
+_nextLevelMessageController = ->&5877011176819543437:MonoBehaviour_23bc9fef
+_startButtonController = ->Btns/BTN_130_Price:MonoBehaviour_23bc9fef
+_chargeableItemUI = ->Btns/BTN_130_Price:MonoBehaviour_777f7f02
+_autoMoveText = ->Btns/CloseCount:MonoBehaviour_5f7201a1
+
+[+ &5877011176819543437:MonoBehaviour_16d688be]
+parentReference:
+  TypeName = 
+autoRun = 1
+autoInjectGameObjects = []
+
+[+ &5877011176819543437:MonoBehaviour_cdd1289c]
+BackgroundCoverMode = 2
+CustomBackgroundCover = {0}
+InvokeBackKeyOnBGClick = 1
+CloseOnBackKey = 0
+UseDefaultPopupSound = 1
+IsFullScreenOccluder = 0
+
+[+ &5877011176819543437:MonoBehaviour_10dd3e06]
+_animator = ->&5877011176819543437:Animator
+_closeState = DungeonRewardBtnsOut
+
+[+ &5877011176819543437:MonoBehaviour_10dd3e06]
+_animator = {3422022239125482332}
+_closeState = DungeonClearRewardOut
+
+[+ &6608844251260348376:CanvasGroup]
+m_Alpha = 1
+m_Interactable = 1
+m_BlocksRaycasts = 1
+m_IgnoreParentGroups = 0
+
 [Btns:RectTransform]
 anchor = (0, 0)-(1, 0)
 size = (0, 628)
@@ -315,25 +488,65 @@ DungeonClearReward = 5877011176819543437
 &8395409843983819010 = 8395409843983819010
 &8738062381939999074 = 8738062381939999074
 &3616926562377977104 = 3616926562377977104
+&3616926562377977104:__instance = 760333117984626963
 &5672143376387600595 = 5672143376387600595
+&5672143376387600595:__instance = 760333117984626963
 Close = 7210969423359924726
+Close:__instance = 760333117984626963
 &223648653984115152 = 223648653984115152
+&223648653984115152:__instance = 2326492243139137140
 &965803255182604083 = 965803255182604083
+&965803255182604083:__instance = 2326492243139137140
 &1471358605887141553 = 1471358605887141553
+&1471358605887141553:__instance = 2326492243139137140
 &1812356894474226468 = 1812356894474226468
+&1812356894474226468:__instance = 2326492243139137140
 &1934706425549889224 = 1934706425549889224
+&1934706425549889224:__instance = 2326492243139137140
 &2191148651219070960:Image = 2191148651219070960
+&2191148651219070960:Image:__instance = 2326492243139137140
 &2565549063110772291 = 2565549063110772291
+&2565549063110772291:__instance = 2326492243139137140
 &3162660291261548559 = 3162660291261548559
+&3162660291261548559:__instance = 2326492243139137140
 BTN_130_Price = 4352296941819452033
+BTN_130_Price:__instance = 2326492243139137140
 &4416312238337949458:GameObject = 4416312238337949458
+&4416312238337949458:GameObject:__instance = 2326492243139137140
 &4619153748631767312 = 4619153748631767312
+&4619153748631767312:__instance = 2326492243139137140
 &6108363052959557579 = 6108363052959557579
+&6108363052959557579:__instance = 2326492243139137140
 &6509862648532230589 = 6509862648532230589
+&6509862648532230589:__instance = 2326492243139137140
 &286857189575887468 = 286857189575887468
+&286857189575887468:__instance = 3467994722580735237
 &5013819943648304594 = 5013819943648304594
+&5013819943648304594:__instance = 3467994722580735237
 CloseCount = 5426011153846427230
+CloseCount:__instance = 3467994722580735237
 &7632638928775293530 = 7632638928775293530
+&7632638928775293530:__instance = 3467994722580735237
+&3027258665254570915:MonoBehaviour_4d0390bd = 3700455432335166655
+&3027258665254570915:MonoBehaviour_4d0390bd:__instance = 3467994722580735237
+&3027258665254570915:MonoBehaviour_0848bff1 = 2416441335956065705
+&3027258665254570915:MonoBehaviour_0848bff1:__instance = 3467994722580735237
+&5877011176819543437:MonoBehaviour_23bc9fef = 5218798815554059566
+&5877011176819543437:MonoBehaviour_23bc9fef:__instance = 4237197264789859805
+&5877011176819543437:Animator = 6934352525383505805
+&5877011176819543437:Animator:__instance = 4237197264789859805
+&5877011176819543437:MonoBehaviour_abdafd9d = 519529413612329612
+&5877011176819543437:MonoBehaviour_abdafd9d:__instance = 4237197264789859805
+&5877011176819543437:MonoBehaviour_16d688be = 2127577070528002585
+&5877011176819543437:MonoBehaviour_16d688be:__instance = 4237197264789859805
+&5877011176819543437:MonoBehaviour_cdd1289c = 423817490651040482
+&5877011176819543437:MonoBehaviour_cdd1289c:__instance = 4237197264789859805
+&5877011176819543437:MonoBehaviour_10dd3e06 = 6456036233265591392
+&5877011176819543437:MonoBehaviour_10dd3e06:__instance = 4237197264789859805
+&5877011176819543437:MonoBehaviour_10dd3e06 = 3952841711362079815
+&5877011176819543437:MonoBehaviour_10dd3e06:__instance = 4237197264789859805
+&6608844251260348376:CanvasGroup = 2483630519831868224
+&6608844251260348376:CanvasGroup:__instance = 4237197264789859805
 Btns = 2215002142782984192
 Btns:RectTransform = 7962103618101709719
 Btns:CanvasGroup = 5305909328648906312
@@ -355,6 +568,5 @@ Btns/TextBg/Text = 3984327785399796732
 Btns/TextBg/Text:RectTransform = 7762629750005236276
 Btns/TextBg/Text:5f7201a12d95ffc409449d95f23cf332 = 8244468080850333906
 Btns/TextBg/Text:4d0390bd8b8ffd640b34fe25065ff1df = 8427259870183354124
-Btns/CloseCount = 1883121903986699942
 Btns/CloseCount:RectTransform = 6470650642202529631
 Btns/CloseCount:__instance = 3467994722580735237

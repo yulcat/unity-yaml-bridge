@@ -1,38 +1,54 @@
 # ubridge v1 | variant | base-guid:2982fa53447c5c643865bbd0d194eab1
 --- STRUCTURE
-(variant of 2982fa53447c5c643865bbd0d194eab1)
+_Card_Template [CameraFacingBillboard, CardBehaviour*]
+├─ Frame [Image]
+├─ _Header_Text {_Header_Text}
+│  └─ Text [TextMeshProUGUI*]
+├─ Paragraph_Text {Paragraph_Text}
+│  └─ Text [TextMeshProUGUI*]
+└─ small circle {Medal_Template} [MedalDisplayUI*, Animator]
+   ├─ Circle_Image [Image*]
+   ├─ Small_Circle_Image [Image*]
+   ├─ ActivationParticles_Template {ActivationParticles_Template}
+   │  ├─ ParticleReferences
+   │  │  ├─ Burst_ParticleSystem [ParticleSystem*, ParticleSystemRenderer*]
+   │  │  └─ Activated_ParticleSystem [ParticleSystem*, ParticleSystemRenderer*]
+   │  ├─ Activated_UIParticles [UIParticles*]
+   │  └─ Burst_UIParticles [UIParticles*]
+   └─ ProfileIcon_Image {ProfileIcon_Image}
+      └─ Image [Image*]
 --- DETAILS
 
-[Card_Explorer_Variant]
+[_Card_Template]
 m_Name = Card_Explorer_Variant
 
-[&7213628277689136018:TextMeshProUGUI]
+[_Header_Text:TextMeshProUGUI]
 m_text = Explorer
 
-[&4010685728728214465:TextMeshProUGUI]
+[Paragraph_Text:TextMeshProUGUI]
 m_text = Agility and speed. A fast mode for exploring and reaching new heights.
 
-[&6683245448512787790:Image]
+[small circle/Circle_Image:Image]
 m_Sprite = {21300000, 42d984ce295234641b1cb18df0854078}
 m_Color.a = -0.044181824
 
-[&2153683003282787722:Image]
+[small circle/ProfileIcon_Image:Image]
 m_Sprite = {21300000, 54141271f16af47a1be81e646cda9698}
 m_Color.a = -0.044181824
 
-[&3617094297190067200]
+[_Card_Template:CardBehaviour]
 cardData = {11400000, 1fe163de0e6ff604d9ba3bd3b6228a5b, 2}
 
-[&6431933051627347590:CanvasGroup]
+[_Card_Template/small circle:MedalDisplayUI]
 enableAlphaFading = 1
 
-[&4413684577511426319:ParticleSystemRenderer]
+[small circle:ParticleSystemRenderer]
 texture = {2800000, c04192e13c1d84382bad41a4b1981ad7}
 
-[&8050208937853474224:Image]
+[small circle/Small_Circle_Image:Image]
 m_Color.a = -0.044181824
 
-[&4413684578761676915:ParticleSystem]
+[small circle/ActivationParticles_Template/ParticleReferences/Activated_ParticleSystem:ParticleSystem]
 EmissionModule.m_Bursts.Array.size = 0
 EmissionModule.m_Bursts.Array.data[0].countCurve.maxCurve.m_Curve.Array.size = 2
 EmissionModule.m_Bursts.Array.data[0].countCurve.minCurve.m_Curve.Array.size = 2
@@ -60,14 +76,55 @@ EmissionModule.m_Bursts.Array.data[0].countCurve.minScalar = 30.0000
 ColorModule.gradient.maxGradient.key1.a = 0.7411765
 --- REFS
 __instance = 4987371547573211178
-&8368714169436892108 = 8368714169436892108
-Card_Explorer_Variant = 3640861149533394057
-&7213628277689136018:TextMeshProUGUI = 7213628277689136018
-&4010685728728214465:TextMeshProUGUI = 4010685728728214465
-&6683245448512787790:Image = 6683245448512787790
-&2153683003282787722:Image = 2153683003282787722
-&3617094297190067200 = 3617094297190067200
-&6431933051627347590:CanvasGroup = 6431933051627347590
-&4413684577511426319:ParticleSystemRenderer = 4413684577511426319
-&8050208937853474224:Image = 8050208937853474224
-&4413684578761676915:ParticleSystem = 4413684578761676915
+_Card_Template:RectTransform = 8368714169436892108
+_Card_Template = 3640861149533394057
+_Header_Text:TextMeshProUGUI = 7213628277689136018
+Paragraph_Text:TextMeshProUGUI = 4010685728728214465
+small circle/Circle_Image:Image = 6683245448512787790
+small circle/ProfileIcon_Image:Image = 2153683003282787722
+_Card_Template:CardBehaviour = 3617094297190067200
+_Card_Template/small circle:MedalDisplayUI = 6431933051627347590
+small circle:ParticleSystemRenderer = 4413684577511426319
+small circle/Small_Circle_Image:Image = 8050208937853474224
+small circle/ActivationParticles_Template/ParticleReferences/Activated_ParticleSystem:ParticleSystem = 4413684578761676915
+_Card_Template/Frame = 2100659746680659327
+_Card_Template/Frame:__instance = 4987371547573211178
+_Card_Template/Frame:__source = 2982fa53447c5c643865bbd0d194eab1
+_Card_Template/Frame:RectTransform = 233227047284964750
+_Card_Template/Frame:RectTransform:__instance = 4987371547573211178
+_Card_Template/Frame:RectTransform:__source = 2982fa53447c5c643865bbd0d194eab1
+_Card_Template/Frame:CanvasRenderer = 7966559479946549636
+_Card_Template/Frame:CanvasRenderer:__instance = 4987371547573211178
+_Card_Template/Frame:CanvasRenderer:__source = 2982fa53447c5c643865bbd0d194eab1
+_Card_Template/Frame:Image = 5598127903791586326
+_Card_Template/Frame:Image:__instance = 4987371547573211178
+_Card_Template/Frame:Image:__source = 2982fa53447c5c643865bbd0d194eab1
+_Card_Template:__instance = 4987371547573211178
+_Card_Template:__source = 2982fa53447c5c643865bbd0d194eab1
+_Card_Template:RectTransform:__instance = 4987371547573211178
+_Card_Template:RectTransform:__source = 2982fa53447c5c643865bbd0d194eab1
+_Card_Template:CameraFacingBillboard = 182953068969363021
+_Card_Template:CameraFacingBillboard:__instance = 4987371547573211178
+_Card_Template:CameraFacingBillboard:__source = 2982fa53447c5c643865bbd0d194eab1
+_Card_Template:CardBehaviour:__instance = 4987371547573211178
+_Card_Template:CardBehaviour:__source = 2982fa53447c5c643865bbd0d194eab1
+small circle:ParticleSystem = 4413684578389200477
+small circle:ParticleSystem:__instance = 4987371547573211178
+small circle:ParticleSystem:__source = d06aea9cb778d4741bb5f11c640fdb9e
+_Card_Template/small circle:RectTransform = 7871776933903133687
+_Card_Template/small circle:RectTransform:__instance = 4987371547573211178
+_Card_Template/small circle:RectTransform:__source = d06aea9cb778d4741bb5f11c640fdb9e
+_Card_Template/small circle:MedalDisplayUI:__instance = 4987371547573211178
+_Card_Template/small circle:MedalDisplayUI:__source = d06aea9cb778d4741bb5f11c640fdb9e
+_Card_Template/Paragraph_Text = 815790438873356520
+_Card_Template/Paragraph_Text:__instance = 4987371547573211178
+_Card_Template/Paragraph_Text:__source = de624dab09f28584fa6f3e2ddc3d0d3b
+_Card_Template/Paragraph_Text:RectTransform = 7279466503550670669
+_Card_Template/Paragraph_Text:RectTransform:__instance = 4987371547573211178
+_Card_Template/Paragraph_Text:RectTransform:__source = de624dab09f28584fa6f3e2ddc3d0d3b
+_Card_Template/_Header_Text = 2276444076082895750
+_Card_Template/_Header_Text:__instance = 4987371547573211178
+_Card_Template/_Header_Text:__source = 4363f8259f7f14e418706d51b057d9f3
+_Card_Template/_Header_Text:RectTransform = 4967643782733132011
+_Card_Template/_Header_Text:RectTransform:__instance = 4987371547573211178
+_Card_Template/_Header_Text:RectTransform:__source = 4363f8259f7f14e418706d51b057d9f3

@@ -363,6 +363,89 @@ function makeIssue5Resolver() {
     issue5Resolver.addAsset(ISSUE5_BASE_GUID, basePath, 'MyPage');
     return issue5Resolver;
 }
+function issue6NestedButtonSourceYaml() {
+    return issue5NestedButtonSourceYaml()
+        .replace('  m_Children: []', '  m_Children:\n  - {fileID: 5000}')
+        .concat(`--- !u!1 &6000
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 5000}
+  m_Layer: 0
+  m_Name: Label
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!224 &5000
+RectTransform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 6000}
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Children: []
+  m_Father: {fileID: 2000}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+`);
+}
+function issue6ParentPrefabYaml(rootFirst) {
+    const rootStub = `--- !u!1 &1010 stripped
+GameObject:
+  m_CorrespondingSourceObject: {fileID: 1000, guid: ${ISSUE5_NESTED_GUID}, type: 3}
+  m_PrefabInstance: {fileID: 900}
+  m_PrefabAsset: {fileID: 0}
+`;
+    const childStub = `--- !u!1 &6010 stripped
+GameObject:
+  m_CorrespondingSourceObject: {fileID: 6000, guid: ${ISSUE5_NESTED_GUID}, type: 3}
+  m_PrefabInstance: {fileID: 900}
+  m_PrefabAsset: {fileID: 0}
+`;
+    const stubs = rootFirst ? `${rootStub}${childStub}` : `${childStub}${rootStub}`;
+    return issue5ParentPrefabYaml()
+        .replace('  buttonRef: {fileID: 3020}', `  buttonRef: {fileID: 3020}
+  rootGoRef: {fileID: 1010}
+  childGoRef: {fileID: 6010}`)
+        .replace('--- !u!224 &2100 stripped\n', `${stubs}--- !u!224 &2100 stripped\n`);
+}
+function issue6ParentWithoutRootStubYaml() {
+    return issue6ParentPrefabYaml(false)
+        .replace(/--- !u!1 &1010 stripped\nGameObject:\n(?:  .*\n){3}/, '')
+        .replace('  rootGoRef: {fileID: 1010}\n', '  rootGoRef: {fileID: 0}\n');
+}
+function issue6VariantYaml() {
+    return issue5VariantParentYaml().replace('    m_RemovedComponents: []', `    - target: {fileID: 300, guid: ${ISSUE5_BASE_GUID}, type: 3}
+      propertyPath: rootGoRef
+      value:
+      objectReference: {fileID: 1010}
+    - target: {fileID: 300, guid: ${ISSUE5_BASE_GUID}, type: 3}
+      propertyPath: childGoRef
+      value:
+      objectReference: {fileID: 6010}
+    m_RemovedComponents: []`);
+}
+function makeIssue6Resolver(parentYaml) {
+    const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ubridge-issue6-'));
+    const nestedPath = path.join(projectRoot, 'BTN_Start.prefab');
+    const basePath = path.join(projectRoot, 'MyPage.prefab');
+    fs.writeFileSync(nestedPath, issue6NestedButtonSourceYaml());
+    fs.writeFileSync(basePath, parentYaml);
+    const issue6Resolver = new guid_resolver_1.GuidResolver();
+    issue6Resolver.add(ISSUE5_PARENT_SCRIPT_GUID, 'PageController');
+    issue6Resolver.add(ISSUE5_SIMPLE_FSM_GUID, 'SimpleFSMController');
+    issue6Resolver.addAsset(ISSUE5_NESTED_GUID, nestedPath, 'BTN_Start');
+    issue6Resolver.addAsset(ISSUE5_BASE_GUID, basePath, 'MyPage');
+    return issue6Resolver;
+}
 let totalTests = 0;
 let passedTests = 0;
 function pass(label) {
@@ -492,6 +575,111 @@ console.log('='.repeat(60));
     }
     else {
         fail('Variant nested root component write-back', output);
+    }
+}
+// ============================================================
+// Issue #6: nested root GO identity must not depend on stub order
+// ============================================================
+for (const rootFirst of [false, true]) {
+    console.log('============================================================');
+    console.log(`TEST: Issue #6 — nested root GO with ${rootFirst ? 'root' : 'child'} stub first`);
+    console.log('============================================================');
+    const parentYaml = issue6ParentPrefabYaml(rootFirst);
+    const issue6Resolver = makeIssue6Resolver(parentYaml);
+    const ast = (0, unity_yaml_parser_1.parseUnityYaml)(parentYaml);
+    const compactStr = (0, compact_writer_1.writeCompact)(ast, { guidResolver: issue6Resolver });
+    const compact = (0, compact_reader_1.readCompact)(compactStr);
+    const rootKey = 'MyPage/BTN_Start';
+    const childKey = 'MyPage/BTN_Start/Label';
+    if (compact.refs.get(rootKey)?.[0] === '1010') {
+        pass(`Nested instance root maps to its source-root stub (${rootFirst ? 'root' : 'child'} first)`);
+    }
+    else {
+        fail('Nested instance root REFS identity', compactStr);
+    }
+    const noProjectCompact = (0, compact_reader_1.readCompact)((0, compact_writer_1.writeCompact)(ast));
+    if (noProjectCompact.refs.get(rootKey)?.[0] === '1010') {
+        pass('Root m_Name identity keeps stub selection order-independent without --project');
+    }
+    else {
+        fail('No-project nested root identity', (0, compact_writer_1.writeCompact)(ast));
+    }
+    if (compact.refs.get(childKey)?.[0] === '6010') {
+        pass('Nested child stub receives its own deep path');
+    }
+    else {
+        fail('Nested child deep REFS path', compactStr);
+    }
+    if (compactStr.includes('rootGoRef = ->MyPage/BTN_Start') &&
+        compactStr.includes('childGoRef = ->MyPage/BTN_Start/Label')) {
+        pass('Root and child GameObject references serialize to distinct paths');
+    }
+    else {
+        fail('Distinct root/child objectReference paths', compactStr);
+    }
+    const merged = (0, compact_merger_1.mergeCompactChanges)(ast, compact);
+    const controller = merged.documents.find(doc => doc.fileId === '300');
+    if (String(controller?.properties.rootGoRef?.fileID) === '1010' &&
+        String(controller?.properties.childGoRef?.fileID) === '6010') {
+        pass('No-edit roundtrip preserves root and child GameObject identities');
+    }
+    else {
+        fail('Issue #6 no-edit roundtrip', (0, unity_yaml_writer_1.writeUnityYaml)(merged));
+    }
+}
+{
+    console.log('============================================================');
+    console.log('TEST: Issue #6 — child stub exists without a root GO stub');
+    console.log('============================================================');
+    const parentYaml = issue6ParentWithoutRootStubYaml();
+    const issue6Resolver = makeIssue6Resolver(parentYaml);
+    const compact = (0, compact_reader_1.readCompact)((0, compact_writer_1.writeCompact)((0, unity_yaml_parser_1.parseUnityYaml)(parentYaml), { guidResolver: issue6Resolver }));
+    if (!compact.refs.has('MyPage/BTN_Start')) {
+        pass('Missing root stub does not silently map the instance path to a child');
+    }
+    else {
+        fail('Missing root stub must not fabricate a wrong root mapping', JSON.stringify(compact.refs.get('MyPage/BTN_Start')));
+    }
+    if (compact.refs.get('MyPage/BTN_Start/Label')?.[0] === '6010') {
+        pass('Child stub remains addressable when the root stub is absent');
+    }
+    else {
+        fail('Child-only nested path mapping');
+    }
+}
+{
+    console.log('============================================================');
+    console.log('TEST: Issue #6 — variant inherits nested root and child stubs');
+    console.log('============================================================');
+    const parentYaml = issue6ParentPrefabYaml(false);
+    const issue6Resolver = makeIssue6Resolver(parentYaml);
+    const ast = (0, unity_yaml_parser_1.parseUnityYaml)(issue6VariantYaml());
+    const compactStr = (0, compact_writer_1.writeCompact)(ast, { guidResolver: issue6Resolver });
+    const compact = (0, compact_reader_1.readCompact)(compactStr);
+    if (compact.refs.get('MyPage/BTN_Start')?.[0] === '1010' &&
+        compact.refs.get('MyPage/BTN_Start/Label')?.[0] === '6010') {
+        pass('Variant REFS keeps inherited root and child identities distinct');
+    }
+    else {
+        fail('Variant inherited nested GO mappings', compactStr);
+    }
+    if (compactStr.includes('rootGoRef = ->MyPage/BTN_Start') &&
+        compactStr.includes('childGoRef = ->MyPage/BTN_Start/Label')) {
+        pass('Variant DETAILS emits distinct inherited root and child paths');
+    }
+    else {
+        fail('Variant inherited nested objectReference paths', compactStr);
+    }
+    const merged = (0, compact_merger_1.mergeCompactChanges)(ast, compact);
+    const mods = merged.prefabInstances[0].modifications;
+    const rootMod = mods.find(mod => mod.propertyPath === 'rootGoRef');
+    const childMod = mods.find(mod => mod.propertyPath === 'childGoRef');
+    if (String(rootMod?.objectReference.fileID) === '1010' &&
+        String(childMod?.objectReference.fileID) === '6010') {
+        pass('Variant no-edit roundtrip preserves inherited GO identities');
+    }
+    else {
+        fail('Variant Issue #6 no-edit roundtrip', (0, unity_yaml_writer_1.writeUnityYaml)(merged));
     }
 }
 // ============================================================

@@ -438,6 +438,12 @@ function variantWithExistingAddedReferenceDocsYaml() {
   targetRefs:
   - {fileID: 1600}`);
 }
+function variantWithAddedComponentReferencingAddedObjectYaml() {
+    return variantWithExistingAddedReferenceDocsYaml().replace('    m_AddedComponents: []', `    m_AddedComponents:
+    - targetCorrespondingSourceObject: {fileID: 100, guid: ${BASE_GUID}, type: 3}
+      insertIndex: -1
+      addedObject: {fileID: 1200}`);
+}
 function addedRootCompact(detailsHeader, detailsBody, refsBody) {
     return (0, compact_reader_1.readCompact)(`# ubridge v1 | variant | base-guid:${BASE_GUID}
 --- STRUCTURE
@@ -1481,6 +1487,25 @@ Target:${IMAGE_GUID} = 1600`);
     assert(compactText.includes(`targetRef = ->Target:${IMAGE_GUID}`), 'writer emits canonical non-prefixed refs for added-object DETAILS', compactText);
     assert(!compactText.includes(`->__added_root__/Target:${IMAGE_GUID}`), 'writer does not reintroduce __added_root__ in added-object reference values', compactText);
     assert(fileIdOf(rewrittenSourceDoc?.properties.targetRef) === '1600', 'parse -> compact -> write keeps added-object scalar reference unchanged', (0, unity_yaml_writer_1.writeUnityYaml)(rewritten));
+}
+{
+    console.log('\nIssue #7: added-component refs never leak the virtual added-root path');
+    const resolver = makeResolver([
+        { path: 'Base.prefab', guid: BASE_GUID, content: basePrefabYaml() },
+        { path: 'Image.cs', guid: IMAGE_GUID, content: 'public class Image {}\n' },
+    ]);
+    const sourceYaml = variantWithAddedComponentReferencingAddedObjectYaml();
+    const ast = (0, unity_yaml_parser_1.parseUnityYaml)(sourceYaml);
+    const compactText = (0, compact_writer_1.writeCompact)(ast, { guidResolver: resolver });
+    const details = getSection(compactText, 'DETAILS');
+    const refs = getSection(compactText, 'REFS');
+    assert(details.includes('[+ BaseRoot:Image]') &&
+        details.includes(`targetRef = ->Target:Image`), 'added-component DETAILS uses the same canonical path as REFS', details);
+    assert(!details.includes('->__added_root__/'), 'parser-only __added_root__ prefix does not leak into DETAILS', details);
+    assert(refs.includes('Target:Image = 1600'), 'canonical added-object target is present in REFS', refs);
+    const rewritten = (0, compact_merger_1.mergeCompactChanges)(ast, (0, compact_reader_1.readCompact)(compactText));
+    const sourceDoc = rewritten.documents.find(doc => doc.fileId === '1200');
+    assert(fileIdOf(sourceDoc?.properties.targetRef) === '1600', 'writer-generated added-component path survives a no-edit roundtrip', (0, unity_yaml_writer_1.writeUnityYaml)(rewritten));
 }
 console.log(`\nSUMMARY: ${passedTests}/${totalTests} tests passed`);
 process.exit(passedTests === totalTests ? 0 : 1);

@@ -419,6 +419,16 @@ function variantWithExistingAddedReferenceDocsYaml(): string {
   );
 }
 
+function variantWithAddedComponentReferencingAddedObjectYaml(): string {
+  return variantWithExistingAddedReferenceDocsYaml().replace(
+    '    m_AddedComponents: []',
+    `    m_AddedComponents:
+    - targetCorrespondingSourceObject: {fileID: 100, guid: ${BASE_GUID}, type: 3}
+      insertIndex: -1
+      addedObject: {fileID: 1200}`
+  );
+}
+
 function addedRootCompact(
   detailsHeader: string,
   detailsBody: string,
@@ -1692,6 +1702,33 @@ Target:${IMAGE_GUID} = 1600`
     compactText);
   assert(fileIdOf(rewrittenSourceDoc?.properties.targetRef) === '1600',
     'parse -> compact -> write keeps added-object scalar reference unchanged',
+    writeUnityYaml(rewritten));
+}
+
+{
+  console.log('\nIssue #7: added-component refs never leak the virtual added-root path');
+  const resolver = makeResolver([
+    { path: 'Base.prefab', guid: BASE_GUID, content: basePrefabYaml() },
+    { path: 'Image.cs', guid: IMAGE_GUID, content: 'public class Image {}\n' },
+  ]);
+  const sourceYaml = variantWithAddedComponentReferencingAddedObjectYaml();
+  const ast = parseUnityYaml(sourceYaml);
+  const compactText = writeCompact(ast, { guidResolver: resolver });
+  const details = getSection(compactText, 'DETAILS');
+  const refs = getSection(compactText, 'REFS');
+
+  assert(details.includes('[+ BaseRoot:Image]') &&
+    details.includes(`targetRef = ->Target:Image`),
+    'added-component DETAILS uses the same canonical path as REFS', details);
+  assert(!details.includes('->__added_root__/'),
+    'parser-only __added_root__ prefix does not leak into DETAILS', details);
+  assert(refs.includes('Target:Image = 1600'),
+    'canonical added-object target is present in REFS', refs);
+
+  const rewritten = mergeCompactChanges(ast, readCompact(compactText));
+  const sourceDoc = rewritten.documents.find(doc => doc.fileId === '1200');
+  assert(fileIdOf(sourceDoc?.properties.targetRef) === '1600',
+    'writer-generated added-component path survives a no-edit roundtrip',
     writeUnityYaml(rewritten));
 }
 

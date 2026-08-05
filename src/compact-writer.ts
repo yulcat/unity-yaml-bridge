@@ -2043,6 +2043,23 @@ function writeVariantCompact(file: UnityFile, lines: string[], resolver?: GuidRe
     }
   }
 
+  // Older v1 output could render an added-component property as ->Path:Type
+  // without emitting the matching REFS alias. Keep the v1 syntax, but make
+  // every unambiguous path reference written above resolvable by the reader.
+  const refsStart = lines.lastIndexOf('--- REFS');
+  const existingVariantRefs = new Set(lines.slice(refsStart + 1));
+  const variantDetailLines = lines.slice(0, refsStart);
+  for (const [fileId, refPath] of addedComponentRefMap) {
+    if (!variantDetailLines.some(line =>
+      line.includes(`->${refPath}`) || line.includes(`@${refPath}`)
+    )) continue;
+    const refLine = `${refPath} = ${fileId}`;
+    if (!existingVariantRefs.has(refLine)) {
+      lines.push(refLine);
+      existingVariantRefs.add(refLine);
+    }
+  }
+
   return lines.join('\n') + '\n';
 }
 

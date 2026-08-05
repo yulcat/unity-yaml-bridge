@@ -230,6 +230,7 @@ npx tsx src/test-compact-roundtrip.ts
 - ✅ REFS section (self-contained files)
 - ✅ Auto fileID generation for new elements
 - ✅ Compact edit → YAML write-back
+- ✅ Fail-closed v1 parsing and transactional merge integrity checks
 - 🔧 Variant path resolution (base prefab cross-reference)
 - 🔧 CLI tool (`ubridge parse` / `ubridge write`)
 - 📋 Scene file support

@@ -10,16 +10,22 @@ exports.readCompact = readCompact;
 exports.parseCompactValue = parseCompactValue;
 /** Parse a .ubridge string into a CompactFile */
 function readCompact(content) {
-    const lines = content.split('\n');
+    // Accept files edited on Windows and UTF-8 files with a BOM without changing
+    // the canonical LF output produced by writeCompact().
+    const normalized = content.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n');
+    const lines = normalized.split('\n');
     // Parse header
     const headerLine = lines[0];
-    const headerMatch = headerLine.match(/^# ubridge v(\d+) \| (\w+)(?:\s*\|\s*(.+))?/);
+    const headerMatch = headerLine.match(/^# ubridge v(\d+) \| (prefab|variant|scene)(?:\s*\|\s*(.+))?$/);
     if (!headerMatch) {
         throw new Error(`Invalid .ubridge header: ${headerLine}`);
     }
     const version = parseInt(headerMatch[1], 10);
     const type = headerMatch[2];
     const extra = headerMatch[3] || '';
+    if (version !== 1) {
+        throw new Error(`Unsupported .ubridge version: v${version}. This build supports v1 only.`);
+    }
     let baseGuid;
     const guidMatch = extra.match(/base-guid:(\S+)/);
     if (guidMatch)
@@ -28,13 +34,30 @@ function readCompact(content) {
     let structureStart = -1;
     let detailsStart = -1;
     let refsStart = -1;
+    const sectionCounts = new Map();
     for (let i = 0; i < lines.length; i++) {
-        if (lines[i] === '--- STRUCTURE')
+        if (lines[i] === '--- STRUCTURE') {
             structureStart = i + 1;
-        if (lines[i] === '--- DETAILS')
+            sectionCounts.set('STRUCTURE', (sectionCounts.get('STRUCTURE') || 0) + 1);
+        }
+        if (lines[i] === '--- DETAILS') {
             detailsStart = i + 1;
-        if (lines[i] === '--- REFS')
+            sectionCounts.set('DETAILS', (sectionCounts.get('DETAILS') || 0) + 1);
+        }
+        if (lines[i] === '--- REFS') {
             refsStart = i + 1;
+            sectionCounts.set('REFS', (sectionCounts.get('REFS') || 0) + 1);
+        }
+    }
+    for (const [name, count] of sectionCounts) {
+        if (count > 1)
+            throw new Error(`Duplicate .ubridge section: ${name}.`);
+    }
+    if ((detailsStart >= 0 && structureStart < 0) ||
+        (refsStart >= 0 && detailsStart < 0) ||
+        (structureStart >= 0 && detailsStart >= 0 && structureStart >= detailsStart) ||
+        (detailsStart >= 0 && refsStart >= 0 && detailsStart >= refsStart)) {
+        throw new Error('Invalid .ubridge section order. Expected STRUCTURE, DETAILS, then REFS.');
     }
     // Parse structure
     let structure = null;
@@ -256,6 +279,9 @@ function parseDetailsSections(lines, sections) {
                         });
                     }
                 }
+                else {
+                    throw new Error(`Array item has no parent block in DETAILS: ${trimmed}`);
+                }
             }
             else {
                 const propMatch = trimmed.match(/^(.+?)\s*=\s*(.*)$/);
@@ -280,7 +306,13 @@ function parseDetailsSections(lines, sections) {
                     target.push(prop);
                     stack.push({ prop, indent });
                 }
+                else {
+                    throw new Error(`Invalid DETAILS line: ${trimmed}`);
+                }
             }
+        }
+        else {
+            throw new Error(`DETAILS property appears before a section header: ${trimmed}`);
         }
     }
 }
@@ -482,9 +514,16 @@ function parseRefsSection(lines, refs) {
             continue;
         const eqIdx = trimmed.indexOf(' = ');
         if (eqIdx < 0)
-            continue;
+            throw new Error(`Invalid REFS line: ${trimmed}`);
         const key = trimmed.substring(0, eqIdx);
         const value = trimmed.substring(eqIdx + 3);
+        const isSourceMetadata = key.endsWith(':__source');
+        const validValue = isSourceMetadata
+            ? /^[a-f0-9]{32}$/i.test(value)
+            : /^-?\d+$/.test(value);
+        if (!key || !validValue) {
+            throw new Error(`Invalid REFS entry: ${trimmed}`);
+        }
         if (!refs.has(key))
             refs.set(key, []);
         refs.get(key).push(value);

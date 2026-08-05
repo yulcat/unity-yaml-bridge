@@ -16,6 +16,12 @@ import { UnityFile, GameObjectNode, UnityDocument, UNITY_TYPE_MAP, ComponentInfo
 import { CompactFile, CompactSection, CompactProperty, parseCompactValue } from './compact-reader';
 import { PathLookupOptions, findPathMapEntry, findPathSetEntry } from './path-utils';
 import { GuidResolver } from './guid-resolver';
+import {
+  assertCompactSourceCompatible,
+  assertNoNewIntegrityIssues,
+  cloneCompactFile,
+  collectUnityIntegrityIssues,
+} from './merge-validation';
 
 export interface CompactMergeOptions {
   /** Project GUID resolver, required to add a custom script by class name. */
@@ -218,6 +224,118 @@ function componentMatches(info: ComponentInfo, componentType: string): boolean {
   return info.typeName === componentType
     || info.scriptName === componentType
     || info.scriptGuid === componentType;
+}
+
+function sectionAddress(section: CompactSection): string {
+  return section.componentType
+    ? `${section.goPath}:${section.componentType}`
+    : section.goPath;
+}
+
+/** Component type encoded in legacy [&fileID:Type] section headers. */
+function effectiveSectionComponentType(section: CompactSection): string | undefined {
+  if (section.componentType) return section.componentType;
+  return /^&\d+:(.+)$/.exec(section.goPath)?.[1];
+}
+
+function validateDocumentType(
+  section: CompactSection,
+  document: UnityDocument,
+  resolver?: GuidResolver
+): void {
+  const address = sectionAddress(section);
+  const componentType = effectiveSectionComponentType(section);
+  if (!componentType) {
+    if (document.typeId !== 1) {
+      throw new Error(`REFS target type mismatch for ${address}: &${document.fileId} is ${document.typeName}.`);
+    }
+    return;
+  }
+
+  if (componentType === 'Transform' || componentType === 'RectTransform') {
+    const expectedTypeId = componentType === 'RectTransform' ? 224 : 4;
+    if (document.typeId !== expectedTypeId) {
+      throw new Error(`REFS target type mismatch for ${address}: &${document.fileId} is ${document.typeName}.`);
+    }
+    return;
+  }
+
+  if ([1, 4, 224, 1001].includes(document.typeId)) {
+    throw new Error(`REFS target type mismatch for ${address}: &${document.fileId} is ${document.typeName}.`);
+  }
+
+  if (document.typeId !== 114) {
+    const nativeType = UNITY_TYPE_MAP[document.typeId] || document.typeName;
+    if (nativeType !== componentType) {
+      throw new Error(`REFS target type mismatch for ${address}: &${document.fileId} is ${nativeType}.`);
+    }
+    return;
+  }
+
+  const scriptGuid = document.properties.m_Script?.guid;
+  if (/^[a-f0-9]{32}$/i.test(componentType) &&
+      scriptGuid && scriptGuid !== componentType) {
+    throw new Error(`REFS target script mismatch for ${address}: &${document.fileId} uses ${scriptGuid}.`);
+  }
+  const resolvedGuid = resolver?.resolveGuid(componentType);
+  if (resolvedGuid && scriptGuid && resolvedGuid !== scriptGuid) {
+    throw new Error(`REFS target script mismatch for ${address}: &${document.fileId} uses ${scriptGuid}.`);
+  }
+  const fallbackGuidPrefix = /^MonoBehaviour_([a-f0-9]{8})$/i.exec(componentType)?.[1];
+  if (fallbackGuidPrefix && scriptGuid && !scriptGuid.startsWith(fallbackGuidPrefix)) {
+    throw new Error(`REFS target script mismatch for ${address}: &${document.fileId} uses ${scriptGuid}.`);
+  }
+}
+
+function validatePrefabOwnership(
+  section: CompactSection,
+  document: UnityDocument,
+  goMap: Map<string, GameObjectNode[]>,
+  file: UnityFile,
+  refs: Map<string, string[]>
+): void {
+  const candidates = goMap.get(section.goPath) || [];
+  if (candidates.length > 1) {
+    throw new Error(`Ambiguous GameObject path for DETAILS section: ${section.goPath}.`);
+  }
+  const node = candidates[0];
+  if (!node) {
+    // A component added to a nested PrefabInstance may use the instance-root
+    // alias rather than a local hierarchy path. Accept it only when the REFS
+    // owner metadata and the PrefabInstance attachment agree.
+    const ownerId = getRefsValue(
+      refs,
+      `${sectionAddress(section)}:__instance`,
+      { allowAddedRootAliases: true }
+    ) || getRefsValue(
+      refs,
+      `${section.goPath}:__instance`,
+      { allowAddedRootAliases: true }
+    );
+    const owner = ownerId
+      ? file.prefabInstances.find(instance => instance.fileId === ownerId)
+      : undefined;
+    const attached = owner?.addedComponents.some(entry =>
+      String(entry.addedComponent?.fileID) === document.fileId
+    );
+    if (section.isAdded && attached) return;
+    throw new Error(`DETAILS target GameObject not found: ${section.goPath}.`);
+  }
+  if (document.stripped) return;
+
+  let owned = false;
+  if (!section.componentType) owned = document.fileId === node.fileId;
+  else if (section.componentType === 'Transform' || section.componentType === 'RectTransform') {
+    owned = document.fileId === node.transform.fileId;
+  } else {
+    owned = node.components.some(component => component.fileId === document.fileId);
+  }
+  if (!owned) {
+    throw new Error(
+      `REFS ownership mismatch for ${sectionAddress(section)}: ` +
+      `&${document.fileId} does not belong to ${section.goPath}.`
+    );
+  }
 }
 
 function removeHierarchyComponent(file: UnityFile, goPath: string, fileId: string): void {
@@ -502,28 +620,41 @@ export function mergeCompactChanges(
   compact: CompactFile,
   options: CompactMergeOptions = {}
 ): UnityFile {
+  const workingCompact = cloneCompactFile(compact);
+  assertCompactSourceCompatible(original, workingCompact);
+  const baselineIntegrity = collectUnityIntegrityIssues(original);
   const result = cloneUnityFile(original);
+  if (result.hierarchy) {
+    registerHierarchyRefAliases(result.hierarchy, workingCompact.refs);
+  }
 
   // Collect all GO paths from STRUCTURE tree — used to distinguish
   // valid new references (GO exists in hierarchy) from typos
   const structurePaths = new Set<string>();
-  if (compact.structure) {
-    collectStructurePaths(compact.structure, '', structurePaths);
+  if (workingCompact.structure) {
+    collectStructurePaths(workingCompact.structure, '', structurePaths);
   }
 
-  createAddedComponents(result, compact, structurePaths, options);
+  createAddedComponents(result, workingCompact, structurePaths, options);
 
-  if (compact.type === 'variant') {
-    mergeVariantSections(result, compact.sections, compact.refs, structurePaths);
+  if (workingCompact.type === 'variant') {
+    mergeVariantSections(
+      result, workingCompact.sections, workingCompact.refs, structurePaths,
+      options.guidResolver
+    );
   } else {
-    mergePrefabSections(result, compact.sections, compact.refs, structurePaths);
+    mergePrefabSections(
+      result, workingCompact.sections, workingCompact.refs, structurePaths,
+      options.guidResolver
+    );
   }
 
   // Apply removals after additions/property edits so an atomic replacement can
   // redirect or clear references before dangling-reference validation runs.
-  removeLocalComponents(result, compact);
+  removeLocalComponents(result, workingCompact);
 
   syncPrefabInstanceState(result);
+  assertNoNewIntegrityIssues(baselineIntegrity, result);
 
   return result;
 }
@@ -555,8 +686,17 @@ function syncPrefabInstanceState(file: UnityFile): void {
 // ============================================================
 
 /** Merge sections for a regular prefab */
-function mergePrefabSections(file: UnityFile, sections: CompactSection[], refs: Map<string, string[]>, structurePaths?: Set<string>): void {
-  if (!file.hierarchy) return;
+function mergePrefabSections(
+  file: UnityFile,
+  sections: CompactSection[],
+  refs: Map<string, string[]>,
+  structurePaths?: Set<string>,
+  resolver?: GuidResolver
+): void {
+  if (!file.hierarchy) {
+    if (sections.length > 0) throw new Error('Cannot apply DETAILS: original YAML has no hierarchy.');
+    return;
+  }
 
   // Build a map: document fileId → document (for fast lookup)
   const docMap = new Map<string, UnityDocument>();
@@ -587,6 +727,8 @@ function mergePrefabSections(file: UnityFile, sections: CompactSection[], refs: 
         usedRefs.add(refsFileId);
         const doc = docMap.get(refsFileId);
         if (doc) {
+          validateDocumentType(section, doc, resolver);
+          validatePrefabOwnership(section, doc, goMap, file, refs);
           if (compType === 'Transform' || compType === 'RectTransform') {
             applyTransformProperties(section.properties, doc, compType === 'RectTransform');
           } else {
@@ -594,14 +736,19 @@ function mergePrefabSections(file: UnityFile, sections: CompactSection[], refs: 
           }
           continue;
         }
+        throw new Error(
+          `Stale REFS target for ${sectionAddress(section)}: document &${refsFileId} ` +
+          'does not exist in the original YAML.'
+        );
       }
     }
 
     // Fallback: name-based matching
     const candidates = goMap.get(goPath) || [];
     if (candidates.length === 0) {
-      continue;
+      throw new Error(`DETAILS target GameObject not found: ${goPath}.`);
     }
+    if (candidates.length > 1) throw new Error(`Ambiguous GameObject path: ${goPath}.`);
 
     const go = candidates[0];
 
@@ -609,7 +756,7 @@ function mergePrefabSections(file: UnityFile, sections: CompactSection[], refs: 
       const transformDoc = docMap.get(go.transform.fileId);
       if (transformDoc) {
         applyTransformProperties(section.properties, transformDoc, compType === 'RectTransform');
-      }
+      } else throw new Error(`Transform document not found for DETAILS target: ${goPath}.`);
     } else {
       const comp = go.components.find(c => {
         if (c.typeName === compType) return true;
@@ -621,9 +768,10 @@ function mergePrefabSections(file: UnityFile, sections: CompactSection[], refs: 
       if (comp) {
         const compDoc = docMap.get(comp.fileId);
         if (compDoc) {
+          validateDocumentType(section, compDoc, resolver);
           applyComponentProperties(section.properties, compDoc, refs, structurePaths);
-        }
-      }
+        } else throw new Error(`Component document not found: ${sectionAddress(section)}.`);
+      } else throw new Error(`DETAILS target component not found: ${sectionAddress(section)}.`);
     }
   }
 }
@@ -640,7 +788,9 @@ function findBestRefsMatch(
   usedRefs: Set<string>
 ): string | undefined {
   const unused = fileIds.filter(id => !usedRefs.has(id));
-  if (unused.length === 0) return fileIds[0]; // All used, fallback to first
+  if (unused.length === 0) {
+    throw new Error(`No unused REFS target remains for duplicate section: ${sectionAddress(section)}.`);
+  }
   if (unused.length === 1) return unused[0];
 
   // Score each candidate by how many section properties match the document's values
@@ -721,6 +871,43 @@ function flattenHierarchy(node: GameObjectNode, map: Map<string, GameObjectNode[
   for (const child of node.children) {
     flattenHierarchy(child, map, currentPath);
   }
+}
+
+/**
+ * Fill aliases omitted by older v1 writers from the parsed Unity hierarchy.
+ * Explicit compact REFS remain authoritative; inferred aliases are only added
+ * when a key is absent.
+ */
+function registerHierarchyRefAliases(
+  node: GameObjectNode,
+  refs: Map<string, string[]>,
+  parentPath: string = ''
+): void {
+  const path = parentPath ? `${parentPath}/${node.name}` : node.name;
+  if (!refs.has(path)) refs.set(path, [node.fileId]);
+
+  const aliases = new Map<string, string[]>();
+  const addAlias = (type: string | undefined, fileId: string): void => {
+    if (!type) return;
+    const key = `${path}:${type}`;
+    const ids = aliases.get(key) || [];
+    if (!ids.includes(fileId)) ids.push(fileId);
+    aliases.set(key, ids);
+  };
+  addAlias(node.transform.isRect ? 'RectTransform' : 'Transform', node.transform.fileId);
+  for (const component of node.components) {
+    addAlias(component.typeName, component.fileId);
+    addAlias(component.scriptName, component.fileId);
+    addAlias(component.scriptGuid, component.fileId);
+    if (component.typeId === 114 && component.scriptGuid) {
+      addAlias(`MonoBehaviour_${component.scriptGuid.substring(0, 8)}`, component.fileId);
+    }
+  }
+  for (const [key, ids] of aliases) {
+    if (!refs.has(key)) refs.set(key, ids);
+  }
+
+  for (const child of node.children) registerHierarchyRefAliases(child, refs, path);
 }
 
 /** Apply transform shorthand properties to a transform document */
@@ -1104,16 +1291,27 @@ function mergeVariantSections(
   file: UnityFile,
   sections: CompactSection[],
   refs: Map<string, string[]>,
-  structurePaths?: Set<string>
+  structurePaths?: Set<string>,
+  resolver?: GuidResolver
 ): void {
   // Find the main PrefabInstance (the one with transformParent = {fileID: 0})
   const mainInstance = file.prefabInstances.find(pi =>
     String(pi.transformParent.fileID) === '0'
   );
-  if (!mainInstance) return;
+  if (!mainInstance) {
+    if (sections.length > 0) {
+      throw new Error('Cannot apply DETAILS: variant YAML has no root PrefabInstance.');
+    }
+    return;
+  }
 
   const modificationOwners = buildVariantModificationOwners(file);
-  if (modificationOwners.length === 0) return;
+  if (modificationOwners.length === 0) {
+    if (sections.length > 0) {
+      throw new Error('Cannot apply DETAILS: variant YAML has no modification owner.');
+    }
+    return;
+  }
 
   const docMap = new Map<string, UnityDocument>();
   for (const doc of file.documents) {
@@ -1131,7 +1329,7 @@ function mergeVariantSections(
     let targetSourceGuid: string | undefined;
     let refsOccurrenceIndex = 0;
 
-    if (section.goPath.startsWith('&')) {
+    if (/^&\d+$/.test(section.goPath) && !section.componentType) {
       // Legacy format: [&fileID]
       targetFileId = section.goPath.substring(1);
     } else {
@@ -1150,10 +1348,13 @@ function mergeVariantSections(
       }
     }
 
-    if (!targetFileId) continue;
+    if (!targetFileId) {
+      throw new Error(`REFS target not found for DETAILS section: ${sectionAddress(section)}.`);
+    }
 
     const targetDoc = docMap.get(targetFileId);
     if (targetDoc && !targetDoc.stripped && targetDoc.typeId !== 1001) {
+      validateDocumentType(section, targetDoc, resolver);
       if (section.componentType === 'Transform' || section.componentType === 'RectTransform') {
         applyTransformProperties(section.properties, targetDoc, section.componentType === 'RectTransform');
       } else {
@@ -1169,7 +1370,12 @@ function mergeVariantSections(
       ownerInstanceId,
       refsOccurrenceIndex
     );
-    if (!owner) continue;
+    if (!owner) {
+      throw new Error(
+        `Variant modification owner not found for ${sectionAddress(section)} ` +
+        `(target &${targetFileId}).`
+      );
+    }
 
     for (const prop of section.properties) {
       if (typeof prop.value !== 'string') continue;

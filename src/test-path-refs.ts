@@ -1052,20 +1052,17 @@ console.log('='.repeat(60));
     fail('NewPanel not in STRUCTURE');
   }
 
-  // Merge — should NOT throw because NewPanel:Image is in STRUCTURE
+  // A STRUCTURE-only object has no YAML document. Generating a reference to a
+  // phantom fileID would create a dangling reference, so the merge must fail.
   try {
-    const merged = mergeCompactChanges(ast, compact);
-    const output = writeUnityYaml(merged);
-
-    // Verify the reference was resolved to a valid fileID (not zero, not the string)
-    const refMatch = output.match(/activateDisplayText: \{fileID: (\d+)\}/);
-    if (refMatch && refMatch[1] !== '0') {
-      pass(`Reference to new component resolved to fileID: ${refMatch[1]}`);
-    } else {
-      fail('Reference resolution', `Got: ${refMatch ? refMatch[0] : 'not found'}`);
-    }
+    mergeCompactChanges(ast, compact);
+    fail('STRUCTURE-only reference should fail', 'No error was thrown');
   } catch (e: any) {
-    fail('Should not throw for STRUCTURE-present reference', e.message);
+    if (e.message.includes('Stale REFS target')) {
+      pass('STRUCTURE-only reference is rejected instead of creating a dangling fileID');
+    } else {
+      fail('Wrong STRUCTURE-only reference error', e.message);
+    }
   }
 }
 
@@ -1095,15 +1092,17 @@ console.log('='.repeat(60));
 
   const compact = readCompact(modifiedCompact);
 
-  // The merge should NOT throw — both GOs exist in STRUCTURE.
-  // Note: merger doesn't create new YAML documents for new GOs yet,
-  // so new component sections are silently skipped (no matching AST doc).
-  // We verify the merge completes without error.
+  // New GameObject creation is not implemented. Sections that previously
+  // disappeared as silent no-ops now fail closed.
   try {
     mergeCompactChanges(ast, compact);
-    pass('Cross-reference between new objects resolved without error');
+    fail('Unsupported new GameObjects should fail', 'No error was thrown');
   } catch (e: any) {
-    fail('Should not throw for cross-reference between new objects', e.message);
+    if (e.message.includes('DETAILS target GameObject not found')) {
+      pass('Unsupported new GameObjects are rejected instead of silently skipped');
+    } else {
+      fail('Wrong unsupported-new-GameObject error', e.message);
+    }
   }
 }
 

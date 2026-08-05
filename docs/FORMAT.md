@@ -229,6 +229,12 @@ Each line is `key = fileID` where:
 - AI agents **read and edit** STRUCTURE + DETAILS only
 - AI agents **do not modify** REFS
 - The tool uses REFS to restore fileIDs when converting back to Unity YAML
+- v1 readers accept UTF-8 BOM and CRLF line endings, but reject unknown versions,
+  malformed or duplicated sections, invalid DETAILS/REFS lines, and reordered sections
+- During write-back, the compact type/root/base GUID and REFS target type/ownership
+  are checked against the input YAML; an invalid or stale target fails without writing
+- Merge operations use a private working copy and reject newly introduced dangling
+  component attachments, so the parsed compact input can safely be reused
 
 ### New Element FileID Generation
 

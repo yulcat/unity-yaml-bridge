@@ -61,7 +61,7 @@ Usage:
 
     Options:
       --project <path>   Unity project root for GUID/script resolution
-      --format <v1|v2>  Compact format version (default: v1)
+      --format <v1|v2>  Compact format version (default: v2)
       --verbose          Include all fields (disable boilerplate filtering)
       -o <file>          Output file (default: stdout)
 
@@ -134,7 +134,7 @@ function cmdParse(args, flags) {
     if (format && format !== 'v1' && format !== 'v2') {
         die('--format must be v1 or v2');
     }
-    options.version = format === 'v2' ? 2 : 1;
+    options.version = format === 'v1' ? 1 : 2;
     // Parse and convert
     const content = fs.readFileSync(inputPath, 'utf-8');
     const ast = (0, unity_yaml_parser_1.parseUnityYaml)(content);

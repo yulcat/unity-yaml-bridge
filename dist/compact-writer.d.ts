@@ -9,7 +9,7 @@ export interface CompactWriterOptions {
     guidResolver?: GuidResolver;
     /** Include all fields (disable boilerplate filtering) */
     verbose?: boolean;
-    /** Compact format version. v1 remains the default for compatibility. */
+    /** Compact format version. v2 is the default; pass 1 for legacy output. */
     version?: 1 | 2;
 }
 /** Convert a UnityFile to compact .ubridge string */

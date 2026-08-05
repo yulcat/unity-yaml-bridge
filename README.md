@@ -163,7 +163,8 @@ Inventory/Item#2 = 120
 
 Numbers are assigned by signed Unity fileID rather than display order. They are
 snapshot-scoped aliases, and write-back validates the exact REFS target before
-applying an edit. v1 remains the default for existing integrations.
+applying an edit. v2 is the default; use `version: 1` or `--format v1` for
+legacy output.
 
 ## Usage
 
@@ -189,7 +190,7 @@ import fs from 'fs';
 // Unity YAML → .ubridge
 const yaml = fs.readFileSync('Button.prefab', 'utf-8');
 const ast = parseUnityYaml(yaml);
-const compact = writeCompact(ast, { version: 2 });
+const compact = writeCompact(ast);
 fs.writeFileSync('Button.ubridge', compact);
 
 // .ubridge → Unity YAML (after AI edits)

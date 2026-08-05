@@ -238,6 +238,9 @@ Each line is `key = fileID` where:
 
 ### v2 snapshot selectors
 
+v2 is the default writer/CLI format. Request v1 explicitly with
+`writeCompact(file, { version: 1 })` or `--format v1` when required.
+
 v2 preserves the complete v1 body whenever every selector is unique. Within a
 collision group, every sibling GameObject or same-name component receives a final
 `#1`, `#2`, ... discriminator. Literal names that already end in `#N` receive a

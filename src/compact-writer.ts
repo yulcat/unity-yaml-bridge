@@ -59,7 +59,7 @@ export interface CompactWriterOptions {
   guidResolver?: GuidResolver;
   /** Include all fields (disable boilerplate filtering) */
   verbose?: boolean;
-  /** Compact format version. v1 remains the default for compatibility. */
+  /** Compact format version. v2 is the default; pass 1 for legacy output. */
   version?: 1 | 2;
 }
 
@@ -253,7 +253,7 @@ function finishCompact(lines: string[], version: 1 | 2): string {
 export function writeCompact(file: UnityFile, options: CompactWriterOptions = {}): string {
   const lines: string[] = [];
   const resolver = options.guidResolver;
-  const version = options.version || 1;
+  const version = options.version || 2;
 
   // Header
   if (file.type === 'variant' && file.variantSource) {
@@ -2211,11 +2211,13 @@ function writeVariantCompact(
   if (localSelectors?.hasAliases && file.hierarchy) {
     applySelectorsToResolvedComponents(overlayAddedComponents, file.hierarchy, localSelectors);
   }
+  if (version === 2) numberResolvedComponentCollisions(overlayAddedComponents);
   const addedComponentOverlay = buildAddedComponentOverlay(overlayAddedComponents, allInstances);
   const addedComponents = resolveAddedComponents(file, mainInstance, compositeSourceMap, resolver);
   if (localSelectors?.hasAliases && file.hierarchy) {
     applySelectorsToResolvedComponents(addedComponents, file.hierarchy, localSelectors);
   }
+  if (version === 2) numberResolvedComponentCollisions(addedComponents);
   const removalOverlay = mergeRemovalOverlays(structuralEntries.map(entry => {
     const structuralMain = entry.file.prefabInstances.find(instance =>
       String(instance.transformParent.fileID) === '0'
@@ -2377,6 +2379,25 @@ function applySelectorsToResolvedComponents(
     component.componentName = componentNames.get(component.document.fileId) || component.componentName;
     const ownerId = String(component.document.properties.m_GameObject?.fileID ?? '0');
     component.goPath = nodePaths.get(ownerId) || component.goPath;
+  }
+}
+
+function numberResolvedComponentCollisions(components: ResolvedAddedComponent[]): void {
+  const groups = new Map<string, ResolvedAddedComponent[]>();
+  for (const component of components) {
+    const key = `${component.instanceId}|${component.goPath}|${component.componentName}`;
+    const group = groups.get(key) || [];
+    group.push(component);
+    groups.set(key, group);
+  }
+  for (const group of groups.values()) {
+    const identities = [...new Set(group.map(component => component.document.fileId))];
+    if (identities.length <= 1) continue;
+    const sorted = identities.sort(compareCanonicalFileIds);
+    const ranks = new Map(sorted.map((identity, index) => [identity, index + 1]));
+    for (const component of group) {
+      component.componentName += `#${ranks.get(component.document.fileId)}`;
+    }
   }
 }
 

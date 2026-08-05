@@ -84,8 +84,12 @@ CanvasGroup:
 console.log('\n=== v2 snapshot selectors ===');
 
 const ast = parseUnityYaml(fixture());
-const v1 = writeCompact(ast);
+const v1 = writeCompact(ast, { version: 1 });
 const v2 = writeCompact(ast, { version: 2 });
+assert(writeCompact(ast).startsWith('# ubridge v2 | prefab'),
+  'v2 is the writer default');
+assert(v1.startsWith('# ubridge v1 | prefab'),
+  'v1 remains available explicitly');
 assert(v2.startsWith('# ubridge v2 | prefab'), 'writer emits an explicit v2 header');
 assert(v2.includes('├─ Item#2 [CanvasGroup]') && v2.includes('├─ Item#1 [CanvasGroup]'),
   'duplicate siblings are numbered by fileID, not display order', v2);
@@ -164,7 +168,7 @@ CanvasGroup:
   m_Alpha: 0.5
 `;
 const uniqueAst = parseUnityYaml(uniqueYaml);
-const uniqueV1 = writeCompact(uniqueAst);
+const uniqueV1 = writeCompact(uniqueAst, { version: 1 });
 const uniqueV2 = writeCompact(uniqueAst, { version: 2 });
 assert(uniqueV1.split('\n').slice(1).join('\n') === uniqueV2.split('\n').slice(1).join('\n'),
   'collision-free v2 body is byte-identical to v1');

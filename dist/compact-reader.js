@@ -200,7 +200,16 @@ function parseDetailsSections(lines, sections) {
                 isAdded = true;
                 header = header.substring(2);
             }
-            if (header.startsWith('&')) {
+            if (header.startsWith('&') && isAdded && header.includes(':')) {
+                const colonIdx = header.indexOf(':');
+                currentSection = {
+                    goPath: header.substring(0, colonIdx),
+                    componentType: header.substring(colonIdx + 1),
+                    properties: [],
+                    isAdded,
+                };
+            }
+            else if (header.startsWith('&')) {
                 // Variant section: [&fileID]
                 currentSection = { goPath: header, componentType: '', properties: [], isAdded };
             }

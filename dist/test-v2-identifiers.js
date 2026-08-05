@@ -121,8 +121,10 @@ CanvasGroup:
 }
 console.log('\n=== v2 snapshot selectors ===');
 const ast = (0, unity_yaml_parser_1.parseUnityYaml)(fixture());
-const v1 = (0, compact_writer_1.writeCompact)(ast);
+const v1 = (0, compact_writer_1.writeCompact)(ast, { version: 1 });
 const v2 = (0, compact_writer_1.writeCompact)(ast, { version: 2 });
+assert((0, compact_writer_1.writeCompact)(ast).startsWith('# ubridge v2 | prefab'), 'v2 is the writer default');
+assert(v1.startsWith('# ubridge v1 | prefab'), 'v1 remains available explicitly');
 assert(v2.startsWith('# ubridge v2 | prefab'), 'writer emits an explicit v2 header');
 assert(v2.includes('├─ Item#2 [CanvasGroup]') && v2.includes('├─ Item#1 [CanvasGroup]'), 'duplicate siblings are numbered by fileID, not display order', v2);
 assert(v2.includes('Panel [CanvasGroup#2, CanvasGroup#1]'), 'duplicate components are numbered by fileID, not component order', v2);
@@ -184,7 +186,7 @@ CanvasGroup:
   m_Alpha: 0.5
 `;
 const uniqueAst = (0, unity_yaml_parser_1.parseUnityYaml)(uniqueYaml);
-const uniqueV1 = (0, compact_writer_1.writeCompact)(uniqueAst);
+const uniqueV1 = (0, compact_writer_1.writeCompact)(uniqueAst, { version: 1 });
 const uniqueV2 = (0, compact_writer_1.writeCompact)(uniqueAst, { version: 2 });
 assert(uniqueV1.split('\n').slice(1).join('\n') === uniqueV2.split('\n').slice(1).join('\n'), 'collision-free v2 body is byte-identical to v1');
 const arenaPath = path.join(__dirname, '..', 'samples', 'prefabs', 'ArenaStart.prefab');

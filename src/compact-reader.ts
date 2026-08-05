@@ -58,8 +58,8 @@ export function readCompact(content: string): CompactFile {
   const version = parseInt(headerMatch[1], 10);
   const type = headerMatch[2] as 'prefab' | 'variant' | 'scene';
   const extra = headerMatch[3] || '';
-  if (version !== 1) {
-    throw new Error(`Unsupported .ubridge version: v${version}. This build supports v1 only.`);
+  if (version !== 1 && version !== 2) {
+    throw new Error(`Unsupported .ubridge version: v${version}. This build supports v1 and v2.`);
   }
 
   let baseGuid: string | undefined;
@@ -121,7 +121,24 @@ export function readCompact(content: string): CompactFile {
     parseRefsSection(refsLines, refs);
   }
 
+  if (version === 2) validateV2Selectors(sections, refs);
+
   return { version, type, baseGuid, structure, sections, refs };
+}
+
+function validateV2Selectors(sections: CompactSection[], refs: Map<string, string[]>): void {
+  for (const section of sections) {
+    const address = section.componentType
+      ? `${section.goPath}:${section.componentType}`
+      : section.goPath;
+    if (!/#(?:[1-9]\d*)(?:\/|:|$)/.test(address)) continue;
+    const targets = refs.get(address);
+    if (!targets || targets.length !== 1) {
+      throw new Error(
+        `Invalid v2 selector ${address}: expected exactly one matching REFS target.`
+      );
+    }
+  }
 }
 
 /** Parse the structure tree from lines */

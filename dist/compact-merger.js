@@ -203,10 +203,16 @@ function addHierarchyComponent(file, goPath, document, componentType, scriptGuid
     };
     node.components.push(info);
 }
-function componentMatches(info, componentType) {
-    return info.typeName === componentType
-        || info.scriptName === componentType
-        || info.scriptGuid === componentType;
+function componentMatches(info, componentType, allowSelectors = false) {
+    const candidates = allowSelectors ? selectorCandidates(componentType) : [componentType];
+    return candidates.some(candidate => info.typeName === candidate
+        || info.scriptName === candidate
+        || info.scriptGuid === candidate);
+}
+/** A final #N may be a v2 discriminator; exact literal names always win first. */
+function selectorCandidates(value) {
+    const match = /^(.*)#([1-9]\d*)$/.exec(value);
+    return match ? [value, match[1]] : [value];
 }
 function sectionAddress(section) {
     return section.componentType
@@ -219,17 +225,21 @@ function effectiveSectionComponentType(section) {
         return section.componentType;
     return /^&\d+:(.+)$/.exec(section.goPath)?.[1];
 }
-function validateDocumentType(section, document, resolver) {
+function validateDocumentType(section, document, resolver, allowSelectors = false) {
     const address = sectionAddress(section);
-    const componentType = effectiveSectionComponentType(section);
-    if (!componentType) {
+    const renderedComponentType = effectiveSectionComponentType(section);
+    if (!renderedComponentType) {
         if (document.typeId !== 1) {
             throw new Error(`REFS target type mismatch for ${address}: &${document.fileId} is ${document.typeName}.`);
         }
         return;
     }
-    if (componentType === 'Transform' || componentType === 'RectTransform') {
-        const expectedTypeId = componentType === 'RectTransform' ? 224 : 4;
+    const componentTypes = allowSelectors
+        ? selectorCandidates(renderedComponentType)
+        : [renderedComponentType];
+    const transformType = componentTypes.find(type => type === 'Transform' || type === 'RectTransform');
+    if (transformType) {
+        const expectedTypeId = transformType === 'RectTransform' ? 224 : 4;
         if (document.typeId !== expectedTypeId) {
             throw new Error(`REFS target type mismatch for ${address}: &${document.fileId} is ${document.typeName}.`);
         }
@@ -240,32 +250,52 @@ function validateDocumentType(section, document, resolver) {
     }
     if (document.typeId !== 114) {
         const nativeType = types_1.UNITY_TYPE_MAP[document.typeId] || document.typeName;
-        if (nativeType !== componentType) {
+        if (!componentTypes.includes(nativeType)) {
             throw new Error(`REFS target type mismatch for ${address}: &${document.fileId} is ${nativeType}.`);
         }
         return;
     }
     const scriptGuid = document.properties.m_Script?.guid;
-    if (/^[a-f0-9]{32}$/i.test(componentType) &&
-        scriptGuid && scriptGuid !== componentType) {
+    const explicitGuids = componentTypes.filter(type => /^[a-f0-9]{32}$/i.test(type));
+    if (explicitGuids.length > 0 && scriptGuid && !explicitGuids.includes(scriptGuid)) {
         throw new Error(`REFS target script mismatch for ${address}: &${document.fileId} uses ${scriptGuid}.`);
     }
-    const resolvedGuid = resolver?.resolveGuid(componentType);
-    if (resolvedGuid && scriptGuid && resolvedGuid !== scriptGuid) {
+    const resolvedGuids = componentTypes
+        .map(type => resolver?.resolveGuid(type))
+        .filter((guid) => Boolean(guid));
+    if (resolvedGuids.length > 0 && scriptGuid && !resolvedGuids.includes(scriptGuid)) {
         throw new Error(`REFS target script mismatch for ${address}: &${document.fileId} uses ${scriptGuid}.`);
     }
-    const fallbackGuidPrefix = /^MonoBehaviour_([a-f0-9]{8})$/i.exec(componentType)?.[1];
-    if (fallbackGuidPrefix && scriptGuid && !scriptGuid.startsWith(fallbackGuidPrefix)) {
+    const fallbackGuidPrefixes = componentTypes
+        .map(type => /^MonoBehaviour_([a-f0-9]{8})$/i.exec(type)?.[1])
+        .filter((prefix) => Boolean(prefix));
+    if (fallbackGuidPrefixes.length > 0 && scriptGuid &&
+        !fallbackGuidPrefixes.some(prefix => scriptGuid.startsWith(prefix))) {
         throw new Error(`REFS target script mismatch for ${address}: &${document.fileId} uses ${scriptGuid}.`);
     }
 }
 function validatePrefabOwnership(section, document, goMap, file, refs) {
     const candidates = goMap.get(section.goPath) || [];
+    let node = candidates[0];
     if (candidates.length > 1) {
-        throw new Error(`Ambiguous GameObject path for DETAILS section: ${section.goPath}.`);
+        const ownerId = document.typeId === 1
+            ? document.fileId
+            : String(document.properties.m_GameObject?.fileID ?? '0');
+        const identified = candidates.filter(candidate => candidate.fileId === ownerId);
+        if (identified.length !== 1) {
+            throw new Error(`Ambiguous GameObject path for DETAILS section: ${section.goPath}.`);
+        }
+        node = identified[0];
     }
-    const node = candidates[0];
     if (!node) {
+        // v2 aliases do not exist in the original hierarchy. Their REFS GameObject
+        // entry proves ownership without heuristically stripping a literal #N.
+        const goId = getSingleRef(refs, section.goPath);
+        const documentOwner = document.typeId === 1
+            ? document.fileId
+            : String(document.properties.m_GameObject?.fileID ?? '0');
+        if (goId && documentOwner === goId)
+            return;
         // A component added to a nested PrefabInstance may use the instance-root
         // alias rather than a local hierarchy path. Accept it only when the REFS
         // owner metadata and the PrefabInstance attachment agree.
@@ -361,8 +391,9 @@ function removeLocalComponents(file, compact) {
             }
         }
         for (const component of goNode?.components || []) {
-            if (componentMatches(component, request.componentType))
+            if (componentMatches(component, request.componentType, compact.version === 2)) {
                 candidateIds.add(component.fileId);
+            }
         }
         const candidates = [...candidateIds]
             .map(id => docMap.get(id))
@@ -549,10 +580,10 @@ function mergeCompactChanges(original, compact, options = {}) {
     }
     createAddedComponents(result, workingCompact, structurePaths, options);
     if (workingCompact.type === 'variant') {
-        mergeVariantSections(result, workingCompact.sections, workingCompact.refs, structurePaths, options.guidResolver);
+        mergeVariantSections(result, workingCompact.sections, workingCompact.refs, structurePaths, options.guidResolver, workingCompact.version === 2);
     }
     else {
-        mergePrefabSections(result, workingCompact.sections, workingCompact.refs, structurePaths, options.guidResolver);
+        mergePrefabSections(result, workingCompact.sections, workingCompact.refs, structurePaths, options.guidResolver, workingCompact.version === 2);
     }
     // Apply removals after additions/property edits so an atomic replacement can
     // redirect or clear references before dangling-reference validation runs.
@@ -585,7 +616,7 @@ function syncPrefabInstanceState(file) {
 // Prefab merging — match sections by REFS fileID or GO name + component type
 // ============================================================
 /** Merge sections for a regular prefab */
-function mergePrefabSections(file, sections, refs, structurePaths, resolver) {
+function mergePrefabSections(file, sections, refs, structurePaths, resolver, allowSelectors = false) {
     if (!file.hierarchy) {
         if (sections.length > 0)
             throw new Error('Cannot apply DETAILS: original YAML has no hierarchy.');
@@ -616,7 +647,7 @@ function mergePrefabSections(file, sections, refs, structurePaths, resolver) {
                 usedRefs.add(refsFileId);
                 const doc = docMap.get(refsFileId);
                 if (doc) {
-                    validateDocumentType(section, doc, resolver);
+                    validateDocumentType(section, doc, resolver, allowSelectors);
                     validatePrefabOwnership(section, doc, goMap, file, refs);
                     if (compType === 'Transform' || compType === 'RectTransform') {
                         applyTransformProperties(section.properties, doc, compType === 'RectTransform');
@@ -659,7 +690,7 @@ function mergePrefabSections(file, sections, refs, structurePaths, resolver) {
             if (comp) {
                 const compDoc = docMap.get(comp.fileId);
                 if (compDoc) {
-                    validateDocumentType(section, compDoc, resolver);
+                    validateDocumentType(section, compDoc, resolver, allowSelectors);
                     applyComponentProperties(section.properties, compDoc, refs, structurePaths);
                 }
                 else
@@ -1085,7 +1116,7 @@ function contextualizeObjectReference(parsed, existing) {
     return next;
 }
 /** Merge sections for a variant file */
-function mergeVariantSections(file, sections, refs, structurePaths, resolver) {
+function mergeVariantSections(file, sections, refs, structurePaths, resolver, allowSelectors = false) {
     // Find the main PrefabInstance (the one with transformParent = {fileID: 0})
     const mainInstance = file.prefabInstances.find(pi => String(pi.transformParent.fileID) === '0');
     if (!mainInstance) {
@@ -1138,7 +1169,7 @@ function mergeVariantSections(file, sections, refs, structurePaths, resolver) {
         }
         const targetDoc = docMap.get(targetFileId);
         if (targetDoc && !targetDoc.stripped && targetDoc.typeId !== 1001) {
-            validateDocumentType(section, targetDoc, resolver);
+            validateDocumentType(section, targetDoc, resolver, allowSelectors);
             if (section.componentType === 'Transform' || section.componentType === 'RectTransform') {
                 applyTransformProperties(section.properties, targetDoc, section.componentType === 'RectTransform');
             }

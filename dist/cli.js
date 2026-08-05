@@ -61,6 +61,7 @@ Usage:
 
     Options:
       --project <path>   Unity project root for GUID/script resolution
+      --format <v1|v2>  Compact format version (default: v1)
       --verbose          Include all fields (disable boilerplate filtering)
       -o <file>          Output file (default: stdout)
 
@@ -89,7 +90,7 @@ function parseArgs(argv) {
     let i = 1;
     while (i < argv.length) {
         const arg = argv[i];
-        if (arg === '--project' || arg === '--yaml' || arg === '-o') {
+        if (arg === '--project' || arg === '--yaml' || arg === '--format' || arg === '-o') {
             if (i + 1 >= argv.length)
                 die(`${arg} requires a value`);
             flags.set(arg, argv[i + 1]);
@@ -129,6 +130,11 @@ function cmdParse(args, flags) {
     if (flags.has('--verbose')) {
         options.verbose = true;
     }
+    const format = flags.get('--format');
+    if (format && format !== 'v1' && format !== 'v2') {
+        die('--format must be v1 or v2');
+    }
+    options.version = format === 'v2' ? 2 : 1;
     // Parse and convert
     const content = fs.readFileSync(inputPath, 'utf-8');
     const ast = (0, unity_yaml_parser_1.parseUnityYaml)(content);

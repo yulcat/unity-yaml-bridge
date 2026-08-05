@@ -236,6 +236,18 @@ Each line is `key = fileID` where:
 - Merge operations use a private working copy and reject newly introduced dangling
   component attachments, so the parsed compact input can safely be reused
 
+### v2 snapshot selectors
+
+v2 preserves the complete v1 body whenever every selector is unique. Within a
+collision group, every sibling GameObject or same-name component receives a final
+`#1`, `#2`, ... discriminator. Literal names that already end in `#N` receive a
+second discriminator when needed (for example `Item#1#2`).
+
+Local aliases are ranked by signed 64-bit fileID, so hierarchy and component-array
+reordering does not renumber them. The alias is valid only within that compact
+snapshot: REFS is authoritative, every numbered DETAILS selector must resolve to
+exactly one REFS target, and write-back validates target type and ownership.
+
 ### New Element FileID Generation
 
 When an AI adds a new GameObject or component in STRUCTURE/DETAILS that has no matching REFS entry:

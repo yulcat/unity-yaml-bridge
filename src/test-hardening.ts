@@ -64,7 +64,7 @@ console.log('\n=== v1 parser and merge hardening ===');
     'UTF-8 BOM and CRLF input parses normally');
 }
 
-expectThrow(() => readCompact(compact().replace('v1', 'v2')), 'Unsupported',
+expectThrow(() => readCompact(compact().replace('v1', 'v3')), 'Unsupported',
   'unsupported versions fail closed');
 expectThrow(() => readCompact(compact().replace('prefab', 'asset')), 'Invalid .ubridge header',
   'unknown document types fail closed');
@@ -76,6 +76,18 @@ expectThrow(() => readCompact(compact().replace('m_Alpha = 0.5', 'not a property
   'malformed DETAILS lines fail closed');
 expectThrow(() => readCompact(compact().replace('Root = 100', 'Root => 100')), 'Invalid REFS',
   'malformed REFS lines fail closed');
+
+{
+  const mislabeled = compact(
+    '[Root:CanvasGroup#1]\nm_Alpha = 0.5',
+    'Root = 100\nRoot:Transform = 200\nRoot:CanvasGroup#1 = 300'
+  );
+  expectThrow(
+    () => mergeCompactChanges(parseUnityYaml(yaml), readCompact(mislabeled)),
+    'target type mismatch',
+    'v1 never interprets a literal #N suffix as a v2 discriminator'
+  );
+}
 
 {
   const original = parseUnityYaml(yaml);

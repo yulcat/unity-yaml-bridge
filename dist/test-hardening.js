@@ -58,12 +58,16 @@ console.log('\n=== v1 parser and merge hardening ===');
     const parsed = (0, compact_reader_1.readCompact)(`\uFEFF${compact()}`.replace(/\n/g, '\r\n'));
     assert(parsed.structure?.name === 'Root' && parsed.sections.length === 1, 'UTF-8 BOM and CRLF input parses normally');
 }
-expectThrow(() => (0, compact_reader_1.readCompact)(compact().replace('v1', 'v2')), 'Unsupported', 'unsupported versions fail closed');
+expectThrow(() => (0, compact_reader_1.readCompact)(compact().replace('v1', 'v3')), 'Unsupported', 'unsupported versions fail closed');
 expectThrow(() => (0, compact_reader_1.readCompact)(compact().replace('prefab', 'asset')), 'Invalid .ubridge header', 'unknown document types fail closed');
 expectThrow(() => (0, compact_reader_1.readCompact)(`${compact()}--- DETAILS\n`), 'Duplicate', 'duplicate sections fail closed');
 expectThrow(() => (0, compact_reader_1.readCompact)(compact().replace('--- DETAILS', '--- DETAILZ')), 'section order', 'misspelled required section fails closed');
 expectThrow(() => (0, compact_reader_1.readCompact)(compact().replace('m_Alpha = 0.5', 'not a property')), 'Invalid DETAILS', 'malformed DETAILS lines fail closed');
 expectThrow(() => (0, compact_reader_1.readCompact)(compact().replace('Root = 100', 'Root => 100')), 'Invalid REFS', 'malformed REFS lines fail closed');
+{
+    const mislabeled = compact('[Root:CanvasGroup#1]\nm_Alpha = 0.5', 'Root = 100\nRoot:Transform = 200\nRoot:CanvasGroup#1 = 300');
+    expectThrow(() => (0, compact_merger_1.mergeCompactChanges)((0, unity_yaml_parser_1.parseUnityYaml)(yaml), (0, compact_reader_1.readCompact)(mislabeled)), 'target type mismatch', 'v1 never interprets a literal #N suffix as a v2 discriminator');
+}
 {
     const original = (0, unity_yaml_parser_1.parseUnityYaml)(yaml);
     expectThrow(() => (0, compact_merger_1.mergeCompactChanges)(original, (0, compact_reader_1.readCompact)(compact().replace('Root [CanvasGroup]', 'Other [CanvasGroup]'))), 'root mismatch', 'compact files for another root are rejected');

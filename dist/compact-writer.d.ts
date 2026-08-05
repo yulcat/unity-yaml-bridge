@@ -9,6 +9,8 @@ export interface CompactWriterOptions {
     guidResolver?: GuidResolver;
     /** Include all fields (disable boilerplate filtering) */
     verbose?: boolean;
+    /** Compact format version. v1 remains the default for compatibility. */
+    version?: 1 | 2;
 }
 /** Convert a UnityFile to compact .ubridge string */
 export declare function writeCompact(file: UnityFile, options?: CompactWriterOptions): string;

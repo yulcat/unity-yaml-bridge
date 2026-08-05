@@ -59,27 +59,220 @@ export interface CompactWriterOptions {
   guidResolver?: GuidResolver;
   /** Include all fields (disable boilerplate filtering) */
   verbose?: boolean;
+  /** Compact format version. v1 remains the default for compatibility. */
+  version?: 1 | 2;
+}
+
+interface SelectorContext {
+  nodeNames: WeakMap<GameObjectNode, string>;
+  nodePaths: WeakMap<GameObjectNode, string>;
+  componentNames: WeakMap<ComponentInfo, string>;
+  hasAliases: boolean;
+}
+
+type NestedSelectorOverrides = Map<string, string>;
+
+function compareCanonicalFileIds(a: string, b: string): number {
+  try {
+    const left = BigInt(a);
+    const right = BigInt(b);
+    return left < right ? -1 : left > right ? 1 : 0;
+  } catch {
+    return a.localeCompare(b);
+  }
+}
+
+function compareCanonicalNodes(a: GameObjectNode, b: GameObjectNode): number {
+  const aIdentity = a.fileId && a.fileId !== '0'
+    ? a.fileId
+    : (a.nestedPrefab?.instanceId || a.fileId);
+  const bIdentity = b.fileId && b.fileId !== '0'
+    ? b.fileId
+    : (b.nestedPrefab?.instanceId || b.fileId);
+  const identityOrder = compareCanonicalFileIds(aIdentity, bIdentity);
+  if (identityOrder !== 0) return identityOrder;
+  const aFallback = `${a.nestedPrefab?.sourceGuid || ''}|${a.nestedPrefab?.instanceId || ''}`;
+  const bFallback = `${b.nestedPrefab?.sourceGuid || ''}|${b.nestedPrefab?.instanceId || ''}`;
+  return aFallback.localeCompare(bFallback);
+}
+
+function selectorBaseNodeName(node: GameObjectNode, resolver?: GuidResolver): string {
+  if (node.name === 'NestedPrefab' && node.nestedPrefab) {
+    return resolveSourceName(node, resolver) || node.name;
+  }
+  return node.name;
+}
+
+/** Build snapshot-scoped #N aliases without depending on hierarchy/component order. */
+function buildSelectorContext(root: GameObjectNode, resolver?: GuidResolver): SelectorContext {
+  const context: SelectorContext = {
+    nodeNames: new WeakMap(),
+    nodePaths: new WeakMap(),
+    componentNames: new WeakMap(),
+    hasAliases: false,
+  };
+
+  const visit = (node: GameObjectNode, renderedName: string, parentPath: string): void => {
+    const path = parentPath ? `${parentPath}/${renderedName}` : renderedName;
+    context.nodeNames.set(node, renderedName);
+    context.nodePaths.set(node, path);
+
+    const componentGroups = new Map<string, ComponentInfo[]>();
+    for (const component of node.components) {
+      const name = resolveComponentName(component, resolver);
+      const group = componentGroups.get(name) || [];
+      group.push(component);
+      componentGroups.set(name, group);
+    }
+    for (const [name, components] of componentGroups) {
+      if (components.length === 1) {
+        context.componentNames.set(components[0], name);
+        continue;
+      }
+      const sorted = [...components].sort((a, b) => compareCanonicalFileIds(a.fileId, b.fileId));
+      context.hasAliases = true;
+      sorted.forEach((component, index) => context.componentNames.set(component, `${name}#${index + 1}`));
+    }
+
+    const childGroups = new Map<string, GameObjectNode[]>();
+    for (const child of node.children) {
+      const name = selectorBaseNodeName(child, resolver);
+      const group = childGroups.get(name) || [];
+      group.push(child);
+      childGroups.set(name, group);
+    }
+    for (const [name, children] of childGroups) {
+      if (children.length === 1) {
+        visit(children[0], name, path);
+        continue;
+      }
+      const sorted = [...children].sort(compareCanonicalNodes);
+      context.hasAliases = true;
+      const ranks = new Map(sorted.map((child, index) => [child, index + 1]));
+      for (const child of children) visit(child, `${name}#${ranks.get(child)}`, path);
+    }
+  };
+
+  visit(root, selectorBaseNodeName(root, resolver), '');
+  return context;
+}
+
+function applyNestedNodeAliases(
+  root: GameObjectNode,
+  refs: Map<string, NestedSourceObjectRef>,
+  selectors: SelectorContext,
+  resolver?: GuidResolver
+): void {
+  const instances = new Map<string, { oldPath: string; newPath: string }>();
+  const visit = (node: GameObjectNode, parentPath: string): void => {
+    const name = selectorBaseNodeName(node, resolver);
+    const oldPath = parentPath ? `${parentPath}/${name}` : name;
+    if (node.nestedPrefab) {
+      instances.set(node.nestedPrefab.instanceId, {
+        oldPath,
+        newPath: selectors.nodePaths.get(node) || oldPath,
+      });
+    }
+    node.children.forEach(child => visit(child, oldPath));
+  };
+  visit(root, '');
+
+  for (const ref of refs.values()) {
+    const instance = instances.get(ref.prefabInstanceId);
+    if (!instance) continue;
+    if (ref.path === instance.oldPath) ref.path = instance.newPath;
+    else if (ref.path.startsWith(`${instance.oldPath}/`)) {
+      ref.path = instance.newPath + ref.path.slice(instance.oldPath.length);
+    }
+  }
+}
+
+function buildNestedSelectorOverrides(
+  refs: Map<string, NestedSourceObjectRef>
+): NestedSelectorOverrides {
+  const groups = new Map<string, NestedSourceObjectRef[]>();
+  for (const ref of refs.values()) {
+    if (REF_SKIP_TYPES.has(ref.typeName)) continue;
+    const key = `${ref.path}:${ref.typeName}`;
+    const group = groups.get(key) || [];
+    group.push(ref);
+    groups.set(key, group);
+  }
+  const overrides = new Map<string, string>();
+  for (const [key, group] of groups) {
+    if (group.length === 1) continue;
+    const sorted = [...group].sort((a, b) => compareCanonicalFileIds(a.fileId, b.fileId));
+    sorted.forEach((ref, index) => overrides.set(ref.fileId, `${key}#${index + 1}`));
+  }
+  return overrides;
+}
+
+function finishCompact(lines: string[], version: 1 | 2): string {
+  if (version === 2) {
+    const refsStart = lines.lastIndexOf('--- REFS');
+    if (refsStart >= 0) {
+      const groups = new Map<string, Array<{ index: number; value: string }>>();
+      for (let index = refsStart + 1; index < lines.length; index++) {
+        const line = lines[index];
+        const match = /^(.+?)\s*=\s*(.+)$/.exec(line.trim());
+        if (!match) continue;
+        const key = match[1].trim();
+        const group = groups.get(key) || [];
+        group.push({ index, value: match[2].trim() });
+        groups.set(key, group);
+      }
+      for (const [key, group] of groups) {
+        const distinctValues = [...new Set(group.map(entry => entry.value))];
+        if (distinctValues.length <= 1) continue;
+        const detailText = lines.slice(0, refsStart).join('\n');
+        if (key.endsWith(':__instance') || key.endsWith(':__source') ||
+            detailText.includes(`[${key}]`) || detailText.includes(`->${key}`) ||
+            detailText.includes(`@${key}`)) {
+          throw new Error(
+            `Cannot emit unambiguous v2 selector for ${key}. ` +
+            'Resolve the nested/source prefab so owner identity is available, or use v1.'
+          );
+        }
+        const sorted = [...distinctValues].sort(compareCanonicalFileIds);
+        const ranks = new Map(sorted.map((value, index) => [value, index + 1]));
+        for (const entry of group) {
+          const numberedKey = `${key}#${ranks.get(entry.value)}`;
+          lines[entry.index] = `${numberedKey} = ${entry.value}`;
+          const rawRef = `{${entry.value}}`;
+          for (let index = 0; index < refsStart; index++) {
+            lines[index] = lines[index].split(rawRef).join(`->${numberedKey}`);
+          }
+        }
+      }
+    }
+  }
+  return lines.join('\n') + '\n';
 }
 
 /** Convert a UnityFile to compact .ubridge string */
 export function writeCompact(file: UnityFile, options: CompactWriterOptions = {}): string {
   const lines: string[] = [];
   const resolver = options.guidResolver;
+  const version = options.version || 1;
 
   // Header
   if (file.type === 'variant' && file.variantSource) {
-    lines.push(`# ubridge v1 | variant | base-guid:${file.variantSource.guid || 'unknown'}`);
+    lines.push(`# ubridge v${version} | variant | base-guid:${file.variantSource.guid || 'unknown'}`);
   } else {
-    lines.push(`# ubridge v1 | ${file.type}`);
+    lines.push(`# ubridge v${version} | ${file.type}`);
   }
 
   if (file.type === 'variant') {
-    return writeVariantCompact(file, lines, resolver);
+    return writeVariantCompact(file, lines, resolver, version);
   }
 
   if (!file.hierarchy) {
-    return lines.join('\n') + '\n';
+    return finishCompact(lines, version);
   }
+  const selectorCandidate = version === 2
+    ? buildSelectorContext(file.hierarchy, resolver)
+    : undefined;
+  const selectors = selectorCandidate?.hasAliases ? selectorCandidate : undefined;
 
   // Structure section
   lines.push('--- STRUCTURE');
@@ -96,11 +289,19 @@ export function writeCompact(file: UnityFile, options: CompactWriterOptions = {}
   const nestedRemovalOverlay = buildVariantRemovalOverlay(file, undefined, null, resolver);
   writeStructureTree(
     file.hierarchy, lines, '', true, resolver, expansionCtx,
-    undefined, nestedAddedOverlay, nestedRemovalOverlay, '', ''
+    undefined, nestedAddedOverlay, nestedRemovalOverlay, '', '', selectors
   );
 
+  const nestedObjectRefs = buildNestedSourceObjectRefMap(file.documents, file.hierarchy, resolver);
+  if (selectors) applyNestedNodeAliases(file.hierarchy, nestedObjectRefs, selectors, resolver);
+  const nestedSelectorOverrides = selectors
+    ? buildNestedSelectorOverrides(nestedObjectRefs)
+    : undefined;
+
   // Build internal reference map (fileID → GOPath:ComponentType)
-  const refMap = buildInternalRefMap(file, resolver);
+  const refMap = buildInternalRefMap(
+    file, resolver, selectors, nestedObjectRefs, nestedSelectorOverrides
+  );
   for (const component of nestedAddedComponents) {
     refMap.set(component.document.fileId, `${component.goPath}:${component.componentName}`);
   }
@@ -108,17 +309,19 @@ export function writeCompact(file: UnityFile, options: CompactWriterOptions = {}
 
   // Details section
   lines.push('--- DETAILS');
-  writeDetails(file.hierarchy, lines, '', resolver, !options.verbose, refMap);
+  writeDetails(file.hierarchy, lines, '', resolver, !options.verbose, refMap, selectors);
   writeAddedComponentDetails(nestedAddedComponents, lines, refMap);
 
   // REFS section
   lines.push('--- REFS');
-  const nestedObjectRefs = buildNestedSourceObjectRefMap(file.documents, file.hierarchy, resolver);
   const strippedMap = buildStrippedComponentMap(file, resolver, nestedObjectRefs);
-  writeRefsSection(file.hierarchy, lines, resolver, strippedMap, nestedObjectRefs);
+  writeRefsSection(
+    file.hierarchy, lines, resolver, strippedMap, nestedObjectRefs,
+    selectors, nestedSelectorOverrides
+  );
   writeAddedComponentRefs(nestedAddedComponents, lines);
 
-  return lines.join('\n') + '\n';
+  return finishCompact(lines, version);
 }
 
 /** Context for nested prefab tree expansion */
@@ -189,12 +392,13 @@ function resolveSourceName(node: GameObjectNode, resolver?: GuidResolver): strin
 function buildComponentNames(
   components: ComponentInfo[],
   resolver?: GuidResolver,
-  modifiedFileIds?: Set<string>
+  modifiedFileIds?: Set<string>,
+  selectors?: SelectorContext
 ): string[] {
   return components
     .filter(c => !OMIT_COMPONENTS.has(c.typeName))
     .map(c => {
-      const name = resolveComponentName(c, resolver);
+      const name = selectors?.componentNames.get(c) || resolveComponentName(c, resolver);
       if (modifiedFileIds?.has(c.fileId)) return name + '*';
       return name;
     });
@@ -212,17 +416,19 @@ function writeStructureTree(
   addedComponentOverlay?: AddedComponentOverlay,
   removalOverlay?: VariantRemovalOverlay,
   ownerInstanceId: string = '',
-  sourceGuid: string = ''
+  sourceGuid: string = '',
+  selectors?: SelectorContext
 ): void {
   const componentNames = appendRemovedComponentNames(
     appendAddedComponentNames(
-      buildComponentNames(node.components, resolver, modifiedFileIds),
+      buildComponentNames(node.components, resolver, modifiedFileIds, selectors),
       ownerInstanceId, sourceGuid, node.fileId, addedComponentOverlay
     ),
     sourceGuid, node.fileId, removalOverlay
   );
 
-  let line = variantNodeName(node.name, sourceGuid, node.fileId, removalOverlay);
+  const renderedNodeName = selectors?.nodeNames.get(node) || node.name;
+  let line = variantNodeName(renderedNodeName, sourceGuid, node.fileId, removalOverlay);
 
   if (node.nestedPrefab) {
     const sourceName = resolveSourceName(node, resolver);
@@ -250,11 +456,12 @@ function writeStructureTree(
       if (expanded) {
         const sourceRoot = expanded.hierarchy;
         // Use source root name if instance name wasn't overridden
-        const instanceName = child.name === 'NestedPrefab' ? sourceRoot.name : child.name;
+        const instanceName = selectors?.nodeNames.get(child) ||
+          (child.name === 'NestedPrefab' ? sourceRoot.name : child.name);
         const childSourceGuid = child.nestedPrefab.sourceGuid || '';
         const childComps = appendRemovedComponentNames(
           appendAddedComponentNames(
-            buildComponentNames(sourceRoot.components, resolver, expanded.modifiedFileIds),
+            buildComponentNames(sourceRoot.components, resolver, expanded.modifiedFileIds, selectors),
             child.nestedPrefab.instanceId, childSourceGuid, sourceRoot.fileId, addedComponentOverlay
           ),
           childSourceGuid, sourceRoot.fileId, removalOverlay
@@ -276,7 +483,7 @@ function writeStructureTree(
           writeStructureTree(
             sourceRoot, lines, prefix + childPrefix, false,
             resolver, sourceCtx, expanded.modifiedFileIds,
-            addedComponentOverlay, removalOverlay, child.nestedPrefab.instanceId, childSourceGuid
+            addedComponentOverlay, removalOverlay, child.nestedPrefab.instanceId, childSourceGuid, selectors
           );
         }
         continue;
@@ -286,12 +493,13 @@ function writeStructureTree(
     // Normal child (not expanded or expansion failed)
     const childComps = appendRemovedComponentNames(
       appendAddedComponentNames(
-        buildComponentNames(child.components, resolver, modifiedFileIds),
+        buildComponentNames(child.components, resolver, modifiedFileIds, selectors),
         ownerInstanceId, sourceGuid, child.fileId, addedComponentOverlay
       ),
       sourceGuid, child.fileId, removalOverlay
     );
-    let childLine = `${prefix}${connector} ${variantNodeName(child.name, sourceGuid, child.fileId, removalOverlay)}`;
+    const renderedChildName = selectors?.nodeNames.get(child) || child.name;
+    let childLine = `${prefix}${connector} ${variantNodeName(renderedChildName, sourceGuid, child.fileId, removalOverlay)}`;
 
     if (child.nestedPrefab) {
       const sourceName = resolveSourceName(child, resolver);
@@ -304,7 +512,7 @@ function writeStructureTree(
     if (child.children.length > 0) {
       writeStructureTree(
         child, lines, prefix + childPrefix, false, resolver, expansionCtx,
-        modifiedFileIds, addedComponentOverlay, removalOverlay, ownerInstanceId, sourceGuid
+        modifiedFileIds, addedComponentOverlay, removalOverlay, ownerInstanceId, sourceGuid, selectors
       );
     }
   }
@@ -317,9 +525,10 @@ function writeDetails(
   path: string,
   resolver?: GuidResolver,
   filterBoilerplate: boolean = true,
-  refMap?: Map<string, string>
+  refMap?: Map<string, string>,
+  selectors?: SelectorContext
 ): void {
-  const currentPath = path ? `${path}/${node.name}` : node.name;
+  const currentPath = selectors?.nodePaths.get(node) || (path ? `${path}/${node.name}` : node.name);
 
   // Write transform details (if non-default)
   const transformSection = writeTransformSection(node.transform, currentPath);
@@ -332,7 +541,7 @@ function writeDetails(
   for (const comp of node.components) {
     if (OMIT_COMPONENTS.has(comp.typeName)) continue;
 
-    const compName = resolveComponentName(comp, resolver);
+    const compName = selectors?.componentNames.get(comp) || resolveComponentName(comp, resolver);
     const props = comp.properties;
     const propEntries = Object.entries(props).filter(([k, v]) => {
       // Always filter m_Enabled=1 (default)
@@ -356,24 +565,28 @@ function writeDetails(
 
   // Recurse children
   for (const child of node.children) {
-    writeDetails(child, lines, currentPath, resolver, filterBoilerplate, refMap);
+    writeDetails(child, lines, currentPath, resolver, filterBoilerplate, refMap, selectors);
   }
 }
 
 /** Build a map from fileID → "GOName:ComponentType" for resolving internal references */
 function buildInternalRefMap(
   file: UnityFile,
-  resolver?: GuidResolver
+  resolver?: GuidResolver,
+  selectors?: SelectorContext,
+  suppliedNestedObjectRefs?: Map<string, NestedSourceObjectRef>,
+  nestedSelectorOverrides?: NestedSelectorOverrides
 ): Map<string, string> {
   const map = new Map<string, string>();
   if (!file.hierarchy) return map;
 
   // Walk hierarchy to collect all known fileIDs
-  collectNodeFileIds(file.hierarchy, map, resolver);
+  collectNodeFileIds(file.hierarchy, map, resolver, '', selectors);
 
   // Add stripped document entries for nested prefab components
   const piNodeNames = buildPINodeNames(file.hierarchy, resolver);
-  const nestedObjectRefs = buildNestedSourceObjectRefMap(file.documents, file.hierarchy, resolver);
+  const nestedObjectRefs = suppliedNestedObjectRefs ||
+    buildNestedSourceObjectRefMap(file.documents, file.hierarchy, resolver);
 
   for (const doc of file.documents) {
     if (!doc.stripped) continue;
@@ -385,6 +598,11 @@ function buildInternalRefMap(
 
     const objectRef = nestedObjectRefs.get(doc.fileId);
     if (objectRef) {
+      const selectorOverride = nestedSelectorOverrides?.get(doc.fileId);
+      if (selectorOverride) {
+        map.set(doc.fileId, selectorOverride);
+        continue;
+      }
       if (objectRef.typeName === 'GameObject') {
         map.set(doc.fileId, objectRef.path);
       } else if (!REF_SKIP_TYPES.has(objectRef.typeName)) {
@@ -420,14 +638,15 @@ function collectNodeFileIds(
   node: GameObjectNode,
   map: Map<string, string>,
   resolver?: GuidResolver,
-  parentPath: string = ''
+  parentPath: string = '',
+  selectors?: SelectorContext
 ): void {
   let name = node.name;
   if (name === 'NestedPrefab' && node.nestedPrefab) {
     name = resolveSourceName(node, resolver) || name;
   }
 
-  const currentPath = parentPath ? `${parentPath}/${name}` : name;
+  const currentPath = selectors?.nodePaths.get(node) || (parentPath ? `${parentPath}/${name}` : name);
 
   if (node.fileId && node.fileId !== '0') {
     map.set(node.fileId, currentPath);
@@ -437,11 +656,11 @@ function collectNodeFileIds(
     map.set(node.transform.fileId, `${currentPath}:${ttype}`);
   }
   for (const comp of node.components) {
-    const compName = resolveComponentName(comp, resolver);
+    const compName = selectors?.componentNames.get(comp) || resolveComponentName(comp, resolver);
     map.set(comp.fileId, `${currentPath}:${compName}`);
   }
   for (const child of node.children) {
-    collectNodeFileIds(child, map, resolver, currentPath);
+    collectNodeFileIds(child, map, resolver, currentPath, selectors);
   }
 }
 
@@ -704,16 +923,22 @@ function writeRefsSection(
   lines: string[],
   resolver?: GuidResolver,
   strippedMap?: Map<string, StrippedComponentRef[]>,
-  nestedObjectRefs?: Map<string, NestedSourceObjectRef>
+  nestedObjectRefs?: Map<string, NestedSourceObjectRef>,
+  selectors?: SelectorContext,
+  nestedSelectorOverrides?: NestedSelectorOverrides
 ): void {
   const start = lines.length;
-  writeNodeRefs(node, lines, resolver, strippedMap, nestedObjectRefs, '');
+  writeNodeRefs(
+    node, lines, resolver, strippedMap, nestedObjectRefs, '', selectors,
+    nestedSelectorOverrides
+  );
 
   if (nestedObjectRefs) {
     const existing = new Set(lines.slice(start));
     for (const ref of nestedObjectRefs.values()) {
       if (ref.typeName !== 'GameObject' && ref.typeName !== 'Transform' && ref.typeName !== 'RectTransform') continue;
-      const key = ref.typeName === 'GameObject' ? ref.path : `${ref.path}:${ref.typeName}`;
+      const key = nestedSelectorOverrides?.get(ref.fileId) ||
+        (ref.typeName === 'GameObject' ? ref.path : `${ref.path}:${ref.typeName}`);
       const line = `${key} = ${ref.fileId}`;
       if (!existing.has(line)) {
         lines.push(line);
@@ -730,7 +955,9 @@ function writeNodeRefs(
   resolver?: GuidResolver,
   strippedMap?: Map<string, StrippedComponentRef[]>,
   nestedObjectRefs?: Map<string, NestedSourceObjectRef>,
-  parentPath: string = ''
+  parentPath: string = '',
+  selectors?: SelectorContext,
+  nestedSelectorOverrides?: NestedSelectorOverrides
 ): void {
   let name = node.name;
   // Resolve 'NestedPrefab' default to source name
@@ -739,7 +966,7 @@ function writeNodeRefs(
     if (resolved) name = resolved;
   }
 
-  const currentPath = parentPath ? `${parentPath}/${name}` : name;
+  const currentPath = selectors?.nodePaths.get(node) || (parentPath ? `${parentPath}/${name}` : name);
 
   // GO fileId
   const nestedRefs = node.nestedPrefab && nestedObjectRefs
@@ -767,7 +994,7 @@ function writeNodeRefs(
   // Component fileIds
   for (const comp of node.components) {
     if (OMIT_COMPONENTS.has(comp.typeName)) continue;
-    const compName = resolveComponentName(comp, resolver);
+    const compName = selectors?.componentNames.get(comp) || resolveComponentName(comp, resolver);
     lines.push(`${currentPath}:${compName} = ${comp.fileId}`);
   }
 
@@ -775,7 +1002,9 @@ function writeNodeRefs(
   if (node.nestedPrefab && strippedMap) {
     const strippedRefs = strippedMap.get(node.nestedPrefab.instanceId) || [];
     for (const ref of strippedRefs) {
-      lines.push(`${ref.path || currentPath}:${ref.typeName} = ${ref.fileId}`);
+      const key = nestedSelectorOverrides?.get(ref.fileId) ||
+        `${ref.path || currentPath}:${ref.typeName}`;
+      lines.push(`${key} = ${ref.fileId}`);
     }
   }
 
@@ -786,7 +1015,10 @@ function writeNodeRefs(
 
   // Recurse children
   for (const child of node.children) {
-    writeNodeRefs(child, lines, resolver, strippedMap, nestedObjectRefs, currentPath);
+    writeNodeRefs(
+      child, lines, resolver, strippedMap, nestedObjectRefs, currentPath,
+      selectors, nestedSelectorOverrides
+    );
   }
 }
 
@@ -1854,16 +2086,27 @@ function findAddedObjects(
 }
 
 /** Write variant compact format with resolved paths */
-function writeVariantCompact(file: UnityFile, lines: string[], resolver?: GuidResolver): string {
+function writeVariantCompact(
+  file: UnityFile,
+  lines: string[],
+  resolver?: GuidResolver,
+  version: 1 | 2 = 1
+): string {
   const mainInstance = file.prefabInstances.find(pi =>
     String(pi.transformParent.fileID) === '0'
   );
 
   if (!mainInstance) {
-    return lines.join('\n') + '\n';
+    return finishCompact(lines, version);
   }
 
   const baseGuid = mainInstance.sourcePrefab.guid || '';
+  const localSelectorCandidate = version === 2 && file.hierarchy
+    ? buildSelectorContext(file.hierarchy, resolver)
+    : undefined;
+  const localSelectors = localSelectorCandidate?.hasAliases
+    ? localSelectorCandidate
+    : undefined;
 
   // Try to load and parse the base prefab for full resolution
   let baseMap: Map<string, BaseDocInfo> | null = null;
@@ -1873,6 +2116,7 @@ function writeVariantCompact(file: UnityFile, lines: string[], resolver?: GuidRe
   const inheritedModifiedTargets = new Set<string>();
   let inheritedVariantLayers: { guid: string; file: UnityFile }[] = [];
   let baseSourceAliases: string[] = [baseGuid];
+  let baseSelectors: SelectorContext | undefined;
 
   if (resolver && baseGuid) {
     const resolvedBase = resolveBaseChain(baseGuid, resolver);
@@ -1889,6 +2133,14 @@ function writeVariantCompact(file: UnityFile, lines: string[], resolver?: GuidRe
         baseMap = buildBaseDocMap(
           baseFile.documents, resolver, baseHierarchy, resolvedBase.guid
         );
+        if (version === 2 && baseHierarchy) {
+          baseSelectors = buildSelectorContext(baseHierarchy, resolver);
+          if (baseSelectors.hasAliases) {
+            applySelectorsToBaseMap(baseMap, baseHierarchy, baseSelectors);
+          } else {
+            baseSelectors = undefined;
+          }
+        }
 
         // Resolve nested prefab targets that aren't in baseMap
         const unresolvedTargets = new Map<string, PropertyModification[]>();
@@ -1956,8 +2208,14 @@ function writeVariantCompact(file: UnityFile, lines: string[], resolver?: GuidRe
     );
     return resolveAddedComponents(entry.file, structuralMain, entry.sourceMap, resolver);
   });
+  if (localSelectors?.hasAliases && file.hierarchy) {
+    applySelectorsToResolvedComponents(overlayAddedComponents, file.hierarchy, localSelectors);
+  }
   const addedComponentOverlay = buildAddedComponentOverlay(overlayAddedComponents, allInstances);
   const addedComponents = resolveAddedComponents(file, mainInstance, compositeSourceMap, resolver);
+  if (localSelectors?.hasAliases && file.hierarchy) {
+    applySelectorsToResolvedComponents(addedComponents, file.hierarchy, localSelectors);
+  }
   const removalOverlay = mergeRemovalOverlays(structuralEntries.map(entry => {
     const structuralMain = entry.file.prefabInstances.find(instance =>
       String(instance.transformParent.fileID) === '0'
@@ -1985,7 +2243,7 @@ function writeVariantCompact(file: UnityFile, lines: string[], resolver?: GuidRe
     writeVariantStructureTree(
       baseHierarchy, lines, '', true, modifiedTargets, baseMap, resolver,
       variantExpansionCtx, addedObjectsMap, addedComponentOverlay, removalOverlay,
-      mainInstance.fileId, baseSourceAliases
+      mainInstance.fileId, baseSourceAliases, baseSelectors
     );
   } else {
     lines.push(`(variant of ${baseGuid || 'unknown'})`);
@@ -1997,7 +2255,7 @@ function writeVariantCompact(file: UnityFile, lines: string[], resolver?: GuidRe
   writeNestedPrefabInstanceDetails(file.prefabInstances, mainInstance, lines, resolver);
 
   const rawAddedComponentRefMap = file.hierarchy
-    ? buildInternalRefMap(file, resolver)
+    ? buildInternalRefMap(file, resolver, localSelectors)
     : new Map<string, string>();
   // __added_root__ is a parser-only virtual node. Added-object DETAILS and REFS
   // are both rendered without it, so added-component property values must use
@@ -2018,10 +2276,10 @@ function writeVariantCompact(file: UnityFile, lines: string[], resolver?: GuidRe
       ? file.hierarchy.children
       : [file.hierarchy];
     const refMap = file.hierarchy.name === ADDED_ROOT_NAME
-      ? stripAddedRootPrefixFromRefMap(buildInternalRefMap(file, resolver))
-      : buildInternalRefMap(file, resolver);
+      ? stripAddedRootPrefixFromRefMap(buildInternalRefMap(file, resolver, localSelectors))
+      : buildInternalRefMap(file, resolver, localSelectors);
     for (const addedRoot of addedRoots) {
-      writeDetails(addedRoot, lines, '', resolver, true, refMap);
+      writeDetails(addedRoot, lines, '', resolver, true, refMap, localSelectors);
     }
   }
 
@@ -2039,7 +2297,7 @@ function writeVariantCompact(file: UnityFile, lines: string[], resolver?: GuidRe
       ? file.hierarchy.children
       : [file.hierarchy];
     for (const addedRoot of addedRoots) {
-      writeRefsSection(addedRoot, lines, resolver);
+      writeRefsSection(addedRoot, lines, resolver, undefined, undefined, localSelectors);
     }
   }
 
@@ -2060,7 +2318,7 @@ function writeVariantCompact(file: UnityFile, lines: string[], resolver?: GuidRe
     }
   }
 
-  return lines.join('\n') + '\n';
+  return finishCompact(lines, version);
 }
 
 /** Match variant added-object DETAILS/REFS, which are written without the virtual root. */
@@ -2070,6 +2328,56 @@ function stripAddedRootPrefixFromRefMap(refMap: Map<string, string>): Map<string
     stripped.set(fileId, stripAddedRootPrefix(refPath));
   }
   return stripped;
+}
+
+/** Apply the same v2 aliases to source identities consumed by variant DETAILS/REFS. */
+function applySelectorsToBaseMap(
+  baseMap: Map<string, BaseDocInfo>,
+  root: GameObjectNode,
+  selectors: SelectorContext
+): void {
+  const visit = (node: GameObjectNode): void => {
+    const goPath = selectors.nodePaths.get(node);
+    if (goPath) {
+      const goInfo = baseMap.get(node.fileId);
+      if (goInfo) { goInfo.goName = goPath; goInfo.goPath = goPath; }
+      const transformInfo = baseMap.get(node.transform.fileId);
+      if (transformInfo) { transformInfo.goName = goPath; transformInfo.goPath = goPath; }
+      for (const component of node.components) {
+        const info = baseMap.get(component.fileId);
+        if (!info) continue;
+        info.goName = goPath;
+        info.goPath = goPath;
+        info.typeName = selectors.componentNames.get(component) || info.typeName;
+      }
+    }
+    node.children.forEach(visit);
+  };
+  visit(root);
+}
+
+function applySelectorsToResolvedComponents(
+  components: ResolvedAddedComponent[],
+  root: GameObjectNode,
+  selectors: SelectorContext
+): void {
+  const componentNames = new Map<string, string>();
+  const nodePaths = new Map<string, string>();
+  const visit = (node: GameObjectNode): void => {
+    const path = selectors.nodePaths.get(node);
+    if (path && node.fileId && node.fileId !== '0') nodePaths.set(node.fileId, path);
+    for (const component of node.components) {
+      const name = selectors.componentNames.get(component);
+      if (name) componentNames.set(component.fileId, name);
+    }
+    node.children.forEach(visit);
+  };
+  visit(root);
+  for (const component of components) {
+    component.componentName = componentNames.get(component.document.fileId) || component.componentName;
+    const ownerId = String(component.document.properties.m_GameObject?.fileID ?? '0');
+    component.goPath = nodePaths.get(ownerId) || component.goPath;
+  }
 }
 
 /** Load the source prefab map used to label a nested PrefabInstance's own modifications. */
@@ -2139,17 +2447,19 @@ function writeVariantStructureTree(
   addedComponentOverlay?: AddedComponentOverlay,
   removalOverlay?: VariantRemovalOverlay,
   ownerInstanceId: string = '',
-  sourceGuid: string | string[] = ''
+  sourceGuid: string | string[] = '',
+  selectors?: SelectorContext
 ): void {
   const componentNames = appendRemovedComponentNames(
     appendAddedComponentNames(
-      buildComponentNames(node.components, resolver, modifiedTargets),
+      buildComponentNames(node.components, resolver, modifiedTargets, selectors),
       ownerInstanceId, sourceGuid, node.fileId, addedComponentOverlay
     ),
     sourceGuid, node.fileId, removalOverlay
   );
 
-  let line = variantNodeName(node.name, sourceGuid, node.fileId, removalOverlay);
+  const renderedNodeName = selectors?.nodeNames.get(node) || node.name;
+  let line = variantNodeName(renderedNodeName, sourceGuid, node.fileId, removalOverlay);
 
   if (node.nestedPrefab) {
     const sourceName = resolveSourceName(node, resolver);
@@ -2181,14 +2491,15 @@ function writeVariantStructureTree(
       const expanded = expandNestedPrefab(child, expansionCtx);
       if (expanded) {
         const sourceRoot = expanded.hierarchy;
-        const instanceName = child.name === 'NestedPrefab' ? sourceRoot.name : child.name;
+        const instanceName = selectors?.nodeNames.get(child) ||
+          (child.name === 'NestedPrefab' ? sourceRoot.name : child.name);
         // Merge modification markers: base PI modifications + variant modifications
         const mergedMods = new Set(expanded.modifiedFileIds);
         for (const id of modifiedTargets) mergedMods.add(id);
         const childSourceGuid = child.nestedPrefab.sourceGuid || '';
         const childComps = appendRemovedComponentNames(
           appendAddedComponentNames(
-            buildComponentNames(sourceRoot.components, resolver, mergedMods),
+            buildComponentNames(sourceRoot.components, resolver, mergedMods, selectors),
             child.nestedPrefab.instanceId, childSourceGuid, sourceRoot.fileId, addedComponentOverlay
           ),
           childSourceGuid, sourceRoot.fileId, removalOverlay
@@ -2209,7 +2520,7 @@ function writeVariantStructureTree(
           writeVariantStructureTree(
             sourceRoot, lines, prefix + childPrefix, false,
             mergedMods, baseMap, resolver, sourceCtx, addedObjectsMap,
-            addedComponentOverlay, removalOverlay, child.nestedPrefab.instanceId, childSourceGuid
+            addedComponentOverlay, removalOverlay, child.nestedPrefab.instanceId, childSourceGuid, selectors
           );
         }
         continue;
@@ -2218,12 +2529,13 @@ function writeVariantStructureTree(
 
     const childComps = appendRemovedComponentNames(
       appendAddedComponentNames(
-        buildComponentNames(child.components, resolver, modifiedTargets),
+        buildComponentNames(child.components, resolver, modifiedTargets, selectors),
         ownerInstanceId, sourceGuid, child.fileId, addedComponentOverlay
       ),
       sourceGuid, child.fileId, removalOverlay
     );
-    let childLine = `${prefix}${connector} ${variantNodeName(child.name, sourceGuid, child.fileId, removalOverlay)}`;
+    const renderedChildName = selectors?.nodeNames.get(child) || child.name;
+    let childLine = `${prefix}${connector} ${variantNodeName(renderedChildName, sourceGuid, child.fileId, removalOverlay)}`;
 
     if (child.nestedPrefab) {
       const sourceName = resolveSourceName(child, resolver);
@@ -2237,7 +2549,7 @@ function writeVariantStructureTree(
       writeVariantStructureTree(
         child, lines, prefix + childPrefix, false, modifiedTargets, baseMap,
         resolver, expansionCtx, addedObjectsMap, addedComponentOverlay,
-        removalOverlay, ownerInstanceId, sourceGuid
+        removalOverlay, ownerInstanceId, sourceGuid, selectors
       );
     }
   }

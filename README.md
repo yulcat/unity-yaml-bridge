@@ -65,6 +65,7 @@ Background9Slice_Image:Image = 8027481461304769067
 - **🌳 Structure + Details separation** — Understand hierarchy at a glance, dive into components only when needed
 - **🔄 Lossless round-trip** — 0 diff lines across 1M+ lines of real Unity YAML
 - **📦 Self-contained files** — REFS section stores all fileIDs; no in-memory state between CLI calls
+- **🔖 Optional v2 selectors** — Duplicate sibling names and same-type components get readable, order-stable `#N` aliases
 - **🆕 Auto fileID generation** — Add new GameObjects or components; the tool generates valid fileIDs automatically
 - **🎭 Prefab Variant support** — Base + delta pattern with `*` (modified), `+` (added), `-` (removed) markers
 - **🗜️ 77-96% token reduction** — Less context = cheaper, faster, more accurate AI edits
@@ -145,6 +146,25 @@ removed component must be cleared or replaced in the same edit.
 
 Full spec: [docs/FORMAT.md](docs/FORMAT.md)
 
+### Collision-safe v2 selectors
+
+Use `writeCompact(ast, { version: 2 })` or `ubridge parse File.prefab --format v2`.
+The body stays byte-identical to v1 when there are no selector collisions. Only
+colliding siblings or components are numbered:
+
+```text
+Inventory
+├─ Item#2 [Image]
+└─ Item#1 [Image]
+--- REFS
+Inventory/Item#1 = 110
+Inventory/Item#2 = 120
+```
+
+Numbers are assigned by signed Unity fileID rather than display order. They are
+snapshot-scoped aliases, and write-back validates the exact REFS target before
+applying an edit. v1 remains the default for existing integrations.
+
 ## Usage
 
 ## Installation
@@ -169,7 +189,7 @@ import fs from 'fs';
 // Unity YAML → .ubridge
 const yaml = fs.readFileSync('Button.prefab', 'utf-8');
 const ast = parseUnityYaml(yaml);
-const compact = writeCompact(ast);
+const compact = writeCompact(ast, { version: 2 });
 fs.writeFileSync('Button.ubridge', compact);
 
 // .ubridge → Unity YAML (after AI edits)

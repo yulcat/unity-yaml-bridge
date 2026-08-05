@@ -23,8 +23,8 @@ function readCompact(content) {
     const version = parseInt(headerMatch[1], 10);
     const type = headerMatch[2];
     const extra = headerMatch[3] || '';
-    if (version !== 1) {
-        throw new Error(`Unsupported .ubridge version: v${version}. This build supports v1 only.`);
+    if (version !== 1 && version !== 2) {
+        throw new Error(`Unsupported .ubridge version: v${version}. This build supports v1 and v2.`);
     }
     let baseGuid;
     const guidMatch = extra.match(/base-guid:(\S+)/);
@@ -81,7 +81,22 @@ function readCompact(content) {
         const refsLines = lines.slice(refsStart);
         parseRefsSection(refsLines, refs);
     }
+    if (version === 2)
+        validateV2Selectors(sections, refs);
     return { version, type, baseGuid, structure, sections, refs };
+}
+function validateV2Selectors(sections, refs) {
+    for (const section of sections) {
+        const address = section.componentType
+            ? `${section.goPath}:${section.componentType}`
+            : section.goPath;
+        if (!/#(?:[1-9]\d*)(?:\/|:|$)/.test(address))
+            continue;
+        const targets = refs.get(address);
+        if (!targets || targets.length !== 1) {
+            throw new Error(`Invalid v2 selector ${address}: expected exactly one matching REFS target.`);
+        }
+    }
 }
 /** Parse the structure tree from lines */
 function parseStructureTree(lines) {

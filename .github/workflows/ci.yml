@@ -18,5 +18,6 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
+        env:
+          UBRIDGE_FORCE_FIXTURES: "1"
       - run: npm pack --dry-run
-

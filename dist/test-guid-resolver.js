@@ -48,8 +48,10 @@ const path = __importStar(require("path"));
 const guid_resolver_1 = require("./guid-resolver");
 const unity_yaml_parser_1 = require("./unity-yaml-parser");
 const compact_writer_1 = require("./compact-writer");
+const test_sample_resolver_1 = require("./test-sample-resolver");
 const SAMPLES_DIR = path.join(__dirname, '..', 'samples');
 const PROJECT_PATH = path.join(SAMPLES_DIR, 'unity-projects', 'PrefabWorkflows_UIDemo', 'PrefabWorkflows_UIDemo_Project');
+const HAS_SAMPLE_PROJECT = fs.existsSync(PROJECT_PATH);
 let totalTests = 0;
 let passedTests = 0;
 function pass(label) {
@@ -95,29 +97,34 @@ console.log('\n' + '='.repeat(60));
 console.log('TEST: Project .cs.meta scanning resolves script GUIDs');
 console.log('='.repeat(60));
 {
-    const resolver = new guid_resolver_1.GuidResolver();
-    resolver.scanProject(PROJECT_PATH);
-    console.log(`  (Loaded ${resolver.size} mappings from project scan)`);
-    // Known GUIDs from sample project .cs.meta files
-    const cases = [
-        ['9208535555d3a8240ace8b8bd8270dfb', 'CardBehaviour'],
-        ['972d2ab202f4c7742aa210c364a56a05', 'ActivatePanelUI'],
-    ];
-    for (const [guid, expected] of cases) {
-        const resolved = resolver.resolve(guid);
-        if (resolved === expected) {
-            pass(`Script ${expected} resolved from .cs.meta`);
-        }
-        else {
-            fail(`Script ${expected}`, `Got: ${resolved}`);
-        }
-    }
-    // Verify that scanning found more than just built-ins
-    if (resolver.size > 50) {
-        pass(`Resolver has ${resolver.size} mappings (> 50 built-in)`);
+    if (!HAS_SAMPLE_PROJECT) {
+        console.log('  SKIP — optional Unity sample project is not checked in');
     }
     else {
-        fail(`Expected > 50 mappings`, `Got: ${resolver.size}`);
+        const resolver = new guid_resolver_1.GuidResolver();
+        const builtInSize = resolver.size;
+        resolver.scanProject(PROJECT_PATH);
+        console.log(`  (Loaded ${resolver.size} mappings from project scan)`);
+        // Known GUIDs from sample project .cs.meta files
+        const cases = [
+            ['9208535555d3a8240ace8b8bd8270dfb', 'CardBehaviour'],
+            ['972d2ab202f4c7742aa210c364a56a05', 'ActivatePanelUI'],
+        ];
+        for (const [guid, expected] of cases) {
+            const resolved = resolver.resolve(guid);
+            if (resolved === expected) {
+                pass(`Script ${expected} resolved from .cs.meta`);
+            }
+            else {
+                fail(`Script ${expected}`, `Got: ${resolved}`);
+            }
+        }
+        if (resolver.size > builtInSize) {
+            pass(`Resolver added project mappings (${builtInSize} → ${resolver.size})`);
+        }
+        else {
+            fail('Expected project mappings', `Resolver stayed at ${resolver.size}`);
+        }
     }
 }
 // ============================================================
@@ -127,35 +134,40 @@ console.log('\n' + '='.repeat(60));
 console.log('TEST: Asset .meta scanning resolves prefab/scene GUIDs');
 console.log('='.repeat(60));
 {
-    const resolver = new guid_resolver_1.GuidResolver();
-    resolver.scanProject(PROJECT_PATH);
-    // Find any .prefab.meta file in the project and verify it resolves
-    const ellenMetaPath = path.join(PROJECT_PATH, 'Assets', '3DGamekit', 'Ellen', 'Models', 'Ellen_Variant.prefab.meta');
-    if (fs.existsSync(ellenMetaPath)) {
-        const meta = fs.readFileSync(ellenMetaPath, 'utf-8');
-        const match = meta.match(/guid:\s*([a-f0-9]{32})/);
-        if (match) {
-            const filePath = resolver.resolveFilePath(match[1]);
-            if (filePath && filePath.endsWith('Ellen_Variant.prefab')) {
-                pass(`Ellen_Variant.prefab asset path resolved`);
+    if (!HAS_SAMPLE_PROJECT) {
+        console.log('  SKIP — optional Unity sample project is not checked in');
+    }
+    else {
+        const resolver = new guid_resolver_1.GuidResolver();
+        resolver.scanProject(PROJECT_PATH);
+        // Find any .prefab.meta file in the project and verify it resolves
+        const ellenMetaPath = path.join(PROJECT_PATH, 'Assets', '3DGamekit', 'Ellen', 'Models', 'Ellen_Variant.prefab.meta');
+        if (fs.existsSync(ellenMetaPath)) {
+            const meta = fs.readFileSync(ellenMetaPath, 'utf-8');
+            const match = meta.match(/guid:\s*([a-f0-9]{32})/);
+            if (match) {
+                const filePath = resolver.resolveFilePath(match[1]);
+                if (filePath && filePath.endsWith('Ellen_Variant.prefab')) {
+                    pass(`Ellen_Variant.prefab asset path resolved`);
+                }
+                else {
+                    fail('Ellen_Variant.prefab asset path', `Got: ${filePath}`);
+                }
+                const name = resolver.resolve(match[1]);
+                if (name === 'Ellen_Variant') {
+                    pass(`Ellen_Variant name resolved from .prefab.meta`);
+                }
+                else {
+                    fail('Ellen_Variant name', `Got: ${name}`);
+                }
             }
             else {
-                fail('Ellen_Variant.prefab asset path', `Got: ${filePath}`);
-            }
-            const name = resolver.resolve(match[1]);
-            if (name === 'Ellen_Variant') {
-                pass(`Ellen_Variant name resolved from .prefab.meta`);
-            }
-            else {
-                fail('Ellen_Variant name', `Got: ${name}`);
+                fail('Ellen_Variant.prefab.meta has no GUID');
             }
         }
         else {
-            fail('Ellen_Variant.prefab.meta has no GUID');
+            fail('Ellen_Variant.prefab.meta not found');
         }
-    }
-    else {
-        fail('Ellen_Variant.prefab.meta not found');
     }
 }
 // ============================================================
@@ -165,8 +177,7 @@ console.log('\n' + '='.repeat(60));
 console.log('TEST: Compact output uses resolved class names');
 console.log('='.repeat(60));
 {
-    const resolver = new guid_resolver_1.GuidResolver();
-    resolver.scanProject(PROJECT_PATH);
+    const resolver = (0, test_sample_resolver_1.createSampleResolver)(SAMPLES_DIR);
     const content = fs.readFileSync(path.join(SAMPLES_DIR, 'prefabs', 'Button.prefab'), 'utf-8');
     const ast = (0, unity_yaml_parser_1.parseUnityYaml)(content);
     const compactStr = (0, compact_writer_1.writeCompact)(ast, { guidResolver: resolver });

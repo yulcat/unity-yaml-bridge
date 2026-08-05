@@ -53,12 +53,15 @@ const unity_yaml_writer_1 = require("./unity-yaml-writer");
 const compact_reader_1 = require("./compact-reader");
 const compact_merger_1 = require("./compact-merger");
 const guid_resolver_1 = require("./guid-resolver");
+const test_sample_resolver_1 = require("./test-sample-resolver");
 const SAMPLES_DIR = path.join(__dirname, '..', 'samples');
-const resolver = new guid_resolver_1.GuidResolver();
+const resolver = (0, test_sample_resolver_1.createSampleResolver)(SAMPLES_DIR);
 const projectPath = path.join(SAMPLES_DIR, 'unity-projects', 'PrefabWorkflows_UIDemo', 'PrefabWorkflows_UIDemo_Project');
 if (fs.existsSync(projectPath)) {
-    resolver.scanProject(projectPath);
     console.log(`GUID resolver: ${resolver.size} mappings loaded`);
+}
+else {
+    console.log(`GUID resolver: using checked-in fixture mappings (${resolver.size} mappings loaded)`);
 }
 const ISSUE3_SCRIPT_GUID = '11111111111111111111111111111111';
 const ISSUE5_BASE_GUID = '55555555555555555555555555555555';

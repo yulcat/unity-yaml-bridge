@@ -19,14 +19,16 @@ import { writeUnityYaml } from './unity-yaml-writer';
 import { readCompact, CompactFile } from './compact-reader';
 import { mergeCompactChanges } from './compact-merger';
 import { GuidResolver } from './guid-resolver';
+import { createSampleResolver } from './test-sample-resolver';
 
 const SAMPLES_DIR = path.join(__dirname, '..', 'samples');
 
-const resolver = new GuidResolver();
+const resolver = createSampleResolver(SAMPLES_DIR);
 const projectPath = path.join(SAMPLES_DIR, 'unity-projects', 'PrefabWorkflows_UIDemo', 'PrefabWorkflows_UIDemo_Project');
 if (fs.existsSync(projectPath)) {
-  resolver.scanProject(projectPath);
   console.log(`GUID resolver: ${resolver.size} mappings loaded`);
+} else {
+  console.log(`GUID resolver: using checked-in fixture mappings (${resolver.size} mappings loaded)`);
 }
 
 const ISSUE3_SCRIPT_GUID = '11111111111111111111111111111111';

@@ -265,6 +265,31 @@ The bridge creates the component document and updates `m_Component`. On an
 inherited variant object it also creates/reuses the stripped GameObject document
 and appends the correct `m_AddedComponents` entry.
 
+### Removing or Replacing a Local Component
+
+In a regular prefab, prefix an existing local component with `-` in STRUCTURE:
+
+```
+--- STRUCTURE
+Root [Image, -Slider]
+```
+
+The bridge removes both the component document and its owning GameObject's
+`m_Component` entry. `Transform` and `RectTransform` are required and cannot be
+removed. If another document still references the component, the write fails
+with the referencing document/property paths; clear or replace those references
+in DETAILS as part of the same edit.
+
+Removal and addition are processed atomically, so replacement uses both markers:
+
+```
+--- STRUCTURE
+Root [Image, -Slider, +UIProgressBar]
+--- DETAILS
+[+ Root:UIProgressBar]
+m_Script = {11500000, 0123456789abcdef0123456789abcdef, 3}
+```
+
 ### Adding a Variant Override
 
 Add a property to an existing DETAILS section, or add a new section for any

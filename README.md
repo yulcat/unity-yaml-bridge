@@ -122,6 +122,17 @@ _Header_Text:TextMeshProUGUI = 7213628277689136018
 
 `*` = overridden, `+` = added in this variant, `-` = removed.
 
+For regular prefabs, a component marker can also be used as an edit instruction:
+
+```text
+Gauge [Image, -Slider, +UIProgressBar]
+```
+
+`-Component` removes an existing local component and can be combined with a
+`[+ Path:NewComponent]` DETAILS section for an atomic replacement. Required
+`Transform`/`RectTransform` components cannot be removed. References to a
+removed component must be cleared or replaced in the same edit.
+
 ### Value Syntax
 
 | Type | Syntax | Example |
@@ -215,6 +226,7 @@ npx tsx src/test-compact-roundtrip.ts
 - ✅ Variant-of-variant base hierarchy resolution
 - ✅ Intermediate-variant GameObject/component additions and removals
 - ✅ New component creation and new PrefabInstance overrides from compact edits
+- ✅ Local component removal and atomic replacement in regular prefabs
 - ✅ REFS section (self-contained files)
 - ✅ Auto fileID generation for new elements
 - ✅ Compact edit → YAML write-back

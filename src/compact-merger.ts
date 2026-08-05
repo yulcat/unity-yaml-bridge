@@ -77,6 +77,28 @@ function collectStructurePaths(node: import('./compact-reader').CompactStructure
   }
 }
 
+interface RequestedComponentRemoval {
+  goPath: string;
+  componentType: string;
+}
+
+/** Collect explicit -Component edit instructions from STRUCTURE. */
+function collectComponentRemovals(
+  node: import('./compact-reader').CompactStructureNode,
+  parentPath: string,
+  removals: RequestedComponentRemoval[]
+): void {
+  const goPath = parentPath ? `${parentPath}/${node.name}` : node.name;
+  for (const component of node.components) {
+    if (!component.startsWith('-')) continue;
+    const componentType = component.slice(1).replace(/\*$/, '').trim();
+    if (componentType) removals.push({ goPath, componentType });
+  }
+  for (const child of node.children) {
+    collectComponentRemovals(child, goPath, removals);
+  }
+}
+
 interface PendingAddedComponent {
   section: CompactSection;
   document: UnityDocument;
@@ -190,6 +212,128 @@ function addHierarchyComponent(
     stripped: false,
   };
   node.components.push(info);
+}
+
+function componentMatches(info: ComponentInfo, componentType: string): boolean {
+  return info.typeName === componentType
+    || info.scriptName === componentType
+    || info.scriptGuid === componentType;
+}
+
+function removeHierarchyComponent(file: UnityFile, goPath: string, fileId: string): void {
+  if (!file.hierarchy) return;
+  const goMap = new Map<string, GameObjectNode[]>();
+  flattenHierarchy(file.hierarchy, goMap);
+  const node = goMap.get(goPath)?.[0];
+  if (node) node.components = node.components.filter(component => component.fileId !== fileId);
+}
+
+function findReferencesToDocuments(file: UnityFile, removedIds: Set<string>): string[] {
+  const references: string[] = [];
+
+  const visit = (value: any, path: string): void => {
+    if (value === null || typeof value !== 'object') return;
+    if (!Array.isArray(value) && Object.prototype.hasOwnProperty.call(value, 'fileID')) {
+      const fileId = String(value.fileID);
+      if (removedIds.has(fileId)) references.push(`${path} -> &${fileId}`);
+    }
+    if (Array.isArray(value)) {
+      value.forEach((item, index) => visit(item, `${path}[${index}]`));
+    } else {
+      for (const [key, child] of Object.entries(value)) visit(child, `${path}.${key}`);
+    }
+  };
+
+  for (const document of file.documents) {
+    if (removedIds.has(document.fileId)) continue;
+    visit(document.properties, `&${document.fileId}`);
+  }
+  return references;
+}
+
+/** Apply -Component instructions to local components in regular prefabs. */
+function removeLocalComponents(file: UnityFile, compact: CompactFile): void {
+  if (compact.type === 'variant' || !compact.structure || !file.hierarchy) return;
+
+  const removals: RequestedComponentRemoval[] = [];
+  collectComponentRemovals(compact.structure, '', removals);
+  if (removals.length === 0) return;
+
+  const docMap = new Map(file.documents.map(document => [document.fileId, document]));
+  const goMap = new Map<string, GameObjectNode[]>();
+  flattenHierarchy(file.hierarchy, goMap);
+  const selected: Array<{ request: RequestedComponentRemoval; goDoc: UnityDocument; componentDoc: UnityDocument }> = [];
+
+  for (const request of removals) {
+    if (request.componentType === 'Transform' || request.componentType === 'RectTransform') {
+      throw new Error(`Cannot remove required component ${request.goPath}:${request.componentType}.`);
+    }
+
+    const goNode = goMap.get(request.goPath)?.[0];
+    const goId = getSingleRef(compact.refs, request.goPath) || goNode?.fileId;
+    const goDoc = goId ? docMap.get(goId) : undefined;
+    if (!goDoc || goDoc.typeId !== 1 || goDoc.stripped) {
+      // Existing nested-prefab removal overlays also use -Component. They have
+      // no local owning GameObject/document, so keep their no-op round-trip.
+      continue;
+    }
+
+    const refEntry = findPathMapEntry(compact.refs, `${request.goPath}:${request.componentType}`);
+    const candidateIds = new Set<string>();
+    for (const id of refEntry?.value || []) {
+      const doc = docMap.get(id);
+      if (doc && !doc.stripped && String(doc.properties.m_GameObject?.fileID) === goDoc.fileId) {
+        candidateIds.add(id);
+      }
+    }
+    for (const component of goNode?.components || []) {
+      if (componentMatches(component, request.componentType)) candidateIds.add(component.fileId);
+    }
+
+    const candidates = [...candidateIds]
+      .map(id => docMap.get(id))
+      .filter((doc): doc is UnityDocument => !!doc);
+    if (candidates.length === 0) {
+      throw new Error(`Local component not found for removal: ${request.goPath}:${request.componentType}.`);
+    }
+    if (candidates.length > 1) {
+      throw new Error(
+        `Component removal is ambiguous for ${request.goPath}:${request.componentType}; ` +
+        `matching fileIDs: ${candidates.map(doc => doc.fileId).join(', ')}.`
+      );
+    }
+    selected.push({ request, goDoc, componentDoc: candidates[0] });
+  }
+
+  const removedIds = new Set(selected.map(item => item.componentDoc.fileId));
+  if (removedIds.size === 0) return;
+
+  // Remove the owning attachment first so it is not mistaken for a dangling ref.
+  for (const { request, goDoc, componentDoc } of selected) {
+    const components = Array.isArray(goDoc.properties.m_Component)
+      ? goDoc.properties.m_Component
+      : [];
+    goDoc.properties.m_Component = components.filter((entry: any) =>
+      !removedIds.has(String(entry?.component?.fileID))
+    );
+    removeHierarchyComponent(file, request.goPath, componentDoc.fileId);
+  }
+
+  const dangling = findReferencesToDocuments(file, removedIds);
+  if (dangling.length > 0) {
+    throw new Error(
+      `Cannot remove component${removedIds.size === 1 ? '' : 's'} ${[...removedIds].map(id => `&${id}`).join(', ')}; ` +
+      `remaining reference${dangling.length === 1 ? '' : 's'}: ${dangling.slice(0, 5).join(', ')}. ` +
+      'Clear or replace those references in the same edit.'
+    );
+  }
+
+  file.documents = file.documents.filter(document => !removedIds.has(document.fileId));
+  for (const [key, ids] of compact.refs) {
+    const remaining = ids.filter(id => !removedIds.has(id));
+    if (remaining.length > 0) compact.refs.set(key, remaining);
+    else compact.refs.delete(key);
+  }
 }
 
 function findOrCreateStrippedGameObject(
@@ -374,6 +518,10 @@ export function mergeCompactChanges(
   } else {
     mergePrefabSections(result, compact.sections, compact.refs, structurePaths);
   }
+
+  // Apply removals after additions/property edits so an atomic replacement can
+  // redirect or clear references before dangling-reference validation runs.
+  removeLocalComponents(result, compact);
 
   syncPrefabInstanceState(result);
 

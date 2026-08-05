@@ -111,8 +111,30 @@ function parseStructureTree(lines: string[]): CompactStructureNode | null {
   // First line is the root
   const root = parseStructureLine(lines[0]);
 
-  // Parse children using indentation/tree characters
-  parseChildren(lines, 1, root);
+  // Build the hierarchy with a depth stack. Each input line is consumed once,
+  // which avoids recursive callers accidentally skipping a sibling line.
+  const stack: Array<{ depth: number; node: CompactStructureNode }> = [
+    { depth: 0, node: root },
+  ];
+
+  for (let i = 1; i < lines.length; i++) {
+    const depth = getTreeDepth(lines[i]);
+    if (depth === 0) {
+      throw new Error(`Invalid STRUCTURE indentation at line: ${lines[i]}`);
+    }
+
+    while (stack.length > 0 && stack[stack.length - 1].depth >= depth) {
+      stack.pop();
+    }
+    const parent = stack[stack.length - 1];
+    if (!parent || depth !== parent.depth + 1) {
+      throw new Error(`Invalid STRUCTURE depth jump at line: ${lines[i]}`);
+    }
+
+    const node = parseStructureLine(lines[i]);
+    parent.node.children.push(node);
+    stack.push({ depth, node });
+  }
 
   return root;
 }
@@ -155,29 +177,6 @@ function parseStructureLine(line: string): CompactStructureNode {
     children: [],
     marker,
   };
-}
-
-/** Parse children recursively based on tree structure */
-function parseChildren(lines: string[], startIdx: number, parent: CompactStructureNode): number {
-  let i = startIdx;
-  const parentDepth = getTreeDepth(lines[startIdx - 1] || '');
-
-  while (i < lines.length) {
-    const line = lines[i];
-    const depth = getTreeDepth(line);
-
-    if (depth <= parentDepth && i > startIdx) break;
-
-    if (depth === parentDepth + 1) {
-      const child = parseStructureLine(line);
-      parent.children.push(child);
-      i = parseChildren(lines, i + 1, child);
-    } else {
-      i++;
-    }
-  }
-
-  return i;
 }
 
 /** Get the tree depth from indentation and tree characters */

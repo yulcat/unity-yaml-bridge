@@ -1,6 +1,7 @@
 import { GameObjectNode, UnityDocument, UnityFile } from '../types';
 import { V3IdentityRecord, V3StructureNode, V3WriterOptions } from './model';
 import { formatV3Value } from './value';
+import { encodeV3References } from './references';
 
 const STRUCTURAL_FIELDS = new Set([
   'm_CorrespondingSourceObject', 'm_PrefabInstance', 'm_PrefabAsset',
@@ -73,7 +74,7 @@ export function writeV3(file: UnityFile, options: V3WriterOptions = {}): string 
     lines.push('', `[${machineId} | ${label}]`);
     for (const [key, value] of Object.entries(document.properties)) {
       if (STRUCTURAL_FIELDS.has(key)) continue;
-      lines.push(`${key} = ${formatV3Value(value)}`);
+      lines.push(`${key} = ${formatV3Value(encodeV3References(value, documentIds))}`);
     }
   }
 

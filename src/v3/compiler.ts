@@ -2,6 +2,7 @@ import { createHash } from 'crypto';
 import { UnityDocument, UnityFile } from '../types';
 import { V3Document, V3IdentityRecord, V3StructureNode } from './model';
 import { markCanonicalFlowMappings } from './value';
+import { resolveV3References } from './references';
 
 const COMMON_LOCAL_ENVELOPE: Record<string, unknown> = {
   m_ObjectHideFlags: 0,
@@ -17,6 +18,7 @@ export function compileV3(document: V3Document): UnityFile {
 
   const allocated = allocateFileIds(document);
   const documents: UnityDocument[] = [];
+  const emittedMachineIds = new Set<string>();
 
   const buildNode = (node: V3StructureNode, parentTransformId: string, siblingIndex: number): void => {
     const goIdentity = requireIdentity(document, node.machineId, 'gameObject');
@@ -27,6 +29,9 @@ export function compileV3(document: V3Document): UnityFile {
       const identity = requireIdentity(document, component.machineId, 'component');
       return allocated.get(identity.machineId)!;
     });
+    emittedMachineIds.add(goIdentity.machineId);
+    emittedMachineIds.add(transformIdentity.machineId);
+    node.components.forEach(component => emittedMachineIds.add(component.machineId));
 
     const gameObjectProperties = mergeDetails(COMMON_LOCAL_ENVELOPE, document.details.get(node.machineId));
     gameObjectProperties.serializedVersion ??= 6;
@@ -83,6 +88,14 @@ export function compileV3(document: V3Document): UnityFile {
   };
 
   buildNode(document.structure, '0', 0);
+  for (const unityDocument of documents) {
+    unityDocument.properties = markCanonicalFlowMappings(resolveV3References(
+      unityDocument.properties,
+      allocated,
+      emittedMachineIds,
+      `${unityDocument.typeName}&${unityDocument.fileId}`
+    )) as Record<string, any>;
+  }
   assertUniqueFileIds(documents);
   return { type: 'prefab', documents, prefabInstances: [] };
 }

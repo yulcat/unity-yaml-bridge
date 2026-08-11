@@ -189,9 +189,10 @@ function validateBindings(root, details, identity) {
             throw new Error(`DETAILS target ${machineId} has no IDENTITY record.`);
     }
     for (const record of identity.values()) {
-        if (record.kind === 'gameObject' || record.kind === 'component') {
-            if (!used.has(record.machineId)) {
-                throw new Error(`IDENTITY ${record.machineId} is absent from desired STRUCTURE.`);
+        if (record.kind !== 'gameObject' && record.ownerId) {
+            const owner = identity.get(record.ownerId);
+            if (!owner || owner.kind !== 'gameObject') {
+                throw new Error(`IDENTITY ${record.machineId} has invalid owner ${record.ownerId}.`);
             }
         }
     }

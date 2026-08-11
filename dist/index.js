@@ -14,7 +14,7 @@ var __exportStar = (this && this.__exportStar) || function(m, exports) {
     for (var p in m) if (p !== "default" && !Object.prototype.hasOwnProperty.call(exports, p)) __createBinding(exports, m, p);
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.compareLocalPrefabSemantics = exports.normalizeLocalPrefab = exports.compileV3 = exports.writeV3 = exports.readV3 = exports.GuidResolver = exports.writeUnityYaml = exports.mergeCompactChanges = exports.parseCompactValue = exports.readCompact = exports.writeCompact = exports.parseUnityYaml = void 0;
+exports.resolveV3References = exports.encodeV3References = exports.compareLocalPrefabSemantics = exports.normalizeLocalPrefab = exports.compileV3 = exports.writeV3 = exports.readV3 = exports.GuidResolver = exports.writeUnityYaml = exports.mergeCompactChanges = exports.parseCompactValue = exports.readCompact = exports.writeCompact = exports.parseUnityYaml = void 0;
 var unity_yaml_parser_1 = require("./unity-yaml-parser");
 Object.defineProperty(exports, "parseUnityYaml", { enumerable: true, get: function () { return unity_yaml_parser_1.parseUnityYaml; } });
 var compact_writer_1 = require("./compact-writer");
@@ -37,5 +37,8 @@ Object.defineProperty(exports, "compileV3", { enumerable: true, get: function ()
 var semantic_normalizer_1 = require("./v3/semantic-normalizer");
 Object.defineProperty(exports, "normalizeLocalPrefab", { enumerable: true, get: function () { return semantic_normalizer_1.normalizeLocalPrefab; } });
 Object.defineProperty(exports, "compareLocalPrefabSemantics", { enumerable: true, get: function () { return semantic_normalizer_1.compareLocalPrefabSemantics; } });
+var references_1 = require("./v3/references");
+Object.defineProperty(exports, "encodeV3References", { enumerable: true, get: function () { return references_1.encodeV3References; } });
+Object.defineProperty(exports, "resolveV3References", { enumerable: true, get: function () { return references_1.resolveV3References; } });
 __exportStar(require("./types"), exports);
 //# sourceMappingURL=index.js.map

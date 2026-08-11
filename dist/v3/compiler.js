@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.compileV3 = compileV3;
 const crypto_1 = require("crypto");
 const value_1 = require("./value");
+const references_1 = require("./references");
 const COMMON_LOCAL_ENVELOPE = {
     m_ObjectHideFlags: 0,
     m_CorrespondingSourceObject: { fileID: 0 },
@@ -15,6 +16,7 @@ function compileV3(document) {
     }
     const allocated = allocateFileIds(document);
     const documents = [];
+    const emittedMachineIds = new Set();
     const buildNode = (node, parentTransformId, siblingIndex) => {
         const goIdentity = requireIdentity(document, node.machineId, 'gameObject');
         const transformIdentity = findOwnedTransform(document, node.machineId);
@@ -24,6 +26,9 @@ function compileV3(document) {
             const identity = requireIdentity(document, component.machineId, 'component');
             return allocated.get(identity.machineId);
         });
+        emittedMachineIds.add(goIdentity.machineId);
+        emittedMachineIds.add(transformIdentity.machineId);
+        node.components.forEach(component => emittedMachineIds.add(component.machineId));
         const gameObjectProperties = mergeDetails(COMMON_LOCAL_ENVELOPE, document.details.get(node.machineId));
         gameObjectProperties.serializedVersion ?? (gameObjectProperties.serializedVersion = 6);
         gameObjectProperties.m_Component = [transformId, ...componentIds]
@@ -76,6 +81,9 @@ function compileV3(document) {
         node.children.forEach((child, index) => buildNode(child, transformId, index));
     };
     buildNode(document.structure, '0', 0);
+    for (const unityDocument of documents) {
+        unityDocument.properties = (0, value_1.markCanonicalFlowMappings)((0, references_1.resolveV3References)(unityDocument.properties, allocated, emittedMachineIds, `${unityDocument.typeName}&${unityDocument.fileId}`));
+    }
     assertUniqueFileIds(documents);
     return { type: 'prefab', documents, prefabInstances: [] };
 }

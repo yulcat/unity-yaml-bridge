@@ -44,11 +44,23 @@ The first checked-in slice supports local regular prefabs, including:
 - complete JSON property values
 - preservation of existing fileIDs
 - deterministic canonical YAML output
+- stable internal references such as `{"$ref":"c4"}`
+- local rename, reparent, reorder, subtree/component removal, and deterministic
+  creation when new identity records omit `fileID`
 
-Nested prefab ownership, variants, structure mutations, readable internal
-reference rewriting, and versioned default profiles remain intentionally
-unsupported. `writeV3` rejects nested/variant input rather than producing a
-partial document.
+An internal reference targets machine identity rather than a display path or
+raw fileID:
+
+```text
+target = {"$ref":"c4"}
+```
+
+If `c4` is removed from desired STRUCTURE, compilation fails until the
+reference is removed or redirected in the same edit.
+
+Nested prefab ownership, variants, and versioned default profiles remain
+intentionally unsupported. `writeV3` rejects nested/variant input rather than
+producing a partial document.
 
 ## CLI
 

@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.writeV3 = writeV3;
 const value_1 = require("./value");
+const references_1 = require("./references");
 const STRUCTURAL_FIELDS = new Set([
     'm_CorrespondingSourceObject', 'm_PrefabInstance', 'm_PrefabAsset',
     'm_GameObject', 'm_Father', 'm_Children', 'm_RootOrder', 'm_Component',
@@ -70,7 +71,7 @@ function writeV3(file, options = {}) {
         for (const [key, value] of Object.entries(document.properties)) {
             if (STRUCTURAL_FIELDS.has(key))
                 continue;
-            lines.push(`${key} = ${(0, value_1.formatV3Value)(value)}`);
+            lines.push(`${key} = ${(0, value_1.formatV3Value)((0, references_1.encodeV3References)(value, documentIds))}`);
         }
     }
     lines.push('', '--- IDENTITY');

@@ -12,6 +12,7 @@ export { writeV3 } from './v3/writer';
 export { compileV3 } from './v3/compiler';
 export { normalizeLocalPrefab, compareLocalPrefabSemantics } from './v3/semantic-normalizer';
 export type { SemanticDifference } from './v3/semantic-normalizer';
+export { encodeV3References, resolveV3References } from './v3/references';
 export type {
   V3Document,
   V3IdentityRecord,

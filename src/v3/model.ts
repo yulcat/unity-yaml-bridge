@@ -16,6 +16,7 @@ export interface V3IdentityRecord {
   typeName: string;
   displayName?: string;
   ownerId?: string;
+  prefabOwnerId?: string;
   scriptGuid?: string;
   scriptFileId?: string;
   scriptType?: number;
@@ -44,6 +45,7 @@ export interface V3Document {
   profile: string;
   assetGuid?: string;
   structure: V3StructureNode | null;
+  variantRoots?: V3StructureNode[];
   variantRootId?: string;
   baseGuid?: string;
   details: Map<string, Record<string, unknown>>;

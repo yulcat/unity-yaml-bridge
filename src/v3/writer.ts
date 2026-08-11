@@ -236,6 +236,95 @@ function writeVariantV3(file: UnityFile, options: V3WriterOptions): string {
   if (!rootInstance) throw new Error('v3 variant requires a root PrefabInstance.');
   const rootId = documentIds.get(rootInstance.fileId);
   if (!rootId || !rootInstance.sourcePrefab.guid) throw new Error('v3 variant root source identity is incomplete.');
+  let gameObjectIndex = 0;
+  let transformIndex = 0;
+  let componentIndex = 0;
+  const buildVariantNode = (
+    node: GameObjectNode,
+    parentTransformMachineId?: string,
+    siblingIndex = 0
+  ): V3StructureNode => {
+    if (node.nestedPrefab) {
+      const machineId = documentIds.get(node.nestedPrefab.instanceId);
+      if (!machineId) throw new Error(`Missing variant nested PrefabInstance ${node.nestedPrefab.instanceId}.`);
+      const nestedIdentity = identities.get(machineId)!;
+      nestedIdentity.displayName = node.name;
+      nestedIdentity.baselineParentId = parentTransformMachineId;
+      nestedIdentity.baselineOrder = siblingIndex;
+      const transformDocument = byId.get(node.transform.fileId);
+      if (!transformDocument?.stripped) {
+        throw new Error(`Variant nested PrefabInstance ${machineId} has no stripped root Transform.`);
+      }
+      if (!documentIds.has(transformDocument.fileId)) {
+        const strippedId = `s${++strippedIndex}`;
+        documentIds.set(transformDocument.fileId, strippedId);
+        identities.set(strippedId, {
+          ...identityFor(byId, transformDocument.fileId, strippedId, 'stripped'),
+          ownerId: machineId,
+          nestedRoot: true,
+        });
+      }
+      if (node.fileId !== '0' && byId.has(node.fileId) && !documentIds.has(node.fileId)) {
+        const strippedId = `s${++strippedIndex}`;
+        documentIds.set(node.fileId, strippedId);
+        identities.set(strippedId, {
+          ...identityFor(byId, node.fileId, strippedId, 'stripped'),
+          ownerId: machineId,
+        });
+      }
+      return {
+        name: node.name,
+        machineId,
+        components: [],
+        children: [],
+        nestedSourceGuid: node.nestedPrefab.sourceGuid,
+      };
+    }
+
+    const goId = `g${++gameObjectIndex}`;
+    const transformId = `t${++transformIndex}`;
+    documentIds.set(node.fileId, goId);
+    documentIds.set(node.transform.fileId, transformId);
+    identities.set(goId, {
+      ...identityFor(byId, node.fileId, goId, 'gameObject'),
+      prefabOwnerId: rootId,
+    });
+    identities.set(transformId, {
+      ...identityFor(byId, node.transform.fileId, transformId, 'transform'),
+      ownerId: goId,
+      baselineParentId: parentTransformMachineId,
+      baselineOrder: siblingIndex,
+    });
+    const components = node.components.map(component => {
+      const machineId = `c${++componentIndex}`;
+      documentIds.set(component.fileId, machineId);
+      identities.set(machineId, {
+        ...identityFor(byId, component.fileId, machineId, 'component'),
+        displayName: component.typeName,
+        ownerId: goId,
+        scriptGuid: component.scriptGuid,
+        scriptFileId: component.scriptGuid
+          ? String(byId.get(component.fileId)?.properties.m_Script?.fileID ?? 11500000)
+          : undefined,
+        scriptType: component.scriptGuid
+          ? Number(byId.get(component.fileId)?.properties.m_Script?.type ?? 3)
+          : undefined,
+      });
+      return { typeName: component.typeName, machineId };
+    });
+    return {
+      name: node.name,
+      machineId: goId,
+      components,
+      children: node.children.map((child, index) => buildVariantNode(child, transformId, index)),
+    };
+  };
+  const variantHierarchyRoots = file.hierarchy
+    ? file.hierarchy.name === '__added_root__' || !byId.has(file.hierarchy.fileId)
+      ? file.hierarchy.children
+      : [file.hierarchy]
+    : [];
+  const variantRoots = variantHierarchyRoots.map((node, index) => buildVariantNode(node, undefined, index));
   const inferredOwners = inferNestedOwnership(file, byId, identities, documentIds);
 
   for (const document of file.documents) {
@@ -254,12 +343,16 @@ function writeVariantV3(file: UnityFile, options: V3WriterOptions): string {
     `# ubridge v3 | variant | profile:${options.profile || 'unity-generic-v1'}${options.assetGuid ? ` | asset-guid:${options.assetGuid}` : ''}`,
     '--- STRUCTURE',
     `(variant @${rootId} source:${rootInstance.sourcePrefab.guid})`,
+    ...writeVariantRoots(variantRoots),
     '--- DETAILS',
   ];
   for (const document of file.documents) {
     const machineId = documentIds.get(document.fileId)!;
     lines.push('', `[${machineId} | ${document.typeName}]`);
+    const identity = identities.get(machineId)!;
     for (const [key, value] of Object.entries(document.properties)) {
+      if (identity.kind !== 'prefabInstance' && identity.kind !== 'stripped' && identity.kind !== 'owned' &&
+          STRUCTURAL_FIELDS.has(key) && key !== 'm_Father' && key !== 'm_RootOrder') continue;
       lines.push(`${key} = ${formatV3Value(encodeV3References(value, documentIds))}`);
     }
   }
@@ -310,6 +403,7 @@ function writeIdentity(identity: V3IdentityRecord): string {
     `typeName:${identity.typeName}`,
   ];
   if (identity.ownerId) fields.push(`owner:${identity.ownerId}`);
+  if (identity.prefabOwnerId) fields.push(`prefabOwner:${identity.prefabOwnerId}`);
   if (identity.displayName && identity.displayName !== identity.typeName) {
     fields.push(`displayName:${identity.displayName}`);
   }
@@ -321,6 +415,21 @@ function writeIdentity(identity: V3IdentityRecord): string {
   if (identity.baselineParentId) fields.push(`baselineParent:${identity.baselineParentId}`);
   if (identity.baselineOrder !== undefined) fields.push(`baselineOrder:${identity.baselineOrder}`);
   return `${identity.machineId} = ${fields.join(' | ')}`;
+}
+
+function writeVariantRoots(roots: V3StructureNode[]): string[] {
+  const lines: string[] = [];
+  const visit = (node: V3StructureNode, prefix: string, isLast: boolean): void => {
+    const components = node.components.length
+      ? ` [${node.components.map(component => `${component.typeName} @${component.machineId}`).join(', ')}]`
+      : '';
+    const nested = node.nestedSourceGuid ? ` {source:${node.nestedSourceGuid}}` : '';
+    lines.push(`${prefix}${isLast ? '└─ ' : '├─ '}${node.name} @${node.machineId}${nested}${components}`);
+    const childPrefix = `${prefix}${isLast ? '   ' : '│  '}`;
+    node.children.forEach((child, index) => visit(child, childPrefix, index === node.children.length - 1));
+  };
+  roots.forEach((root, index) => visit(root, '', index === roots.length - 1));
+  return lines;
 }
 
 function describeIdentity(identity: V3IdentityRecord, root: V3StructureNode): string {

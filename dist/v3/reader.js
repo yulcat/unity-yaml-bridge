@@ -22,15 +22,15 @@ function readV3(content) {
     let structure;
     let variantRootId;
     let baseGuid;
+    let variantRoots;
     if (kind === 'variant') {
-        const variantLine = structureLines.length === 1
-            ? structureLines[0].match(new RegExp(`^\\(variant @(${MACHINE_ID}) source:([a-f0-9]{32})\\)$`, 'i'))
-            : null;
+        const variantLine = structureLines[0]?.match(new RegExp(`^\\(variant @(${MACHINE_ID}) source:([a-f0-9]{32})\\)$`, 'i'));
         if (!variantLine)
-            throw new Error('v3 variant STRUCTURE requires one variant root descriptor.');
+            throw new Error('v3 variant STRUCTURE requires a variant root descriptor.');
         structure = null;
         variantRootId = variantLine[1];
         baseGuid = variantLine[2];
+        variantRoots = parseStructureForest(structureLines.slice(1));
     }
     else {
         structure = parseStructure(structureLines);
@@ -39,6 +39,9 @@ function readV3(content) {
     const identity = parseIdentity(lines.slice(identityIndex + 1));
     if (structure)
         validateBindings(structure, details, identity);
+    const variantBindings = new Set();
+    for (const root of variantRoots ?? [])
+        validateBindings(root, details, identity, variantBindings);
     if (kind === 'variant') {
         const root = identity.get(variantRootId);
         if (!root || root.kind !== 'prefabInstance' || root.typeId !== 1001) {
@@ -51,11 +54,35 @@ function readV3(content) {
         profile: headerMatch[2],
         assetGuid: headerMatch[3],
         structure,
+        variantRoots,
         details,
         identity,
         variantRootId,
         baseGuid,
     };
+}
+function parseStructureForest(lines) {
+    const roots = [];
+    const stack = [];
+    for (const line of lines) {
+        const depth = getTreeDepth(line);
+        if (depth < 1)
+            throw new Error(`Invalid v3 variant STRUCTURE indentation: ${line}`);
+        while (stack.length && stack[stack.length - 1].depth >= depth)
+            stack.pop();
+        const node = parseStructureLine(line);
+        if (depth === 1)
+            roots.push(node);
+        else {
+            const parent = stack[stack.length - 1];
+            if (!parent || depth !== parent.depth + 1) {
+                throw new Error(`Invalid v3 variant STRUCTURE depth jump: ${line}`);
+            }
+            parent.node.children.push(node);
+        }
+        stack.push({ depth, node });
+    }
+    return roots;
 }
 function findUniqueSection(lines, section) {
     const indexes = lines.flatMap((line, index) => line.trim() === section ? [index] : []);
@@ -185,6 +212,7 @@ function parseIdentity(lines) {
             typeName,
             displayName: fields.get('displayName') || typeName,
             ownerId: fields.get('owner'),
+            prefabOwnerId: fields.get('prefabOwner'),
             scriptGuid: fields.get('script'),
             scriptFileId: fields.get('scriptFileID'),
             scriptType: fields.has('scriptType') ? Number(fields.get('scriptType')) : undefined,
@@ -196,8 +224,7 @@ function parseIdentity(lines) {
     }
     return result;
 }
-function validateBindings(root, details, identity) {
-    const used = new Set();
+function validateBindings(root, details, identity, used = new Set()) {
     const visit = (node) => {
         if (used.has(node.machineId))
             throw new Error(`Duplicate STRUCTURE machine identity ${node.machineId}.`);

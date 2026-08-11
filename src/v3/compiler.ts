@@ -245,18 +245,124 @@ function upsertModification(
 
 function compileVariant(document: V3Document): UnityFile {
   const allocated = allocateFileIds(document);
-  const emitted = new Set(document.identity.keys());
+  const emitted = new Set<string>();
   const documents: UnityDocument[] = [];
-  for (const identity of document.identity.values()) {
-    if (identity.kind !== 'prefabInstance' && identity.kind !== 'stripped' && identity.kind !== 'owned') {
-      throw new Error(`Unsupported variant identity kind ${identity.kind} on ${identity.machineId}.`);
+  const nestedPlans = new Map<string, NestedInstancePlan>();
+
+  const buildNode = (
+    node: V3StructureNode,
+    parentTransformId: string,
+    siblingIndex: number,
+    parentTransformMachineId?: string
+  ): void => {
+    if (node.nestedSourceGuid) {
+      if (nestedPlans.has(node.machineId)) {
+        throw new Error(`Nested PrefabInstance ${node.machineId} appears more than once in variant STRUCTURE.`);
+      }
+      nestedPlans.set(node.machineId, {
+        machineId: node.machineId,
+        name: node.name,
+        parentTransformId,
+        parentTransformMachineId,
+        siblingIndex,
+      });
+      return;
     }
+    const goIdentity = requireIdentity(document, node.machineId, 'gameObject');
+    const transformIdentity = findOwnedTransform(document, node.machineId);
+    const goId = allocated.get(goIdentity.machineId)!;
+    const transformId = allocated.get(transformIdentity.machineId)!;
+    const componentIds = node.components.map(component =>
+      allocated.get(requireIdentity(document, component.machineId, 'component').machineId)!
+    );
+    emitted.add(goIdentity.machineId);
+    emitted.add(transformIdentity.machineId);
+    node.components.forEach(component => emitted.add(component.machineId));
+
+    const gameObjectProperties = mergeDetails(COMMON_LOCAL_ENVELOPE, document.details.get(node.machineId));
+    gameObjectProperties.serializedVersion ??= 6;
+    gameObjectProperties.m_Component = [transformId, ...componentIds]
+      .map(fileID => ({ component: { fileID } }));
+    gameObjectProperties.m_Layer ??= 0;
+    gameObjectProperties.m_Name = node.name;
+    gameObjectProperties.m_TagString ??= 'Untagged';
+    gameObjectProperties.m_Icon ??= { fileID: 0 };
+    gameObjectProperties.m_NavMeshLayer ??= 0;
+    gameObjectProperties.m_StaticEditorFlags ??= 0;
+    gameObjectProperties.m_IsActive ??= 1;
+    documents.push(makeDocument(goIdentity, goId, gameObjectProperties));
+
+    const transformProperties = mergeDetails(COMMON_LOCAL_ENVELOPE, document.details.get(transformIdentity.machineId));
+    transformProperties.m_GameObject = { fileID: goId };
+    transformProperties.m_LocalRotation ??= flow({ x: 0, y: 0, z: 0, w: 1 });
+    transformProperties.m_LocalPosition ??= flow({ x: 0, y: 0, z: 0 });
+    transformProperties.m_LocalScale ??= flow({ x: 1, y: 1, z: 1 });
+    transformProperties.m_Children = node.children.map(child => ({
+      fileID: allocated.get(findDesiredRootTransform(document, child).machineId)!,
+    }));
+    if (parentTransformMachineId) transformProperties.m_Father = { fileID: parentTransformId };
+    else transformProperties.m_Father ??= { fileID: parentTransformId };
+    const placementChanged = transformIdentity.baselineParentId !== parentTransformMachineId ||
+      transformIdentity.baselineOrder !== siblingIndex;
+    if (Object.prototype.hasOwnProperty.call(transformProperties, 'm_RootOrder') || placementChanged) {
+      transformProperties.m_RootOrder = siblingIndex;
+    }
+    transformProperties.m_LocalEulerAnglesHint ??= flow({ x: 0, y: 0, z: 0 });
+    documents.push(makeDocument(transformIdentity, transformId, transformProperties));
+
+    node.components.forEach(component => {
+      const identity = requireIdentity(document, component.machineId, 'component');
+      const properties = mergeDetails(COMMON_LOCAL_ENVELOPE, document.details.get(identity.machineId));
+      properties.m_GameObject = { fileID: goId };
+      if (identity.typeId === 114) {
+        if (!identity.scriptGuid) throw new Error(`MonoBehaviour ${identity.machineId} requires script GUID identity.`);
+        properties.m_Enabled ??= 1;
+        properties.m_EditorHideFlags ??= 0;
+        properties.m_Script = {
+          fileID: identity.scriptFileId ?? 11500000,
+          guid: identity.scriptGuid,
+          type: identity.scriptType ?? 3,
+        };
+        properties.m_Name ??= '';
+        properties.m_EditorClassIdentifier ??= '';
+      }
+      documents.push(makeDocument(identity, allocated.get(identity.machineId)!, properties));
+    });
+    node.children.forEach((child, index) =>
+      buildNode(child, transformId, index, transformIdentity.machineId));
+  };
+
+  (document.variantRoots ?? []).forEach((root, index) => buildNode(root, '0', index));
+  const desiredOwnership = new Map<string, boolean>();
+  const isDesiredOwnership = (machineId: string): boolean => {
+    if (desiredOwnership.has(machineId)) return desiredOwnership.get(machineId)!;
+    const identity = document.identity.get(machineId);
+    if (!identity) return false;
+    desiredOwnership.set(machineId, false);
+    const desired = machineId === document.variantRootId || nestedPlans.has(machineId) ||
+      !!identity.ownerId && isDesiredOwnership(identity.ownerId);
+    desiredOwnership.set(machineId, desired);
+    return desired;
+  };
+
+  for (const identity of document.identity.values()) {
+    if (identity.kind === 'gameObject' || identity.kind === 'transform' || identity.kind === 'component') continue;
+    if (identity.kind !== 'prefabInstance' && identity.kind !== 'stripped' && identity.kind !== 'owned') continue;
+    if ((identity.ownerId || identity.kind === 'prefabInstance') && !isDesiredOwnership(identity.machineId)) continue;
     const details = document.details.get(identity.machineId);
     if (!details) throw new Error(`Variant identity ${identity.machineId} requires DETAILS.`);
-    const properties = markCanonicalFlowMappings(resolveV3References(
-      clone(details), allocated, emitted, `${identity.typeName}&${identity.fileId || identity.machineId}`
-    )) as Record<string, any>;
+    let properties = clone(details);
+    if (identity.kind === 'prefabInstance' && nestedPlans.has(identity.machineId)) {
+      properties = applyNestedInstancePlan(document, identity, nestedPlans.get(identity.machineId)!, properties);
+    }
     documents.push(makeDocument(identity, allocated.get(identity.machineId)!, properties));
+    emitted.add(identity.machineId);
+  }
+  for (const unityDocument of documents) {
+    if (unityDocument.typeId === 1001) pruneAbsentAddedObjects(unityDocument.properties, emitted);
+    unityDocument.properties = markCanonicalFlowMappings(resolveV3References(
+      unityDocument.properties, allocated, emitted, `${unityDocument.typeName}&${unityDocument.fileId}`
+    )) as Record<string, any>;
   }
   assertUniqueFileIds(documents);
   return {
@@ -267,6 +373,21 @@ function compileVariant(document: V3Document): UnityFile {
       ? { fileID: '100100000', guid: document.baseGuid, type: 3 }
       : undefined,
   };
+}
+
+function pruneAbsentAddedObjects(properties: Record<string, any>, emitted: Set<string>): void {
+  const modification = properties.m_Modification;
+  if (!modification || typeof modification !== 'object') return;
+  const keep = (entry: any): boolean => {
+    const reference = entry?.addedObject;
+    return !reference?.$ref || emitted.has(String(reference.$ref));
+  };
+  if (Array.isArray(modification.m_AddedGameObjects)) {
+    modification.m_AddedGameObjects = modification.m_AddedGameObjects.filter(keep);
+  }
+  if (Array.isArray(modification.m_AddedComponents)) {
+    modification.m_AddedComponents = modification.m_AddedComponents.filter(keep);
+  }
 }
 
 function allocateFileIds(document: V3Document): Map<string, string> {

@@ -24,14 +24,16 @@ export function readV3(content: string): V3Document {
   let structure: V3StructureNode | null;
   let variantRootId: string | undefined;
   let baseGuid: string | undefined;
+  let variantRoots: V3StructureNode[] | undefined;
   if (kind === 'variant') {
-    const variantLine = structureLines.length === 1
-      ? structureLines[0].match(new RegExp(`^\\(variant @(${MACHINE_ID}) source:([a-f0-9]{32})\\)$`, 'i'))
-      : null;
-    if (!variantLine) throw new Error('v3 variant STRUCTURE requires one variant root descriptor.');
+    const variantLine = structureLines[0]?.match(
+      new RegExp(`^\\(variant @(${MACHINE_ID}) source:([a-f0-9]{32})\\)$`, 'i')
+    );
+    if (!variantLine) throw new Error('v3 variant STRUCTURE requires a variant root descriptor.');
     structure = null;
     variantRootId = variantLine[1];
     baseGuid = variantLine[2];
+    variantRoots = parseStructureForest(structureLines.slice(1));
   } else {
     structure = parseStructure(structureLines);
   }
@@ -39,6 +41,8 @@ export function readV3(content: string): V3Document {
   const identity = parseIdentity(lines.slice(identityIndex + 1));
 
   if (structure) validateBindings(structure, details, identity);
+  const variantBindings = new Set<string>();
+  for (const root of variantRoots ?? []) validateBindings(root, details, identity, variantBindings);
   if (kind === 'variant') {
     const root = identity.get(variantRootId!);
     if (!root || root.kind !== 'prefabInstance' || root.typeId !== 1001) {
@@ -51,11 +55,33 @@ export function readV3(content: string): V3Document {
     profile: headerMatch[2],
     assetGuid: headerMatch[3],
     structure,
+    variantRoots,
     details,
     identity,
     variantRootId,
     baseGuid,
   };
+}
+
+function parseStructureForest(lines: string[]): V3StructureNode[] {
+  const roots: V3StructureNode[] = [];
+  const stack: Array<{ depth: number; node: V3StructureNode }> = [];
+  for (const line of lines) {
+    const depth = getTreeDepth(line);
+    if (depth < 1) throw new Error(`Invalid v3 variant STRUCTURE indentation: ${line}`);
+    while (stack.length && stack[stack.length - 1].depth >= depth) stack.pop();
+    const node = parseStructureLine(line);
+    if (depth === 1) roots.push(node);
+    else {
+      const parent = stack[stack.length - 1];
+      if (!parent || depth !== parent.depth + 1) {
+        throw new Error(`Invalid v3 variant STRUCTURE depth jump: ${line}`);
+      }
+      parent.node.children.push(node);
+    }
+    stack.push({ depth, node });
+  }
+  return roots;
 }
 
 function findUniqueSection(lines: string[], section: string): number {
@@ -181,6 +207,7 @@ function parseIdentity(lines: string[]): Map<string, V3IdentityRecord> {
       typeName,
       displayName: fields.get('displayName') || typeName,
       ownerId: fields.get('owner'),
+      prefabOwnerId: fields.get('prefabOwner'),
       scriptGuid: fields.get('script'),
       scriptFileId: fields.get('scriptFileID'),
       scriptType: fields.has('scriptType') ? Number(fields.get('scriptType')) : undefined,
@@ -196,9 +223,9 @@ function parseIdentity(lines: string[]): Map<string, V3IdentityRecord> {
 function validateBindings(
   root: V3StructureNode,
   details: Map<string, Record<string, unknown>>,
-  identity: Map<string, V3IdentityRecord>
+  identity: Map<string, V3IdentityRecord>,
+  used = new Set<string>()
 ): void {
-  const used = new Set<string>();
   const visit = (node: V3StructureNode): void => {
     if (used.has(node.machineId)) throw new Error(`Duplicate STRUCTURE machine identity ${node.machineId}.`);
     used.add(node.machineId);

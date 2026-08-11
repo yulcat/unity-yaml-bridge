@@ -1,11 +1,10 @@
 "use strict";
 /**
- * Test the full compact round-trip pipeline:
- *   Unity YAML → AST → compact → parse compact → merge with AST → Unity YAML
+ * Test the v3 standalone round-trip pipeline:
+ *   Unity YAML → v3 text → fresh v3 parse → standalone compile → Unity YAML
  *
  * This verifies:
- * 1. Identity round-trip: unmodified compact merges back to identical YAML
- * 2. Edit round-trip: modified compact produces correct YAML changes
+ * The original YAML/AST never enters the compile stage.
  */
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
@@ -44,21 +43,12 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
 const unity_yaml_parser_1 = require("./unity-yaml-parser");
-const compact_writer_1 = require("./compact-writer");
 const unity_yaml_writer_1 = require("./unity-yaml-writer");
-const compact_reader_1 = require("./compact-reader");
-const compact_merger_1 = require("./compact-merger");
-const test_sample_resolver_1 = require("./test-sample-resolver");
+const test_v3_utils_1 = require("./test-v3-utils");
+const writer_1 = require("./v3/writer");
+const reader_1 = require("./v3/reader");
+const compiler_1 = require("./v3/compiler");
 const SAMPLES_DIR = path.join(__dirname, '..', 'samples');
-// Initialize GUID resolver
-const resolver = (0, test_sample_resolver_1.createSampleResolver)(SAMPLES_DIR);
-const projectPath = path.join(SAMPLES_DIR, 'unity-projects', 'PrefabWorkflows_UIDemo', 'PrefabWorkflows_UIDemo_Project');
-if (fs.existsSync(projectPath)) {
-    console.log(`GUID resolver: ${resolver.size} mappings loaded`);
-}
-else {
-    console.log(`GUID resolver: using checked-in fixture mappings (${resolver.size} mappings loaded)`);
-}
 let totalTests = 0;
 let passedTests = 0;
 function testIdentityRoundtrip(filePath, label) {
@@ -67,40 +57,16 @@ function testIdentityRoundtrip(filePath, label) {
     console.log(`TEST: Identity Round-trip — ${label}`);
     console.log('='.repeat(60));
     const content = fs.readFileSync(filePath, 'utf-8');
-    // Step 1: Parse Unity YAML → AST
-    const ast = (0, unity_yaml_parser_1.parseUnityYaml)(content);
-    // Step 2: AST → Compact string
-    const compactStr = (0, compact_writer_1.writeCompact)(ast, { guidResolver: resolver });
-    // Step 3: Parse compact string → CompactFile
-    const compactFile = (0, compact_reader_1.readCompact)(compactStr);
-    console.log(`  Compact: ${compactFile.sections.length} sections, type=${compactFile.type}`);
-    // Step 4: Merge compact back into original AST
-    const merged = (0, compact_merger_1.mergeCompactChanges)(ast, compactFile);
-    // Step 5: Write merged AST → Unity YAML
-    const output = (0, unity_yaml_writer_1.writeUnityYaml)(merged);
-    // Step 6: Compare with original
-    const origLines = content.split('\n').map(l => l.trimEnd());
-    const outLines = output.split('\n').map(l => l.trimEnd());
-    let diffs = 0;
-    const maxLines = Math.max(origLines.length, outLines.length);
-    for (let i = 0; i < maxLines; i++) {
-        const orig = origLines[i] || '';
-        const out = outLines[i] || '';
-        if (orig !== out) {
-            diffs++;
-            if (diffs <= 10) {
-                console.log(`  Line ${i + 1}:`);
-                console.log(`    ORIG: ${orig.substring(0, 120)}`);
-                console.log(`    OUT:  ${out.substring(0, 120)}`);
-            }
-        }
-    }
-    if (diffs === 0) {
-        console.log(`  PASS — 0 diff lines`);
+    const cold = (0, test_v3_utils_1.coldRoundTripV3)(content);
+    const difference = (0, test_v3_utils_1.describeSemanticDifference)(cold.original, cold.rebuilt);
+    const deterministic = (0, test_v3_utils_1.coldRoundTripV3)(content).rebuiltText === cold.rebuiltText;
+    console.log(`  v3 bytes: ${cold.v3Text.length}, type=${cold.original.type}`);
+    if (!difference && deterministic) {
+        console.log('  PASS — semantic equality, deterministic standalone output');
         passedTests++;
     }
     else {
-        console.log(`  FAIL — ${diffs} diff lines`);
+        console.log(`  FAIL — ${difference || 'non-deterministic output'}`);
     }
 }
 function testVariantEdit(filePath, label) {
@@ -109,75 +75,39 @@ function testVariantEdit(filePath, label) {
     console.log(`TEST: Variant Edit — ${label}`);
     console.log('='.repeat(60));
     const content = fs.readFileSync(filePath, 'utf-8');
-    // Parse original
     const ast = (0, unity_yaml_parser_1.parseUnityYaml)(content);
     if (ast.type !== 'variant') {
         console.log('  SKIP — not a variant file');
         return;
     }
-    // Write compact
-    const compactStr = (0, compact_writer_1.writeCompact)(ast, { guidResolver: resolver });
-    // Parse compact
-    const compactFile = (0, compact_reader_1.readCompact)(compactStr);
-    // Find a section with m_Name property to edit
-    let editSection = null;
-    let editPropIdx = -1;
-    let originalName = '';
-    for (const section of compactFile.sections) {
-        for (let i = 0; i < section.properties.length; i++) {
-            if (section.properties[i].key === 'm_Name' && typeof section.properties[i].value === 'string') {
-                editSection = section;
-                editPropIdx = i;
-                originalName = section.properties[i].value;
-                break;
-            }
-        }
-        if (editSection)
+    const document = (0, reader_1.readV3)((0, writer_1.writeV3)(ast));
+    let editedModification;
+    for (const identity of document.identity.values()) {
+        if (identity.kind !== 'prefabInstance')
+            continue;
+        const details = document.details.get(identity.machineId);
+        const modifications = details?.m_Modification?.m_Modifications || [];
+        editedModification = modifications.find(item => item.propertyPath === 'm_Name');
+        if (editedModification)
             break;
     }
-    if (!editSection || editPropIdx < 0) {
+    if (!editedModification) {
         console.log('  SKIP — no m_Name property found in variant');
         return;
     }
-    // Edit: change the name
-    const newName = originalName + '_edited';
-    editSection.properties[editPropIdx].value = newName;
+    const originalName = String(editedModification.value);
+    const newName = `${originalName}_edited`;
+    editedModification.value = newName;
     console.log(`  Editing m_Name: "${originalName}" → "${newName}"`);
-    // Merge and write
-    const merged = (0, compact_merger_1.mergeCompactChanges)(ast, compactFile);
-    const output = (0, unity_yaml_writer_1.writeUnityYaml)(merged);
-    // Verify the change appears in the output
-    const hasEdit = output.includes(`value: ${newName}`);
-    // Verify everything else is unchanged
-    const origLines = content.split('\n').map(l => l.trimEnd());
-    const outLines = output.split('\n').map(l => l.trimEnd());
-    let diffs = 0;
-    let editDiffs = 0;
-    for (let i = 0; i < Math.max(origLines.length, outLines.length); i++) {
-        const orig = origLines[i] || '';
-        const out = outLines[i] || '';
-        if (orig !== out) {
-            diffs++;
-            // Check if this diff is the expected name change
-            if (orig.includes(`value: ${originalName}`) && out.includes(`value: ${newName}`)) {
-                editDiffs++;
-            }
-            else if (diffs <= 5) {
-                console.log(`  Unexpected diff at line ${i + 1}:`);
-                console.log(`    ORIG: ${orig.substring(0, 120)}`);
-                console.log(`    OUT:  ${out.substring(0, 120)}`);
-            }
-        }
-    }
-    if (hasEdit && editDiffs === 1 && diffs === editDiffs) {
-        console.log(`  PASS — edit applied correctly, ${diffs} expected diff(s)`);
+    const rebuilt = (0, unity_yaml_parser_1.parseUnityYaml)((0, unity_yaml_writer_1.writeUnityYaml)((0, compiler_1.compileV3)(document)));
+    const rebuiltName = rebuilt.prefabInstances.flatMap(instance => instance.modifications)
+        .find(modification => modification.propertyPath === 'm_Name' && modification.value === newName);
+    if (rebuiltName) {
+        console.log('  PASS — standalone variant delta edit applied');
         passedTests++;
     }
-    else if (hasEdit) {
-        console.log(`  PARTIAL — edit found but ${diffs - editDiffs} unexpected diff(s)`);
-    }
     else {
-        console.log(`  FAIL — edit not found in output`);
+        console.log('  FAIL — edit not found in compiled variant');
     }
 }
 function testPrefabEdit(filePath, label) {
@@ -191,53 +121,43 @@ function testPrefabEdit(filePath, label) {
         console.log('  SKIP — not a prefab file');
         return;
     }
-    // Write and parse compact
-    const compactStr = (0, compact_writer_1.writeCompact)(ast, { guidResolver: resolver });
-    const compactFile = (0, compact_reader_1.readCompact)(compactStr);
-    // Find a transform section with pos to edit
-    let editSection = null;
-    let editPropIdx = -1;
-    let originalValue = '';
-    for (const section of compactFile.sections) {
-        if (section.componentType !== 'RectTransform' && section.componentType !== 'Transform')
+    const document = (0, reader_1.readV3)((0, writer_1.writeV3)(ast));
+    let targetIdentity;
+    let targetKey;
+    for (const identity of document.identity.values()) {
+        if (identity.kind !== 'transform')
             continue;
-        for (let i = 0; i < section.properties.length; i++) {
-            if (section.properties[i].key === 'pos' && typeof section.properties[i].value === 'string') {
-                editSection = section;
-                editPropIdx = i;
-                originalValue = section.properties[i].value;
-                break;
-            }
-        }
-        if (editSection)
+        const details = document.details.get(identity.machineId);
+        if (details?.m_AnchoredPosition)
+            targetKey = 'm_AnchoredPosition';
+        else if (details?.m_LocalPosition)
+            targetKey = 'm_LocalPosition';
+        if (targetKey) {
+            targetIdentity = identity.machineId;
+            details[targetKey] = { ...details[targetKey], x: 100, y: 200 };
             break;
+        }
     }
-    if (!editSection || editPropIdx < 0) {
+    if (!targetIdentity || !targetKey) {
         console.log('  SKIP — no pos property found');
         return;
     }
-    // Edit: change the position
-    const newValue = '(100, 200)';
-    editSection.properties[editPropIdx].value = newValue;
-    console.log(`  Editing ${editSection.goPath}:${editSection.componentType} pos: ${originalValue} → ${newValue}`);
-    // Merge and write
-    const merged = (0, compact_merger_1.mergeCompactChanges)(ast, compactFile);
-    const output = (0, unity_yaml_writer_1.writeUnityYaml)(merged);
-    // Verify the change appears — look for x: 100 and y: 200 in the output
-    const hasX = output.includes('x: 100');
-    const hasY = output.includes('y: 200');
-    if (hasX && hasY) {
-        console.log(`  PASS — position edit applied correctly`);
+    const targetFileId = document.identity.get(targetIdentity).fileId;
+    const rebuilt = (0, compiler_1.compileV3)(document);
+    const position = rebuilt.documents.find(item => item.fileId === targetFileId)
+        ?.properties[targetKey];
+    if (position?.x === 100 && position?.y === 200) {
+        console.log('  PASS — standalone position edit applied correctly');
         passedTests++;
     }
     else {
-        console.log(`  FAIL — expected x:100 (${hasX}), y:200 (${hasY})`);
+        console.log(`  FAIL — expected x:100, y:200; got ${JSON.stringify(position)}`);
     }
 }
 // ============================================================
 // Run tests
 // ============================================================
-console.log('Unity YAML Bridge — Compact Round-trip Test Suite');
+console.log('Unity YAML Bridge — v3 Standalone Round-trip Test Suite');
 console.log('=================================================');
 // Identity round-trip tests (should produce 0 diff lines)
 testIdentityRoundtrip(path.join(SAMPLES_DIR, 'prefabs', 'Button.prefab'), 'Simple UI Prefab (Button)');

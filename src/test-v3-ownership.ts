@@ -57,6 +57,16 @@ console.log('\n=== v3 ownership cold-boundary edits ===');
 }
 
 {
+  const v3Text = writeV3(parseUnityYaml(sample('prefabs', 'RootPrefabInstance.prefab')));
+  const document = readV3(v3Text);
+  const unowned = [...document.identity.values()].filter(identity =>
+    identity.kind === 'owned' && !identity.ownerId
+  );
+  assert(unowned.length === 0,
+    'variant added-object documents have explicit PrefabInstance ownership');
+}
+
+{
   const document = buttonV3();
   const nested = document.structure!.children.find(child => !!child.nestedSourceGuid)!;
   nested.name = 'Button_Text_Renamed';

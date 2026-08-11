@@ -236,6 +236,7 @@ function writeVariantV3(file: UnityFile, options: V3WriterOptions): string {
   if (!rootInstance) throw new Error('v3 variant requires a root PrefabInstance.');
   const rootId = documentIds.get(rootInstance.fileId);
   if (!rootId || !rootInstance.sourcePrefab.guid) throw new Error('v3 variant root source identity is incomplete.');
+  const inferredOwners = inferNestedOwnership(file, byId, identities, documentIds);
 
   for (const document of file.documents) {
     if (documentIds.has(document.fileId)) continue;
@@ -245,7 +246,7 @@ function writeVariantV3(file: UnityFile, options: V3WriterOptions): string {
     documentIds.set(document.fileId, machineId);
     identities.set(machineId, {
       ...identityFor(byId, document.fileId, machineId, kind),
-      ownerId: documentIds.get(ownerFileId),
+      ownerId: documentIds.get(ownerFileId) || inferredOwners.get(document.fileId),
     });
   }
 

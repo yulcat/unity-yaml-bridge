@@ -80,6 +80,12 @@ console.log('\n=== v3 ownership cold-boundary edits ===');
     assert(rebuilt.variantSource?.guid === 'a5674d01884853d4e8f2386a171e14d9', 'variant source GUID survives standalone compilation');
 }
 {
+    const v3Text = (0, writer_1.writeV3)((0, unity_yaml_parser_1.parseUnityYaml)(sample('prefabs', 'RootPrefabInstance.prefab')));
+    const document = (0, reader_1.readV3)(v3Text);
+    const unowned = [...document.identity.values()].filter(identity => identity.kind === 'owned' && !identity.ownerId);
+    assert(unowned.length === 0, 'variant added-object documents have explicit PrefabInstance ownership');
+}
+{
     const document = buttonV3();
     const nested = document.structure.children.find(child => !!child.nestedSourceGuid);
     nested.name = 'Button_Text_Renamed';

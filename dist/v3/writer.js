@@ -229,6 +229,7 @@ function writeVariantV3(file, options) {
     const rootId = documentIds.get(rootInstance.fileId);
     if (!rootId || !rootInstance.sourcePrefab.guid)
         throw new Error('v3 variant root source identity is incomplete.');
+    const inferredOwners = inferNestedOwnership(file, byId, identities, documentIds);
     for (const document of file.documents) {
         if (documentIds.has(document.fileId))
             continue;
@@ -238,7 +239,7 @@ function writeVariantV3(file, options) {
         documentIds.set(document.fileId, machineId);
         identities.set(machineId, {
             ...identityFor(byId, document.fileId, machineId, kind),
-            ownerId: documentIds.get(ownerFileId),
+            ownerId: documentIds.get(ownerFileId) || inferredOwners.get(document.fileId),
         });
     }
     const lines = [

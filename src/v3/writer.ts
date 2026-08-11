@@ -1,3 +1,5 @@
+import { createHash } from 'crypto';
+import { readFileSync } from 'fs';
 import { GameObjectNode, UnityDocument, UnityFile } from '../types';
 import { V3IdentityRecord, V3StructureNode, V3WriterOptions } from './model';
 import { formatV3Value } from './value';
@@ -129,6 +131,7 @@ export function writeV3(file: UnityFile, options: V3WriterOptions = {}): string 
       ownerId,
     });
   }
+  applySourceFingerprints(identities, options);
   const lines = [
     `# ubridge v3 | prefab | profile:${options.profile || 'unity-generic-v1'}${options.assetGuid ? ` | asset-guid:${options.assetGuid}` : ''}`,
     '--- STRUCTURE',
@@ -338,6 +341,7 @@ function writeVariantV3(file: UnityFile, options: V3WriterOptions): string {
       ownerId: documentIds.get(ownerFileId) || inferredOwners.get(document.fileId),
     });
   }
+  applySourceFingerprints(identities, options);
 
   const lines = [
     `# ubridge v3 | variant | profile:${options.profile || 'unity-generic-v1'}${options.assetGuid ? ` | asset-guid:${options.assetGuid}` : ''}`,
@@ -369,6 +373,9 @@ function identityFor(
 ): V3IdentityRecord {
   const document = byId.get(fileId);
   if (!document) throw new Error(`Missing Unity document ${fileId}.`);
+  const source = document.properties.m_CorrespondingSourceObject;
+  const sourcePrefab = document.properties.m_SourcePrefab || document.properties.m_ParentPrefab;
+  const sourceReference = source?.guid ? source : sourcePrefab;
   return {
     machineId,
     kind,
@@ -376,7 +383,30 @@ function identityFor(
     typeId: document.typeId,
     typeName: document.typeName,
     stripped: document.stripped,
+    sourceGuid: sourceReference?.guid ? String(sourceReference.guid) : undefined,
+    sourceFileId: sourceReference?.fileID !== undefined
+      ? String(sourceReference.fileID)
+      : undefined,
   };
+}
+
+function applySourceFingerprints(
+  identities: Map<string, V3IdentityRecord>,
+  options: V3WriterOptions
+): void {
+  if (!options.sourceResolver) return;
+  const fingerprints = new Map<string, string>();
+  for (const identity of identities.values()) {
+    if (!identity.sourceGuid) continue;
+    let fingerprint = fingerprints.get(identity.sourceGuid);
+    if (!fingerprint) {
+      const sourcePath = options.sourceResolver.resolveFilePath(identity.sourceGuid);
+      if (!sourcePath) continue;
+      fingerprint = createHash('sha256').update(readFileSync(sourcePath)).digest('hex');
+      fingerprints.set(identity.sourceGuid, fingerprint);
+    }
+    identity.sourceFingerprint = fingerprint;
+  }
 }
 
 function writeStructure(root: V3StructureNode): string[] {
@@ -414,6 +444,9 @@ function writeIdentity(identity: V3IdentityRecord): string {
   if (identity.nestedRoot) fields.push('nestedRoot:1');
   if (identity.baselineParentId) fields.push(`baselineParent:${identity.baselineParentId}`);
   if (identity.baselineOrder !== undefined) fields.push(`baselineOrder:${identity.baselineOrder}`);
+  if (identity.sourceGuid) fields.push(`sourceGuid:${identity.sourceGuid}`);
+  if (identity.sourceFileId) fields.push(`sourceFileID:${identity.sourceFileId}`);
+  if (identity.sourceFingerprint) fields.push(`sourceFingerprint:${identity.sourceFingerprint}`);
   return `${identity.machineId} = ${fields.join(' | ')}`;
 }
 

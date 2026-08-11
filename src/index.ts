@@ -19,5 +19,7 @@ export type {
   V3StructureNode,
   V3StructureComponent,
   V3WriterOptions,
+  V3CompileOptions,
+  V3SourceResolver,
 } from './v3/model';
 export * from './types';

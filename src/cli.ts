@@ -121,7 +121,7 @@ function cmdParse(args: string[], flags: Map<string, string>): void {
   const ast = parseUnityYaml(content);
   let compact: string;
   if (format === 'v3') {
-    compact = writeV3(ast);
+    compact = writeV3(ast, { sourceResolver: options.guidResolver });
   } else {
     options.version = format === 'v1' ? 1 : 2;
     compact = writeCompact(ast, options);
@@ -140,12 +140,19 @@ function cmdParse(args: string[], flags: Map<string, string>): void {
 function cmdCompile(args: string[], flags: Map<string, string>): void {
   if (args.length === 0) die('compile requires a v3 .ubridge file argument');
   if (flags.has('--yaml')) die('compile does not accept --yaml; v3 is standalone');
-  if (flags.has('--project')) die('compile --project validation is not implemented yet');
 
   const ubridgePath = path.resolve(args[0]);
   if (!fs.existsSync(ubridgePath)) die(`File not found: ${ubridgePath}`);
   const document = readV3(fs.readFileSync(ubridgePath, 'utf-8'));
-  const output = writeUnityYaml(compileV3(document));
+  let resolver: GuidResolver | undefined;
+  const projectPath = flags.get('--project');
+  if (projectPath) {
+    const resolved = path.resolve(projectPath);
+    if (!fs.existsSync(resolved)) die(`Project path not found: ${resolved}`);
+    resolver = new GuidResolver();
+    resolver.scanProject(resolved);
+  }
+  const output = writeUnityYaml(compileV3(document, { sourceResolver: resolver }));
   const outputPath = flags.get('-o');
   if (outputPath) {
     fs.writeFileSync(path.resolve(outputPath), output, 'utf-8');

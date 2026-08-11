@@ -55,6 +55,30 @@ function expectThrow(fn: () => unknown, expected: string, name: string): void {
 console.log('\n=== v3 ownership cold-boundary edits ===');
 
 {
+  const sourcePath = path.join(__dirname, '..', 'samples', 'prefabs', 'Button.prefab');
+  const otherPath = path.join(__dirname, '..', 'samples', 'prefabs', 'Amount.prefab');
+  const sourceResolver = { resolveFilePath: (_guid: string) => sourcePath };
+  const text = writeV3(parseUnityYaml(sample('prefabs', 'Button.prefab')), { sourceResolver });
+  const document = readV3(text);
+  const sourceIdentities = [...document.identity.values()].filter(identity => identity.sourceGuid);
+  assert(sourceIdentities.length > 0 && sourceIdentities.every(identity =>
+    identity.sourceFileId && /^[a-f0-9]{64}$/.test(identity.sourceFingerprint || '')
+  ), 'source GUID, source fileID, and fingerprint survive the v3 cold boundary');
+  compileV3(document);
+  compileV3(document, { sourceResolver });
+  expectThrow(
+    () => compileV3(document, { sourceResolver: { resolveFilePath: () => otherPath } }),
+    'Source fingerprint mismatch',
+    'project validation rejects a mismatched source fingerprint'
+  );
+  expectThrow(
+    () => compileV3(document, { sourceResolver: { resolveFilePath: () => undefined } }),
+    'cannot resolve GUID',
+    'project validation rejects an unavailable source GUID'
+  );
+}
+
+{
   const v3Text = writeV3(parseUnityYaml(sample('variants', 'Ellen_Variant.prefab')));
   const document = readV3(v3Text);
   assert(document.kind === 'variant' && !!document.variantRootId &&

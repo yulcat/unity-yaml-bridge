@@ -215,6 +215,9 @@ function parseIdentity(lines: string[]): Map<string, V3IdentityRecord> {
       nestedRoot: fields.get('nestedRoot') === '1',
       baselineParentId: fields.get('baselineParent'),
       baselineOrder: fields.has('baselineOrder') ? Number(fields.get('baselineOrder')) : undefined,
+      sourceGuid: fields.get('sourceGuid'),
+      sourceFileId: fields.get('sourceFileID'),
+      sourceFingerprint: fields.get('sourceFingerprint'),
     });
   }
   return result;

@@ -1,6 +1,7 @@
 import { createHash } from 'crypto';
+import { readFileSync } from 'fs';
 import { UnityDocument, UnityFile } from '../types';
-import { V3Document, V3IdentityRecord, V3StructureNode } from './model';
+import { V3CompileOptions, V3Document, V3IdentityRecord, V3StructureNode } from './model';
 import { markCanonicalFlowMappings } from './value';
 import { resolveV3References } from './references';
 
@@ -11,8 +12,9 @@ const COMMON_LOCAL_ENVELOPE: Record<string, unknown> = {
   m_PrefabAsset: { fileID: 0 },
 };
 
-export function compileV3(document: V3Document): UnityFile {
+export function compileV3(document: V3Document, options: V3CompileOptions = {}): UnityFile {
   if (document.version !== 3) throw new Error('compileV3 accepts v3 documents only.');
+  validateSourceFingerprints(document, options);
   if (document.kind === 'variant') return compileVariant(document);
   if (!document.structure) throw new Error('v3 prefab requires STRUCTURE.');
 
@@ -150,6 +152,25 @@ export function compileV3(document: V3Document): UnityFile {
   }
   assertUniqueFileIds(documents);
   return { type: 'prefab', documents, prefabInstances: [] };
+}
+
+function validateSourceFingerprints(document: V3Document, options: V3CompileOptions): void {
+  if (!options.sourceResolver) return;
+  const checked = new Set<string>();
+  for (const identity of document.identity.values()) {
+    if (!identity.sourceGuid || !identity.sourceFingerprint) continue;
+    const key = `${identity.sourceGuid}:${identity.sourceFingerprint}`;
+    if (checked.has(key)) continue;
+    const sourcePath = options.sourceResolver.resolveFilePath(identity.sourceGuid);
+    if (!sourcePath) {
+      throw new Error(`Source project cannot resolve GUID ${identity.sourceGuid}.`);
+    }
+    const actual = createHash('sha256').update(readFileSync(sourcePath)).digest('hex');
+    if (actual !== identity.sourceFingerprint) {
+      throw new Error(`Source fingerprint mismatch for GUID ${identity.sourceGuid}.`);
+    }
+    checked.add(key);
+  }
 }
 
 interface NestedInstancePlan {

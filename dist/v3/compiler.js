@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.compileV3 = compileV3;
 const crypto_1 = require("crypto");
+const fs_1 = require("fs");
 const value_1 = require("./value");
 const references_1 = require("./references");
 const COMMON_LOCAL_ENVELOPE = {
@@ -10,9 +11,10 @@ const COMMON_LOCAL_ENVELOPE = {
     m_PrefabInstance: { fileID: 0 },
     m_PrefabAsset: { fileID: 0 },
 };
-function compileV3(document) {
+function compileV3(document, options = {}) {
     if (document.version !== 3)
         throw new Error('compileV3 accepts v3 documents only.');
+    validateSourceFingerprints(document, options);
     if (document.kind === 'variant')
         return compileVariant(document);
     if (!document.structure)
@@ -135,6 +137,27 @@ function compileV3(document) {
     }
     assertUniqueFileIds(documents);
     return { type: 'prefab', documents, prefabInstances: [] };
+}
+function validateSourceFingerprints(document, options) {
+    if (!options.sourceResolver)
+        return;
+    const checked = new Set();
+    for (const identity of document.identity.values()) {
+        if (!identity.sourceGuid || !identity.sourceFingerprint)
+            continue;
+        const key = `${identity.sourceGuid}:${identity.sourceFingerprint}`;
+        if (checked.has(key))
+            continue;
+        const sourcePath = options.sourceResolver.resolveFilePath(identity.sourceGuid);
+        if (!sourcePath) {
+            throw new Error(`Source project cannot resolve GUID ${identity.sourceGuid}.`);
+        }
+        const actual = (0, crypto_1.createHash)('sha256').update((0, fs_1.readFileSync)(sourcePath)).digest('hex');
+        if (actual !== identity.sourceFingerprint) {
+            throw new Error(`Source fingerprint mismatch for GUID ${identity.sourceGuid}.`);
+        }
+        checked.add(key);
+    }
 }
 function applyNestedInstancePlan(document, identity, plan, properties) {
     const modification = properties.m_Modification;

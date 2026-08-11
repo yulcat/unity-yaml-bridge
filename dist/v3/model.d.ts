@@ -16,6 +16,9 @@ export interface V3IdentityRecord {
     nestedRoot?: boolean;
     baselineParentId?: string;
     baselineOrder?: number;
+    sourceGuid?: string;
+    sourceFileId?: string;
+    sourceFingerprint?: string;
 }
 export interface V3StructureComponent {
     typeName: string;
@@ -43,6 +46,13 @@ export interface V3Document {
 export interface V3WriterOptions {
     profile?: string;
     assetGuid?: string;
+    sourceResolver?: V3SourceResolver;
+}
+export interface V3SourceResolver {
+    resolveFilePath(guid: string): string | undefined;
+}
+export interface V3CompileOptions {
+    sourceResolver?: V3SourceResolver;
 }
 export interface V3CompileResult {
     documents: UnityDocument[];

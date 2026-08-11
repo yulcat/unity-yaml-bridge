@@ -1,6 +1,8 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.writeV3 = writeV3;
+const crypto_1 = require("crypto");
+const fs_1 = require("fs");
 const value_1 = require("./value");
 const references_1 = require("./references");
 const STRUCTURAL_FIELDS = new Set([
@@ -123,6 +125,7 @@ function writeV3(file, options = {}) {
             ownerId,
         });
     }
+    applySourceFingerprints(identities, options);
     const lines = [
         `# ubridge v3 | prefab | profile:${options.profile || 'unity-generic-v1'}${options.assetGuid ? ` | asset-guid:${options.assetGuid}` : ''}`,
         '--- STRUCTURE',
@@ -327,6 +330,7 @@ function writeVariantV3(file, options) {
             ownerId: documentIds.get(ownerFileId) || inferredOwners.get(document.fileId),
         });
     }
+    applySourceFingerprints(identities, options);
     const lines = [
         `# ubridge v3 | variant | profile:${options.profile || 'unity-generic-v1'}${options.assetGuid ? ` | asset-guid:${options.assetGuid}` : ''}`,
         '--- STRUCTURE',
@@ -354,6 +358,9 @@ function identityFor(byId, fileId, machineId, kind) {
     const document = byId.get(fileId);
     if (!document)
         throw new Error(`Missing Unity document ${fileId}.`);
+    const source = document.properties.m_CorrespondingSourceObject;
+    const sourcePrefab = document.properties.m_SourcePrefab || document.properties.m_ParentPrefab;
+    const sourceReference = source?.guid ? source : sourcePrefab;
     return {
         machineId,
         kind,
@@ -361,7 +368,29 @@ function identityFor(byId, fileId, machineId, kind) {
         typeId: document.typeId,
         typeName: document.typeName,
         stripped: document.stripped,
+        sourceGuid: sourceReference?.guid ? String(sourceReference.guid) : undefined,
+        sourceFileId: sourceReference?.fileID !== undefined
+            ? String(sourceReference.fileID)
+            : undefined,
     };
+}
+function applySourceFingerprints(identities, options) {
+    if (!options.sourceResolver)
+        return;
+    const fingerprints = new Map();
+    for (const identity of identities.values()) {
+        if (!identity.sourceGuid)
+            continue;
+        let fingerprint = fingerprints.get(identity.sourceGuid);
+        if (!fingerprint) {
+            const sourcePath = options.sourceResolver.resolveFilePath(identity.sourceGuid);
+            if (!sourcePath)
+                continue;
+            fingerprint = (0, crypto_1.createHash)('sha256').update((0, fs_1.readFileSync)(sourcePath)).digest('hex');
+            fingerprints.set(identity.sourceGuid, fingerprint);
+        }
+        identity.sourceFingerprint = fingerprint;
+    }
 }
 function writeStructure(root) {
     const lines = [];
@@ -406,6 +435,12 @@ function writeIdentity(identity) {
         fields.push(`baselineParent:${identity.baselineParentId}`);
     if (identity.baselineOrder !== undefined)
         fields.push(`baselineOrder:${identity.baselineOrder}`);
+    if (identity.sourceGuid)
+        fields.push(`sourceGuid:${identity.sourceGuid}`);
+    if (identity.sourceFileId)
+        fields.push(`sourceFileID:${identity.sourceFileId}`);
+    if (identity.sourceFingerprint)
+        fields.push(`sourceFingerprint:${identity.sourceFingerprint}`);
     return `${identity.machineId} = ${fields.join(' | ')}`;
 }
 function writeVariantRoots(roots) {

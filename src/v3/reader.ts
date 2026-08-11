@@ -149,6 +149,8 @@ function parseIdentity(lines: string[]): Map<string, V3IdentityRecord> {
       displayName: fields.get('displayName') || typeName,
       ownerId: fields.get('owner'),
       scriptGuid: fields.get('script'),
+      scriptFileId: fields.get('scriptFileID'),
+      scriptType: fields.has('scriptType') ? Number(fields.get('scriptType')) : undefined,
     });
   }
   return result;

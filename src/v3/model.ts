@@ -11,6 +11,8 @@ export interface V3IdentityRecord {
   displayName?: string;
   ownerId?: string;
   scriptGuid?: string;
+  scriptFileId?: string;
+  scriptType?: number;
 }
 
 export interface V3StructureComponent {

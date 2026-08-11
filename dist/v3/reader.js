@@ -151,6 +151,8 @@ function parseIdentity(lines) {
             displayName: fields.get('displayName') || typeName,
             ownerId: fields.get('owner'),
             scriptGuid: fields.get('script'),
+            scriptFileId: fields.get('scriptFileID'),
+            scriptType: fields.has('scriptType') ? Number(fields.get('scriptType')) : undefined,
         });
     }
     return result;

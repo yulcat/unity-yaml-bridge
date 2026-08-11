@@ -2,10 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { compileV3 } from './v3/compiler';
 import { readV3 } from './v3/reader';
-import { writeV3 } from './v3/writer';
-import { parseUnityYaml } from './unity-yaml-parser';
-import { writeUnityYaml } from './unity-yaml-writer';
-import { UnityFile } from './types';
+import { coldRoundTripV3, describeSemanticDifference } from './test-v3-utils';
 
 let failed = 0;
 function assert(condition: unknown, name: string, details = ''): void {
@@ -16,47 +13,23 @@ function assert(condition: unknown, name: string, details = ''): void {
   }
 }
 
-function semanticSnapshot(file: UnityFile): string {
-  const documents = [...file.documents]
-    .sort((left, right) => left.fileId.localeCompare(right.fileId))
-    .map(document => ({
-      typeId: document.typeId,
-      typeName: document.typeName,
-      fileId: document.fileId,
-      stripped: document.stripped,
-      properties: sortObject(document.properties),
-    }));
-  return JSON.stringify({ type: file.type, documents });
-}
-
-function sortObject(value: any): any {
-  if (Array.isArray(value)) return value.map(sortObject);
-  if (!value || typeof value !== 'object') return value;
-  return Object.fromEntries(Object.keys(value).sort().map(key => [key, sortObject(value[key])]));
-}
-
 console.log('\n=== v3 standalone compiler ===');
 
 const samplePath = path.join(__dirname, '..', 'samples', 'v3', 'MinimalHierarchy.source.prefab');
 const originalText = fs.readFileSync(samplePath, 'utf-8');
-const original = parseUnityYaml(originalText);
-const v3Text = writeV3(original, { profile: 'unity-generic-v1' });
+const cold = coldRoundTripV3(originalText);
+const { original, v3Text, rebuiltText, rebuilt: reparsed } = cold;
 
 assert(v3Text.includes('Root @g1 [BoxCollider @c1]') && v3Text.includes('Child @g2'),
   'writer emits authoritative hierarchy and stable machine identities');
 assert(v3Text.includes('--- IDENTITY') && v3Text.includes('t2 = transform'),
   'writer emits a separate identity graph');
 
-// Cold boundary: only serialized v3 text crosses into the compiler. The
-// original UnityFile and original YAML are not compiler inputs.
-const parsedV3 = readV3(v3Text);
-const rebuilt = compileV3(parsedV3);
-const rebuiltText = writeUnityYaml(rebuilt);
-const reparsed = parseUnityYaml(rebuiltText);
-
-assert(semanticSnapshot(reparsed) === semanticSnapshot(original),
-  'YAML -> v3 -> discard original -> prefab preserves the semantic document graph');
-assert(writeUnityYaml(compileV3(readV3(v3Text))) === rebuiltText,
+const semanticDifference = describeSemanticDifference(original, reparsed);
+assert(!semanticDifference,
+  'YAML -> v3 -> discard original -> prefab preserves the semantic document graph',
+  semanticDifference || '');
+assert(coldRoundTripV3(originalText).rebuiltText === rebuiltText,
   'same standalone v3 input produces byte-identical canonical YAML');
 assert(reparsed.hierarchy?.children[0]?.name === 'Child' &&
        reparsed.hierarchy.transform.fileId === '200' &&

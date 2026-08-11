@@ -68,7 +68,11 @@ export function compileV3(document: V3Document): UnityFile {
         if (!identity.scriptGuid) throw new Error(`MonoBehaviour ${identity.machineId} requires script GUID identity.`);
         properties.m_Enabled ??= 1;
         properties.m_EditorHideFlags ??= 0;
-        properties.m_Script = { fileID: 11500000, guid: identity.scriptGuid, type: 3 };
+        properties.m_Script = {
+          fileID: identity.scriptFileId ?? 11500000,
+          guid: identity.scriptGuid,
+          type: identity.scriptType ?? 3,
+        };
         properties.m_Name ??= '';
         properties.m_EditorClassIdentifier ??= '';
       }

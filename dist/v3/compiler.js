@@ -63,7 +63,11 @@ function compileV3(document) {
                     throw new Error(`MonoBehaviour ${identity.machineId} requires script GUID identity.`);
                 properties.m_Enabled ?? (properties.m_Enabled = 1);
                 properties.m_EditorHideFlags ?? (properties.m_EditorHideFlags = 0);
-                properties.m_Script = { fileID: 11500000, guid: identity.scriptGuid, type: 3 };
+                properties.m_Script = {
+                    fileID: identity.scriptFileId ?? 11500000,
+                    guid: identity.scriptGuid,
+                    type: identity.scriptType ?? 3,
+                };
                 properties.m_Name ?? (properties.m_Name = '');
                 properties.m_EditorClassIdentifier ?? (properties.m_EditorClassIdentifier = '');
             }

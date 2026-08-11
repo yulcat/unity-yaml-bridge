@@ -38,6 +38,12 @@ function writeV3(file, options = {}) {
                 displayName: component.typeName,
                 ownerId: goId,
                 scriptGuid: component.scriptGuid,
+                scriptFileId: component.scriptGuid
+                    ? String(byId.get(component.fileId)?.properties.m_Script?.fileID ?? 11500000)
+                    : undefined,
+                scriptType: component.scriptGuid
+                    ? Number(byId.get(component.fileId)?.properties.m_Script?.type ?? 3)
+                    : undefined,
             });
             return { typeName: component.typeName, machineId };
         });
@@ -112,6 +118,10 @@ function writeIdentity(identity) {
     }
     if (identity.scriptGuid)
         fields.push(`script:${identity.scriptGuid}`);
+    if (identity.scriptGuid)
+        fields.push(`scriptFileID:${identity.scriptFileId ?? 11500000}`);
+    if (identity.scriptGuid)
+        fields.push(`scriptType:${identity.scriptType ?? 3}`);
     return `${identity.machineId} = ${fields.join(' | ')}`;
 }
 function describeIdentity(identity, root) {

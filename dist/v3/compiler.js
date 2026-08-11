@@ -20,9 +20,21 @@ function compileV3(document) {
     const allocated = allocateFileIds(document);
     const documents = [];
     const emittedMachineIds = new Set();
-    const buildNode = (node, parentTransformId, siblingIndex) => {
-        if (node.nestedSourceGuid)
+    const nestedPlans = new Map();
+    const buildNode = (node, parentTransformId, siblingIndex, parentTransformMachineId) => {
+        if (node.nestedSourceGuid) {
+            if (nestedPlans.has(node.machineId)) {
+                throw new Error(`Nested PrefabInstance ${node.machineId} appears more than once in STRUCTURE.`);
+            }
+            nestedPlans.set(node.machineId, {
+                machineId: node.machineId,
+                name: node.name,
+                parentTransformId,
+                parentTransformMachineId,
+                siblingIndex,
+            });
             return;
+        }
         const goIdentity = requireIdentity(document, node.machineId, 'gameObject');
         const transformIdentity = findOwnedTransform(document, node.machineId);
         const goId = allocated.get(goIdentity.machineId);
@@ -85,16 +97,37 @@ function compileV3(document) {
             }
             documents.push(makeDocument(identity, allocated.get(identity.machineId), properties));
         });
-        node.children.forEach((child, index) => buildNode(child, transformId, index));
+        node.children.forEach((child, index) => buildNode(child, transformId, index, transformIdentity.machineId));
     };
     buildNode(document.structure, '0', 0);
+    const desiredOwnership = new Map();
+    const isDesiredOwnership = (machineId) => {
+        if (desiredOwnership.has(machineId))
+            return desiredOwnership.get(machineId);
+        const identity = document.identity.get(machineId);
+        if (!identity)
+            return false;
+        desiredOwnership.set(machineId, false);
+        const desired = identity.kind === 'prefabInstance' && nestedPlans.has(machineId) ||
+            !!identity.ownerId && isDesiredOwnership(identity.ownerId);
+        desiredOwnership.set(machineId, desired);
+        return desired;
+    };
     for (const identity of document.identity.values()) {
         if (identity.kind !== 'prefabInstance' && identity.kind !== 'stripped' && identity.kind !== 'owned')
             continue;
+        if (identity.ownerId || identity.kind === 'prefabInstance') {
+            if (!isDesiredOwnership(identity.machineId))
+                continue;
+        }
         const properties = document.details.get(identity.machineId);
         if (!properties)
             throw new Error(`Raw ownership identity ${identity.machineId} requires DETAILS.`);
-        documents.push(makeDocument(identity, allocated.get(identity.machineId), clone(properties)));
+        let compiledProperties = clone(properties);
+        if (identity.kind === 'prefabInstance' && nestedPlans.has(identity.machineId)) {
+            compiledProperties = applyNestedInstancePlan(document, identity, nestedPlans.get(identity.machineId), compiledProperties);
+        }
+        documents.push(makeDocument(identity, allocated.get(identity.machineId), compiledProperties));
         emittedMachineIds.add(identity.machineId);
     }
     for (const unityDocument of documents) {
@@ -102,6 +135,64 @@ function compileV3(document) {
     }
     assertUniqueFileIds(documents);
     return { type: 'prefab', documents, prefabInstances: [] };
+}
+function applyNestedInstancePlan(document, identity, plan, properties) {
+    const modification = properties.m_Modification;
+    if (!modification || typeof modification !== 'object') {
+        throw new Error(`PrefabInstance ${identity.machineId} has no m_Modification DETAILS.`);
+    }
+    modification.m_TransformParent = { fileID: plan.parentTransformId };
+    if (!Array.isArray(modification.m_Modifications))
+        modification.m_Modifications = [];
+    const rootTransform = [...document.identity.values()].find(record => record.kind === 'stripped' && record.ownerId === identity.machineId && record.nestedRoot);
+    const rootTransformDetails = rootTransform
+        ? document.details.get(rootTransform.machineId)
+        : undefined;
+    const rootTransformSource = rootTransformDetails?.m_CorrespondingSourceObject;
+    if (!rootTransformSource || typeof rootTransformSource !== 'object') {
+        throw new Error(`PrefabInstance ${identity.machineId} has no source root Transform identity.`);
+    }
+    const placementChanged = identity.baselineParentId !== plan.parentTransformMachineId ||
+        identity.baselineOrder !== plan.siblingIndex;
+    if (placementChanged) {
+        upsertModification(modification.m_Modifications, rootTransformSource, 'm_RootOrder', String(plan.siblingIndex));
+    }
+    if (identity.displayName !== undefined && plan.name !== identity.displayName) {
+        const existingName = modification.m_Modifications.find((entry) => entry?.propertyPath === 'm_Name');
+        if (existingName) {
+            existingName.value = plan.name;
+            existingName.objectReference = { fileID: 0 };
+        }
+        else {
+            const strippedGameObject = [...document.identity.values()].find(record => record.kind === 'stripped' && record.ownerId === identity.machineId && record.typeId === 1);
+            const source = strippedGameObject
+                ? document.details.get(strippedGameObject.machineId)?.m_CorrespondingSourceObject
+                : undefined;
+            if (!source || typeof source !== 'object') {
+                throw new Error(`Cannot rename nested PrefabInstance ${identity.machineId}: source GameObject identity is unavailable.`);
+            }
+            upsertModification(modification.m_Modifications, source, 'm_Name', plan.name);
+        }
+    }
+    return properties;
+}
+function upsertModification(modifications, target, propertyPath, value) {
+    const targetFileId = String(target.fileID ?? '0');
+    const targetGuid = String(target.guid ?? '');
+    const existing = modifications.find(entry => entry?.propertyPath === propertyPath &&
+        String(entry?.target?.fileID ?? '0') === targetFileId &&
+        String(entry?.target?.guid ?? '') === targetGuid);
+    if (existing) {
+        existing.value = value;
+        existing.objectReference = { fileID: 0 };
+        return;
+    }
+    modifications.push({
+        target: clone(target),
+        propertyPath,
+        value,
+        objectReference: { fileID: 0 },
+    });
 }
 function compileVariant(document) {
     const allocated = allocateFileIds(document);

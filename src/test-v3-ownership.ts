@@ -27,6 +27,10 @@ function compileText(v3Text: string) {
   return parseUnityYaml(writeUnityYaml(compileV3(readV3(v3Text))));
 }
 
+function buttonV3() {
+  return readV3(writeV3(parseUnityYaml(sample('prefabs', 'Button.prefab'))));
+}
+
 console.log('\n=== v3 ownership cold-boundary edits ===');
 
 {
@@ -50,6 +54,59 @@ console.log('\n=== v3 ownership cold-boundary edits ===');
     'variant delta edit compiles without the original variant YAML');
   assert(rebuilt.variantSource?.guid === 'a5674d01884853d4e8f2386a171e14d9',
     'variant source GUID survives standalone compilation');
+}
+
+{
+  const document = buttonV3();
+  const nested = document.structure!.children.find(child => !!child.nestedSourceGuid)!;
+  nested.name = 'Button_Text_Renamed';
+  const rebuilt = parseUnityYaml(writeUnityYaml(compileV3(document)));
+  const nameOverride = rebuilt.prefabInstances[0].modifications
+    .find(modification => modification.propertyPath === 'm_Name');
+  assert(nameOverride?.value === 'Button_Text_Renamed',
+    'renaming a nested STRUCTURE node rewrites its PrefabInstance name override');
+}
+
+{
+  const document = buttonV3();
+  document.structure!.children.reverse();
+  const rebuilt = parseUnityYaml(writeUnityYaml(compileV3(document)));
+  const rootTransform = rebuilt.documents.find(item =>
+    (item.typeId === 4 || item.typeId === 224) && String(item.properties.m_Father?.fileID) === '0'
+  )!;
+  const nestedRoot = rebuilt.documents.find(item => item.stripped &&
+    item.typeId === 224 && item.properties.m_PrefabInstance?.fileID !== 0)!;
+  const rootOrder = rebuilt.prefabInstances[0].modifications
+    .find(modification => modification.propertyPath === 'm_RootOrder');
+  assert(String(rootTransform.properties.m_Children[0].fileID) === nestedRoot.fileId &&
+         rootOrder?.value === '0',
+    'reordering nested STRUCTURE rewrites parent children and m_RootOrder');
+}
+
+{
+  const document = buttonV3();
+  const root = document.structure!;
+  const nestedIndex = root.children.findIndex(child => !!child.nestedSourceGuid);
+  const [nested] = root.children.splice(nestedIndex, 1);
+  const background = root.children[0];
+  background.children.push(nested);
+  const rebuilt = parseUnityYaml(writeUnityYaml(compileV3(document)));
+  const backgroundIdentity = document.identity.get(background.machineId)!;
+  const backgroundTransform = [...document.identity.values()].find(identity =>
+    identity.kind === 'transform' && identity.ownerId === backgroundIdentity.machineId
+  )!;
+  const instance = rebuilt.documents.find(item => item.typeId === 1001)!;
+  assert(String(instance.properties.m_Modification.m_TransformParent.fileID) === backgroundTransform.fileId,
+    'reparenting nested STRUCTURE rewrites PrefabInstance m_TransformParent');
+}
+
+{
+  const document = buttonV3();
+  document.structure!.children = document.structure!.children.filter(child => !child.nestedSourceGuid);
+  (document.details.get('c1') as any).activateDisplayText = { fileID: 0 };
+  const rebuilt = parseUnityYaml(writeUnityYaml(compileV3(document)));
+  assert(!rebuilt.documents.some(item => item.typeId === 1001 || item.stripped),
+    'deleting nested STRUCTURE removes its PrefabInstance and stripped ownership documents');
 }
 
 {

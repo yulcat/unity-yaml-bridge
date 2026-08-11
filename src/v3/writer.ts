@@ -29,10 +29,18 @@ export function writeV3(file: UnityFile, options: V3WriterOptions = {}): string 
     ));
   }
 
-  const build = (node: GameObjectNode): V3StructureNode => {
+  const build = (
+    node: GameObjectNode,
+    parentTransformMachineId?: string,
+    siblingIndex = 0
+  ): V3StructureNode => {
     if (node.nestedPrefab) {
       const machineId = documentIds.get(node.nestedPrefab.instanceId);
       if (!machineId) throw new Error(`Missing PrefabInstance ${node.nestedPrefab.instanceId}.`);
+      const nestedIdentity = identities.get(machineId)!;
+      nestedIdentity.displayName = node.name;
+      nestedIdentity.baselineParentId = parentTransformMachineId;
+      nestedIdentity.baselineOrder = siblingIndex;
       const transformDocument = byId.get(node.transform.fileId);
       if (!transformDocument?.stripped) {
         throw new Error(`Nested PrefabInstance ${machineId} has no stripped root Transform.`);
@@ -93,18 +101,22 @@ export function writeV3(file: UnityFile, options: V3WriterOptions = {}): string 
       name: String(rawName ?? node.name),
       machineId: goId,
       components,
-      children: node.children.map(build),
+      children: node.children.map((child, index) => build(child, transformId, index)),
     };
   };
 
   const structure = build(file.hierarchy);
+  const inferredOwners = inferNestedOwnership(file, byId, identities, documentIds);
 
   for (const document of file.documents) {
     if (documentIds.has(document.fileId)) continue;
     if (!document.stripped) {
       const machineId = `o${++strippedIndex}`;
       documentIds.set(document.fileId, machineId);
-      identities.set(machineId, identityFor(byId, document.fileId, machineId, 'owned'));
+      identities.set(machineId, {
+        ...identityFor(byId, document.fileId, machineId, 'owned'),
+        ownerId: inferredOwners.get(document.fileId),
+      });
       continue;
     }
     const ownerFileId = String(document.properties.m_PrefabInstance?.fileID ?? '0');
@@ -140,6 +152,71 @@ export function writeV3(file: UnityFile, options: V3WriterOptions = {}): string 
   lines.push('', '--- IDENTITY');
   for (const identity of identities.values()) lines.push(writeIdentity(identity));
   return lines.join('\n') + '\n';
+}
+
+function inferNestedOwnership(
+  file: UnityFile,
+  byId: Map<string, UnityDocument>,
+  identities: Map<string, V3IdentityRecord>,
+  documentIds: Map<string, string>
+): Map<string, string> {
+  const owners = new Map<string, string>();
+  const seedAddedObject = (outerId: string, value: any): void => {
+    const addedFileId = String(value?.fileID ?? '0');
+    const added = byId.get(addedFileId);
+    if (!added) return;
+    if (added.stripped) {
+      const childInstanceFileId = String(added.properties.m_PrefabInstance?.fileID ?? '0');
+      const childId = documentIds.get(childInstanceFileId);
+      if (childId && childId !== outerId) identities.get(childId)!.ownerId = outerId;
+      return;
+    }
+    owners.set(addedFileId, outerId);
+  };
+
+  for (const prefabInstance of file.documents.filter(item => item.typeId === 1001)) {
+    const outerId = documentIds.get(prefabInstance.fileId);
+    if (!outerId) continue;
+    const modification = prefabInstance.properties.m_Modification;
+    for (const entry of modification?.m_AddedGameObjects ?? []) {
+      seedAddedObject(outerId, entry?.addedObject);
+    }
+    for (const entry of modification?.m_AddedComponents ?? []) {
+      seedAddedObject(outerId, entry?.addedObject);
+    }
+  }
+
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const [fileId, ownerId] of [...owners]) {
+      const document = byId.get(fileId);
+      if (!document) continue;
+      const related = structuralLocalReferences(document);
+      for (const relatedFileId of related) {
+        const relatedDocument = byId.get(relatedFileId);
+        if (!relatedDocument || relatedDocument.stripped || documentIds.has(relatedFileId) || owners.has(relatedFileId)) {
+          continue;
+        }
+        owners.set(relatedFileId, ownerId);
+        changed = true;
+      }
+    }
+  }
+  return owners;
+}
+
+function structuralLocalReferences(document: UnityDocument): string[] {
+  const properties = document.properties;
+  const references: string[] = [];
+  const add = (value: any): void => {
+    const fileId = String(value?.fileID ?? '0');
+    if (fileId !== '0') references.push(fileId);
+  };
+  add(properties.m_GameObject);
+  for (const entry of properties.m_Component ?? []) add(entry?.component);
+  for (const entry of properties.m_Children ?? []) add(entry);
+  return references;
 }
 
 function writeVariantV3(file: UnityFile, options: V3WriterOptions): string {
@@ -240,6 +317,8 @@ function writeIdentity(identity: V3IdentityRecord): string {
   if (identity.scriptGuid) fields.push(`scriptType:${identity.scriptType ?? 3}`);
   if (identity.stripped) fields.push('stripped:1');
   if (identity.nestedRoot) fields.push('nestedRoot:1');
+  if (identity.baselineParentId) fields.push(`baselineParent:${identity.baselineParentId}`);
+  if (identity.baselineOrder !== undefined) fields.push(`baselineOrder:${identity.baselineOrder}`);
   return `${identity.machineId} = ${fields.join(' | ')}`;
 }
 

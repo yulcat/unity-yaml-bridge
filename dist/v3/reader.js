@@ -190,6 +190,8 @@ function parseIdentity(lines) {
             scriptType: fields.has('scriptType') ? Number(fields.get('scriptType')) : undefined,
             stripped: fields.get('stripped') === '1',
             nestedRoot: fields.get('nestedRoot') === '1',
+            baselineParentId: fields.get('baselineParent'),
+            baselineOrder: fields.has('baselineOrder') ? Number(fields.get('baselineOrder')) : undefined,
         });
     }
     return result;

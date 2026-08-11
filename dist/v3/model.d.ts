@@ -13,6 +13,8 @@ export interface V3IdentityRecord {
     scriptType?: number;
     stripped?: boolean;
     nestedRoot?: boolean;
+    baselineParentId?: string;
+    baselineOrder?: number;
 }
 export interface V3StructureComponent {
     typeName: string;

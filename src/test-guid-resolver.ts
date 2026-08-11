@@ -48,10 +48,11 @@ console.log('='.repeat(60));
 
   const cases: [string, string][] = [
     ['f70555f144d8491a825f0804e09c671c', 'Image'],
-    ['fe87c0e1cc204ed48ad3b37840f39efc', 'Text'],
-    ['4e29b1a8efbd4b44bd927f3ae6b005da', 'Button'],
+    ['fe87c0e1cc204ed48ad3b37840f39efc', 'Image'],
+    ['5f7201a12d95ffc409449d95f23cf332', 'Text'],
+    ['4e29b1a8efbd4b44bb3f3716e73f07ff', 'Button'],
     ['f4688fdb7df04437aeb418b961361dc5', 'TextMeshProUGUI'],
-    ['4f231c4fb786f3946a523354b45a0805', 'EventSystem'],
+    ['76c392e42b5098c458856cdf6ecaaaa1', 'EventSystem'],
   ];
 
   for (const [guid, expected] of cases) {
@@ -61,6 +62,34 @@ console.log('='.repeat(60));
     } else {
       fail(`Built-in ${expected}`, `Got: ${resolved}`);
     }
+  }
+}
+
+// ============================================================
+// Test 1b: Reverse script lookup never consumes asset names
+// ============================================================
+
+console.log('\n' + '='.repeat(60));
+console.log('TEST: Reverse lookup is script-only');
+console.log('='.repeat(60));
+
+{
+  const resolver = new GuidResolver();
+  const assetGuid = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+  const scriptGuid = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+
+  resolver.addAsset(assetGuid, '/project/Assets/CustomWidget.prefab', 'CustomWidget');
+  if (resolver.resolveGuid('CustomWidget') === undefined) {
+    pass('Non-script asset names are excluded from reverse script lookup');
+  } else {
+    fail('Non-script asset leaked into reverse script lookup');
+  }
+
+  resolver.add(scriptGuid, 'CustomWidget');
+  if (resolver.resolveGuid('CustomWidget') === scriptGuid) {
+    pass('Script lookup wins even when an asset shares its name');
+  } else {
+    fail('Script lookup did not return the script GUID', `Got: ${resolver.resolveGuid('CustomWidget')}`);
   }
 }
 

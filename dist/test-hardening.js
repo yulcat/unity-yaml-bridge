@@ -4,6 +4,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const compact_reader_1 = require("./compact-reader");
 const compact_merger_1 = require("./compact-merger");
 const unity_yaml_parser_1 = require("./unity-yaml-parser");
+const guid_resolver_1 = require("./guid-resolver");
 let passed = 0;
 let failed = 0;
 function assert(condition, name, details = '') {
@@ -42,6 +43,26 @@ Transform:
 CanvasGroup:
   m_GameObject: {fileID: 100}
   m_Alpha: 1
+`;
+const buttonGuid = '4e29b1a8efbd4b44bb3f3716e73f07ff';
+const buttonYaml = `%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1 &100
+GameObject:
+  m_Component:
+  - component: {fileID: 200}
+  - component: {fileID: 300}
+  m_Name: Root
+--- !u!4 &200
+Transform:
+  m_GameObject: {fileID: 100}
+  m_Children: []
+  m_Father: {fileID: 0}
+--- !u!114 &300
+MonoBehaviour:
+  m_GameObject: {fileID: 100}
+  m_Script: {fileID: 11500000, guid: ${buttonGuid}, type: 3}
+  m_Interactable: 1
 `;
 function compact(details = '[Root:CanvasGroup]\nm_Alpha = 0.5', refs = 'Root = 100\nRoot:Transform = 200\nRoot:CanvasGroup = 300') {
     return `# ubridge v1 | prefab
@@ -83,6 +104,28 @@ expectThrow(() => (0, compact_reader_1.readCompact)(compact().replace('Root = 10
     const second = (0, compact_merger_1.mergeCompactChanges)((0, unity_yaml_parser_1.parseUnityYaml)(yaml), addition);
     assert(first.documents.some(doc => doc.typeId === 65) && second.documents.some(doc => doc.typeId === 65), 'the same parsed compact edit can be merged more than once');
     assert(JSON.stringify([...addition.refs]) === refsBefore, 'merge does not mutate caller-owned compact REFS');
+}
+{
+    const resolver = new guid_resolver_1.GuidResolver();
+    resolver.addAsset('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', '/project/Assets/Presets/Button.prefab', 'Button');
+    const buttonCompact = (0, compact_reader_1.readCompact)(`# ubridge v1 | prefab
+--- STRUCTURE
+Root [Button]
+--- DETAILS
+[Root:Button]
+m_Interactable = 1
+--- REFS
+Root = 100
+Root:Transform = 200
+Root:Button = 300
+`);
+    try {
+        const merged = (0, compact_merger_1.mergeCompactChanges)((0, unity_yaml_parser_1.parseUnityYaml)(buttonYaml), buttonCompact, { guidResolver: resolver });
+        assert(merged.documents.find(doc => doc.fileId === '300')?.properties.m_Interactable === 1, 'real Unity Button survives no-edit write with a same-name asset');
+    }
+    catch (error) {
+        assert(false, 'real Unity Button survives no-edit write with a same-name asset', String(error.message));
+    }
 }
 console.log(`\nHardening tests: ${passed} passed, ${failed} failed`);
 if (failed > 0)

@@ -261,8 +261,7 @@ function validateDocumentType(section, document, resolver, allowSelectors = fals
         throw new Error(`REFS target script mismatch for ${address}: &${document.fileId} uses ${scriptGuid}.`);
     }
     const resolvedGuids = componentTypes
-        .map(type => resolver?.resolveGuid(type))
-        .filter((guid) => Boolean(guid));
+        .flatMap(type => resolver?.resolveScriptGuids(type) || []);
     if (resolvedGuids.length > 0 && scriptGuid && !resolvedGuids.includes(scriptGuid)) {
         throw new Error(`REFS target script mismatch for ${address}: &${document.fileId} uses ${scriptGuid}.`);
     }

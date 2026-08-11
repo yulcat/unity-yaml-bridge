@@ -7,10 +7,17 @@
  */
 /** GuidResolver maps script GUIDs to human-readable class names */
 export declare class GuidResolver {
+    /** GUID → display name for both scripts and named assets. */
     private map;
+    /** Script name → every known script GUID; assets never enter this index. */
+    private scriptGuidsByName;
+    /** Project/manual mappings take precedence over built-in defaults. */
+    private projectScriptGuidsByName;
+    private preferredBuiltinGuidByName;
     /** GUID → absolute file path for asset files (.prefab, .unity, etc.) */
     private assetPaths;
     constructor();
+    private registerScript;
     /** Scan a Unity project folder for .cs.meta and asset .meta files */
     scanProject(projectPath: string): void;
     /** Recursively scan a directory for .meta files */
@@ -21,8 +28,11 @@ export declare class GuidResolver {
     private readAssetMetaFile;
     /** Resolve a GUID to a human-readable name */
     resolve(guid: string): string | undefined;
-    /** Resolve a human-readable script/component name back to its GUID. */
+    /** Resolve a script/component name to one safe GUID for component creation. */
     resolveGuid(name: string): string | undefined;
+    /** Resolve every known script GUID for validation of an existing document. */
+    resolveScriptGuids(name: string): string[];
+    private onlyGuid;
     /** Resolve a GUID to the asset file path */
     resolveFilePath(guid: string): string | undefined;
     /** Add a manual mapping */

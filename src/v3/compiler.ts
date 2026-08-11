@@ -170,7 +170,9 @@ function applyNestedInstancePlan(
   if (!modification || typeof modification !== 'object') {
     throw new Error(`PrefabInstance ${identity.machineId} has no m_Modification DETAILS.`);
   }
-  modification.m_TransformParent = { fileID: plan.parentTransformId };
+  if (plan.parentTransformMachineId || !modification.m_TransformParent) {
+    modification.m_TransformParent = { fileID: plan.parentTransformId };
+  }
   if (!Array.isArray(modification.m_Modifications)) modification.m_Modifications = [];
 
   const rootTransform = [...document.identity.values()].find(record =>
@@ -270,6 +272,12 @@ function compileVariant(document: V3Document): UnityFile {
     }
     const goIdentity = requireIdentity(document, node.machineId, 'gameObject');
     const transformIdentity = findOwnedTransform(document, node.machineId);
+    if (!parentTransformMachineId && !goIdentity.fileId) {
+      throw new Error(`New variant root ${node.machineId} requires an inherited source-parent identity.`);
+    }
+    if (!parentTransformMachineId && transformIdentity.baselineParentId) {
+      throw new Error(`Moving ${node.machineId} to the variant root requires an inherited source-parent identity.`);
+    }
     const goId = allocated.get(goIdentity.machineId)!;
     const transformId = allocated.get(transformIdentity.machineId)!;
     const componentIds = node.components.map(component =>

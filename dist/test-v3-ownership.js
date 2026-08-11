@@ -75,6 +75,15 @@ function clearRefsTo(value, deleted) {
         value[key] = clearRefsTo(child, deleted);
     return value;
 }
+function expectThrow(fn, expected, name) {
+    try {
+        fn();
+        assert(false, name, 'Expected an error, but none was thrown.');
+    }
+    catch (error) {
+        assert(String(error).includes(expected), name, String(error));
+    }
+}
 console.log('\n=== v3 ownership cold-boundary edits ===');
 {
     const v3Text = (0, writer_1.writeV3)((0, unity_yaml_parser_1.parseUnityYaml)(sample('variants', 'Ellen_Variant.prefab')));
@@ -128,6 +137,37 @@ console.log('\n=== v3 ownership cold-boundary edits ===');
     const movedGameObject = rebuilt.documents.find(item => item.fileId === document.identity.get(text.machineId).fileId);
     assert(String(movedTransform.properties.m_Father.fileID) === newParentTransformIdentity.fileId &&
         movedGameObject.properties.m_Name === 'MovedText', 'variant local rename and reparent are compiled from STRUCTURE');
+}
+{
+    const document = rootVariantV3();
+    const root = document.variantRoots[0];
+    document.identity.set('gNew', {
+        machineId: 'gNew', kind: 'gameObject', typeId: 1, typeName: 'GameObject',
+        prefabOwnerId: document.variantRootId,
+    });
+    document.identity.set('tNew', {
+        machineId: 'tNew', kind: 'transform', typeId: 224, typeName: 'RectTransform', ownerId: 'gNew',
+    });
+    root.children.push({ name: 'NewLocalChild', machineId: 'gNew', components: [], children: [] });
+    const rebuilt = (0, unity_yaml_parser_1.parseUnityYaml)((0, unity_yaml_writer_1.writeUnityYaml)((0, compiler_1.compileV3)(document)));
+    const newGameObject = rebuilt.documents.find(item => item.properties.m_Name === 'NewLocalChild');
+    const rootTransformId = [...document.identity.values()].find(identity => identity.kind === 'transform' && identity.ownerId === root.machineId).fileId;
+    const newTransform = rebuilt.documents.find(item => String(item.properties.m_GameObject?.fileID) === newGameObject.fileId);
+    assert(String(newTransform.properties.m_Father.fileID) === rootTransformId, 'variant can create a new local child beneath an existing local parent');
+}
+{
+    const document = rootVariantV3();
+    document.identity.set('gNewRoot', {
+        machineId: 'gNewRoot', kind: 'gameObject', typeId: 1, typeName: 'GameObject',
+        prefabOwnerId: document.variantRootId,
+    });
+    document.identity.set('tNewRoot', {
+        machineId: 'tNewRoot', kind: 'transform', typeId: 224, typeName: 'RectTransform', ownerId: 'gNewRoot',
+    });
+    document.variantRoots.push({
+        name: 'UnsupportedRoot', machineId: 'gNewRoot', components: [], children: [],
+    });
+    expectThrow(() => (0, compiler_1.compileV3)(document), 'requires an inherited source-parent identity', 'variant root creation fails closed until its inherited parent target is explicit');
 }
 {
     const document = rootVariantV3();

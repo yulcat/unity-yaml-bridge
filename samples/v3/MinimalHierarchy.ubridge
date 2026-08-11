@@ -1,0 +1,61 @@
+# ubridge v3 | prefab | profile:unity-generic-v1
+--- STRUCTURE
+Root @g1 [BoxCollider @c1]
+└─ Child @g2
+--- DETAILS
+
+[g1 | Root]
+m_ObjectHideFlags = 0
+serializedVersion = 6
+m_Layer = 0
+m_TagString = "Untagged"
+m_Icon = {"fileID":0}
+m_NavMeshLayer = 0
+m_StaticEditorFlags = 0
+m_IsActive = 1
+
+[t1 | Root:Transform]
+m_ObjectHideFlags = 0
+serializedVersion = 2
+m_LocalRotation = {"x":0,"y":0,"z":0,"w":1}
+m_LocalPosition = {"x":0,"y":0,"z":0}
+m_LocalScale = {"x":1,"y":1,"z":1}
+m_LocalEulerAnglesHint = {"x":0,"y":0,"z":0}
+
+[c1 | Root:BoxCollider]
+m_ObjectHideFlags = 0
+m_Material = {"fileID":0}
+m_IncludeLayers = {"serializedVersion":2,"m_Bits":0}
+m_ExcludeLayers = {"serializedVersion":2,"m_Bits":0}
+m_LayerOverridePriority = 0
+m_IsTrigger = 0
+m_ProvidesContacts = 0
+m_Enabled = 1
+serializedVersion = 3
+m_Size = {"x":2,"y":1,"z":3}
+m_Center = {"x":0,"y":0.5,"z":0}
+
+[g2 | Child]
+m_ObjectHideFlags = 0
+serializedVersion = 6
+m_Layer = 0
+m_TagString = "Untagged"
+m_Icon = {"fileID":0}
+m_NavMeshLayer = 0
+m_StaticEditorFlags = 0
+m_IsActive = 1
+
+[t2 | Child:Transform]
+m_ObjectHideFlags = 0
+serializedVersion = 2
+m_LocalRotation = {"x":0,"y":0,"z":0,"w":1}
+m_LocalPosition = {"x":1,"y":2,"z":3}
+m_LocalScale = {"x":1,"y":1,"z":1}
+m_LocalEulerAnglesHint = {"x":0,"y":0,"z":0}
+
+--- IDENTITY
+g1 = gameObject | fileID:100 | type:1 | typeName:GameObject
+t1 = transform | fileID:200 | type:4 | typeName:Transform | owner:g1
+c1 = component | fileID:300 | type:65 | typeName:BoxCollider | owner:g1
+g2 = gameObject | fileID:400 | type:1 | typeName:GameObject
+t2 = transform | fileID:500 | type:4 | typeName:Transform | owner:g2

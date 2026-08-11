@@ -5,6 +5,7 @@
  *
  * Usage:
  *   ubridge parse <file.prefab> [--project <path>] [--verbose]
+ *   ubridge compile <file.ubridge> [-o <output.prefab>]
  *   ubridge write <file.ubridge> --yaml <original.prefab> [--project <path>] [-o <output.prefab>]
  */
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
@@ -49,6 +50,9 @@ const compact_reader_1 = require("./compact-reader");
 const compact_merger_1 = require("./compact-merger");
 const unity_yaml_writer_1 = require("./unity-yaml-writer");
 const guid_resolver_1 = require("./guid-resolver");
+const writer_1 = require("./v3/writer");
+const reader_1 = require("./v3/reader");
+const compiler_1 = require("./v3/compiler");
 function usage() {
     console.log(`unity-yaml-bridge CLI
 
@@ -61,8 +65,14 @@ Usage:
 
     Options:
       --project <path>   Unity project root for GUID/script resolution
-      --format <v1|v2>  Compact format version (default: v2)
+      --format <v1|v2|v3>  Compact format version (default: v2)
       --verbose          Include all fields (disable boilerplate filtering)
+      -o <file>          Output file (default: stdout)
+
+  ubridge compile <file.ubridge> [options]
+    Compile a standalone v3 .ubridge document without an original YAML file.
+
+    Options:
       -o <file>          Output file (default: stdout)
 
   ubridge write <file.ubridge> --yaml <original.prefab> [options]
@@ -75,6 +85,8 @@ Usage:
 
 Examples:
   ubridge parse Button.prefab --project ./MyUnityProject
+  ubridge parse Button.prefab --format v3 -o Button.v3.ubridge
+  ubridge compile Button.v3.ubridge -o Button.rebuilt.prefab
   ubridge parse Card_Variant.prefab --project ./MyUnityProject -o Card_Variant.ubridge
   ubridge write Card_Variant.ubridge --yaml Card_Variant.prefab -o Card_Variant_modified.prefab
 `);
@@ -131,14 +143,20 @@ function cmdParse(args, flags) {
         options.verbose = true;
     }
     const format = flags.get('--format');
-    if (format && format !== 'v1' && format !== 'v2') {
-        die('--format must be v1 or v2');
+    if (format && format !== 'v1' && format !== 'v2' && format !== 'v3') {
+        die('--format must be v1, v2, or v3');
     }
-    options.version = format === 'v1' ? 1 : 2;
     // Parse and convert
     const content = fs.readFileSync(inputPath, 'utf-8');
     const ast = (0, unity_yaml_parser_1.parseUnityYaml)(content);
-    const compact = (0, compact_writer_1.writeCompact)(ast, options);
+    let compact;
+    if (format === 'v3') {
+        compact = (0, writer_1.writeV3)(ast);
+    }
+    else {
+        options.version = format === 'v1' ? 1 : 2;
+        compact = (0, compact_writer_1.writeCompact)(ast, options);
+    }
     // Output
     const outputPath = flags.get('-o');
     if (outputPath) {
@@ -147,6 +165,27 @@ function cmdParse(args, flags) {
     }
     else {
         process.stdout.write(compact);
+    }
+}
+function cmdCompile(args, flags) {
+    if (args.length === 0)
+        die('compile requires a v3 .ubridge file argument');
+    if (flags.has('--yaml'))
+        die('compile does not accept --yaml; v3 is standalone');
+    if (flags.has('--project'))
+        die('compile --project validation is not implemented yet');
+    const ubridgePath = path.resolve(args[0]);
+    if (!fs.existsSync(ubridgePath))
+        die(`File not found: ${ubridgePath}`);
+    const document = (0, reader_1.readV3)(fs.readFileSync(ubridgePath, 'utf-8'));
+    const output = (0, unity_yaml_writer_1.writeUnityYaml)((0, compiler_1.compileV3)(document));
+    const outputPath = flags.get('-o');
+    if (outputPath) {
+        fs.writeFileSync(path.resolve(outputPath), output, 'utf-8');
+        console.error(`Written to ${outputPath}`);
+    }
+    else {
+        process.stdout.write(output);
     }
 }
 function cmdWrite(args, flags) {
@@ -207,7 +246,10 @@ switch (command) {
     case 'write':
         cmdWrite(args, flags);
         break;
+    case 'compile':
+        cmdCompile(args, flags);
+        break;
     default:
-        die(`Unknown command: ${command}. Use 'parse' or 'write'.`);
+        die(`Unknown command: ${command}. Use 'parse', 'compile', or 'write'.`);
 }
 //# sourceMappingURL=cli.js.map

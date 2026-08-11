@@ -4,6 +4,7 @@
  *
  * Usage:
  *   ubridge parse <file.prefab> [--project <path>] [--verbose]
+ *   ubridge compile <file.ubridge> [-o <output.prefab>]
  *   ubridge write <file.ubridge> --yaml <original.prefab> [--project <path>] [-o <output.prefab>]
  */
 export {};

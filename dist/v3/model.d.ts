@@ -1,5 +1,5 @@
 import { UnityDocument } from '../types';
-export type V3EntityKind = 'gameObject' | 'transform' | 'component';
+export type V3EntityKind = 'gameObject' | 'transform' | 'component' | 'prefabInstance' | 'stripped' | 'owned';
 export interface V3IdentityRecord {
     machineId: string;
     kind: V3EntityKind;
@@ -11,6 +11,8 @@ export interface V3IdentityRecord {
     scriptGuid?: string;
     scriptFileId?: string;
     scriptType?: number;
+    stripped?: boolean;
+    nestedRoot?: boolean;
 }
 export interface V3StructureComponent {
     typeName: string;
@@ -21,13 +23,16 @@ export interface V3StructureNode {
     machineId: string;
     components: V3StructureComponent[];
     children: V3StructureNode[];
+    nestedSourceGuid?: string;
 }
 export interface V3Document {
     version: 3;
-    kind: 'prefab';
+    kind: 'prefab' | 'variant';
     profile: string;
     assetGuid?: string;
-    structure: V3StructureNode;
+    structure: V3StructureNode | null;
+    variantRootId?: string;
+    baseGuid?: string;
     details: Map<string, Record<string, unknown>>;
     identity: Map<string, V3IdentityRecord>;
 }

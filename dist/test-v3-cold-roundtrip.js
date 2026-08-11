@@ -54,9 +54,10 @@ function findPrefabs(directory) {
         .filter(file => file.endsWith('.prefab'))
         .map(file => path.join(directory, file));
 }
-console.log('\n=== v3 local prefab cold-roundtrip corpus ===');
+console.log('\n=== v3 prefab/variant cold-roundtrip corpus ===');
 const candidates = [
     ...findPrefabs(path.join(__dirname, '..', 'samples', 'prefabs')),
+    ...findPrefabs(path.join(__dirname, '..', 'samples', 'variants')),
     ...findPrefabs(path.join(__dirname, '..', 'samples', 'fixtures', 'PrefabWorkflows_UIDemo')),
 ];
 let tested = 0;
@@ -64,7 +65,7 @@ let readableReferenceCount = 0;
 for (const prefabPath of candidates) {
     const source = fs.readFileSync(prefabPath, 'utf-8');
     const parsed = (0, unity_yaml_parser_1.parseUnityYaml)(source);
-    if (parsed.prefabInstances.length > 0 || parsed.documents.some(document => document.stripped))
+    if (parsed.type !== 'prefab' && parsed.type !== 'variant')
         continue;
     tested++;
     try {
@@ -79,9 +80,9 @@ for (const prefabPath of candidates) {
         assert(false, `${path.basename(prefabPath)} cold-roundtrip`, String(error));
     }
 }
-assert(tested >= 7, 'local corpus selection includes at least seven real prefabs', `tested=${tested}`);
+assert(tested >= 19, 'v3 corpus includes local, nested, and variant prefabs', `tested=${tested}`);
 assert(readableReferenceCount > 0, 'local internal references are exported as stable v3 machine references', `count=${readableReferenceCount}`);
-console.log(`\nv3 cold-roundtrip corpus: ${passed} passed, ${failed} failed`);
+console.log(`\nv3 prefab/variant cold-roundtrip corpus: ${passed} passed, ${failed} failed`);
 if (failed > 0)
     process.exit(1);
 //# sourceMappingURL=test-v3-cold-roundtrip.js.map

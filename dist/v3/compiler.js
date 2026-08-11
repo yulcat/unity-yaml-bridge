@@ -11,13 +11,18 @@ const COMMON_LOCAL_ENVELOPE = {
     m_PrefabAsset: { fileID: 0 },
 };
 function compileV3(document) {
-    if (document.version !== 3 || document.kind !== 'prefab') {
-        throw new Error('compileV3 accepts v3 local regular prefab documents only.');
-    }
+    if (document.version !== 3)
+        throw new Error('compileV3 accepts v3 documents only.');
+    if (document.kind === 'variant')
+        return compileVariant(document);
+    if (!document.structure)
+        throw new Error('v3 prefab requires STRUCTURE.');
     const allocated = allocateFileIds(document);
     const documents = [];
     const emittedMachineIds = new Set();
     const buildNode = (node, parentTransformId, siblingIndex) => {
+        if (node.nestedSourceGuid)
+            return;
         const goIdentity = requireIdentity(document, node.machineId, 'gameObject');
         const transformIdentity = findOwnedTransform(document, node.machineId);
         const goId = allocated.get(goIdentity.machineId);
@@ -47,7 +52,9 @@ function compileV3(document) {
         transformProperties.m_LocalRotation ?? (transformProperties.m_LocalRotation = flow({ x: 0, y: 0, z: 0, w: 1 }));
         transformProperties.m_LocalPosition ?? (transformProperties.m_LocalPosition = flow({ x: 0, y: 0, z: 0 }));
         transformProperties.m_LocalScale ?? (transformProperties.m_LocalScale = flow({ x: 1, y: 1, z: 1 }));
-        transformProperties.m_Children = node.children.map(child => ({ fileID: allocated.get(findOwnedTransform(document, child.machineId).machineId) }));
+        transformProperties.m_Children = node.children.map(child => ({
+            fileID: allocated.get(findDesiredRootTransform(document, child).machineId),
+        }));
         transformProperties.m_Father = { fileID: parentTransformId };
         transformProperties.m_RootOrder = siblingIndex;
         transformProperties.m_LocalEulerAnglesHint ?? (transformProperties.m_LocalEulerAnglesHint = flow({ x: 0, y: 0, z: 0 }));
@@ -81,11 +88,44 @@ function compileV3(document) {
         node.children.forEach((child, index) => buildNode(child, transformId, index));
     };
     buildNode(document.structure, '0', 0);
+    for (const identity of document.identity.values()) {
+        if (identity.kind !== 'prefabInstance' && identity.kind !== 'stripped' && identity.kind !== 'owned')
+            continue;
+        const properties = document.details.get(identity.machineId);
+        if (!properties)
+            throw new Error(`Raw ownership identity ${identity.machineId} requires DETAILS.`);
+        documents.push(makeDocument(identity, allocated.get(identity.machineId), clone(properties)));
+        emittedMachineIds.add(identity.machineId);
+    }
     for (const unityDocument of documents) {
         unityDocument.properties = (0, value_1.markCanonicalFlowMappings)((0, references_1.resolveV3References)(unityDocument.properties, allocated, emittedMachineIds, `${unityDocument.typeName}&${unityDocument.fileId}`));
     }
     assertUniqueFileIds(documents);
     return { type: 'prefab', documents, prefabInstances: [] };
+}
+function compileVariant(document) {
+    const allocated = allocateFileIds(document);
+    const emitted = new Set(document.identity.keys());
+    const documents = [];
+    for (const identity of document.identity.values()) {
+        if (identity.kind !== 'prefabInstance' && identity.kind !== 'stripped' && identity.kind !== 'owned') {
+            throw new Error(`Unsupported variant identity kind ${identity.kind} on ${identity.machineId}.`);
+        }
+        const details = document.details.get(identity.machineId);
+        if (!details)
+            throw new Error(`Variant identity ${identity.machineId} requires DETAILS.`);
+        const properties = (0, value_1.markCanonicalFlowMappings)((0, references_1.resolveV3References)(clone(details), allocated, emitted, `${identity.typeName}&${identity.fileId || identity.machineId}`));
+        documents.push(makeDocument(identity, allocated.get(identity.machineId), properties));
+    }
+    assertUniqueFileIds(documents);
+    return {
+        type: 'variant',
+        documents,
+        prefabInstances: [],
+        variantSource: document.baseGuid
+            ? { fileID: '100100000', guid: document.baseGuid, type: 3 }
+            : undefined,
+    };
 }
 function allocateFileIds(document) {
     const result = new Map();
@@ -129,6 +169,16 @@ function findOwnedTransform(document, ownerId) {
         throw new Error(`${ownerId} must own exactly one Transform identity.`);
     return matches[0];
 }
+function findDesiredRootTransform(document, node) {
+    if (!node.nestedSourceGuid)
+        return findOwnedTransform(document, node.machineId);
+    const matches = [...document.identity.values()].filter(identity => identity.kind === 'stripped' && identity.ownerId === node.machineId && identity.nestedRoot &&
+        (identity.typeId === 4 || identity.typeId === 224));
+    if (matches.length !== 1) {
+        throw new Error(`${node.machineId} must own exactly one stripped root Transform identity.`);
+    }
+    return matches[0];
+}
 function mergeDetails(base, details) {
     return (0, value_1.markCanonicalFlowMappings)({ ...clone(base), ...clone(details || {}) });
 }
@@ -144,7 +194,7 @@ function makeDocument(identity, fileId, properties) {
         typeId: identity.typeId,
         typeName: identity.typeName,
         fileId,
-        stripped: false,
+        stripped: identity.stripped === true,
         properties,
     };
 }

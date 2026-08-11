@@ -35,7 +35,7 @@ t2 = transform | fileID:500 | type:4 | typeName:Transform | owner:g2
 
 ## Current implementation slice
 
-The first checked-in slice supports local regular prefabs, including:
+The current slices support regular prefabs, including:
 
 - GameObject hierarchies and sibling order
 - Transform and RectTransform documents
@@ -47,6 +47,8 @@ The first checked-in slice supports local regular prefabs, including:
 - stable internal references such as `{"$ref":"c4"}`
 - local rename, reparent, reorder, subtree/component removal, and deterministic
   creation when new identity records omit `fileID`
+- cold-roundtrip reconstruction of PrefabInstance, stripped, and other
+  ownership documents without an original YAML file
 
 An internal reference targets machine identity rather than a display path or
 raw fileID:
@@ -58,9 +60,12 @@ target = {"$ref":"c4"}
 If `c4` is removed from desired STRUCTURE, compilation fails until the
 reference is removed or redirected in the same edit.
 
-Nested prefab ownership, variants, and versioned default profiles remain
-intentionally unsupported. `writeV3` rejects nested/variant input rather than
-producing a partial document.
+Nested prefab effective-tree structural editing and versioned default profiles
+remain intentionally unsupported. Nested and variant baseline ownership
+documents are standalone, and existing PrefabInstance delta values can be
+edited in DETAILS. Local objects not yet exposed in the effective STRUCTURE are
+kept as explicit `owned` identity/details records until ownership-aware
+reconciliation is implemented.
 
 ## CLI
 

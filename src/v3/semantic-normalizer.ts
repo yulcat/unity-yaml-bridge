@@ -12,13 +12,23 @@ export interface SemanticDifference {
   actual: unknown;
 }
 
-/** Canonical semantic view for the first v3 compiler slice. Structural links
- * are represented explicitly rather than compared as serializer fields. */
+/** Canonical semantic view for regular prefabs. Local structural links are
+ * represented explicitly; ownership documents are compared as serialized
+ * semantic records. */
 export function normalizeLocalPrefab(file: UnityFile): unknown {
-  if (file.type !== 'prefab' || file.prefabInstances.length > 0 ||
-      file.documents.some(document => document.stripped)) {
-    throw new Error('normalizeLocalPrefab accepts local regular prefabs only.');
+  if (file.type === 'variant') {
+    return {
+      kind: 'variant',
+      documents: file.documents.map(document => ({
+        fileId: document.fileId,
+        typeId: document.typeId,
+        typeName: document.typeName,
+        stripped: document.stripped,
+        properties: stable(clone(document.properties)),
+      })).sort((left, right) => compareFileIds(left.fileId, right.fileId)),
+    };
   }
+  if (file.type !== 'prefab') throw new Error('v3 semantic normalization supports prefabs and variants only.');
 
   const byId = new Map(file.documents.map(document => [document.fileId, document]));
   const transformByGameObject = new Map<string, UnityDocument>();
@@ -29,6 +39,16 @@ export function normalizeLocalPrefab(file: UnityFile): unknown {
   }
 
   const documents = file.documents.map(document => {
+    if (document.stripped || document.typeId === 1001) {
+      return {
+        fileId: document.fileId,
+        typeId: document.typeId,
+        typeName: document.typeName,
+        stripped: document.stripped,
+        structural: {},
+        properties: stable(clone(document.properties)),
+      };
+    }
     const properties = canonicalProperties(document);
     const structural: Record<string, unknown> = {};
 
@@ -57,6 +77,7 @@ export function normalizeLocalPrefab(file: UnityFile): unknown {
       fileId: document.fileId,
       typeId: document.typeId,
       typeName: document.typeName,
+      stripped: false,
       structural: stable(structural),
       properties: stable(properties),
     };

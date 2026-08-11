@@ -10,9 +10,7 @@ function readV3(content) {
     if (!headerMatch) {
         throw new Error('Invalid v3 header. Expected "# ubridge v3 | prefab | profile:<id>".');
     }
-    if (headerMatch[1] !== 'prefab') {
-        throw new Error('v3 compiler currently supports local regular prefabs only.');
-    }
+    const kind = headerMatch[1];
     const structureIndex = findUniqueSection(lines, '--- STRUCTURE');
     const detailsIndex = findUniqueSection(lines, '--- DETAILS');
     const identityIndex = findUniqueSection(lines, '--- IDENTITY');
@@ -21,18 +19,42 @@ function readV3(content) {
     }
     const structureLines = lines.slice(structureIndex + 1, detailsIndex)
         .filter(line => line.trim() !== '' && !line.trim().startsWith('#'));
-    const structure = parseStructure(structureLines);
+    let structure;
+    let variantRootId;
+    let baseGuid;
+    if (kind === 'variant') {
+        const variantLine = structureLines.length === 1
+            ? structureLines[0].match(new RegExp(`^\\(variant @(${MACHINE_ID}) source:([a-f0-9]{32})\\)$`, 'i'))
+            : null;
+        if (!variantLine)
+            throw new Error('v3 variant STRUCTURE requires one variant root descriptor.');
+        structure = null;
+        variantRootId = variantLine[1];
+        baseGuid = variantLine[2];
+    }
+    else {
+        structure = parseStructure(structureLines);
+    }
     const details = parseDetails(lines.slice(detailsIndex + 1, identityIndex));
     const identity = parseIdentity(lines.slice(identityIndex + 1));
-    validateBindings(structure, details, identity);
+    if (structure)
+        validateBindings(structure, details, identity);
+    if (kind === 'variant') {
+        const root = identity.get(variantRootId);
+        if (!root || root.kind !== 'prefabInstance' || root.typeId !== 1001) {
+            throw new Error(`Variant root ${variantRootId} is not a PrefabInstance identity.`);
+        }
+    }
     return {
         version: 3,
-        kind: 'prefab',
+        kind,
         profile: headerMatch[2],
         assetGuid: headerMatch[3],
         structure,
         details,
         identity,
+        variantRootId,
+        baseGuid,
     };
 }
 function findUniqueSection(lines, section) {
@@ -75,10 +97,22 @@ function parseStructureLine(line) {
         });
         text = text.slice(0, componentMatch.index).trim();
     }
+    let nestedSourceGuid;
+    const nestedMatch = text.match(/\s+\{source:([a-f0-9]{32})\}$/i);
+    if (nestedMatch) {
+        nestedSourceGuid = nestedMatch[1];
+        text = text.slice(0, nestedMatch.index).trim();
+    }
     const match = text.match(new RegExp(`^(.+?) @(${MACHINE_ID})$`));
     if (!match)
         throw new Error(`Every existing v3 GameObject needs an @machineId: ${line}`);
-    return { name: match[1].trim(), machineId: match[2], components, children: [] };
+    return {
+        name: match[1].trim(),
+        machineId: match[2],
+        components,
+        children: [],
+        nestedSourceGuid,
+    };
 }
 function getTreeDepth(line) {
     const branch = line.search(/[├└]/);
@@ -127,7 +161,8 @@ function parseIdentity(lines) {
             throw new Error(`Duplicate v3 identity ${machineId}.`);
         const parts = assignment[2].split('|').map(part => part.trim());
         const kind = parts.shift();
-        if (kind !== 'gameObject' && kind !== 'transform' && kind !== 'component') {
+        if (kind !== 'gameObject' && kind !== 'transform' && kind !== 'component' &&
+            kind !== 'prefabInstance' && kind !== 'stripped' && kind !== 'owned') {
             throw new Error(`Invalid v3 identity kind for ${machineId}: ${kind}`);
         }
         const fields = new Map();
@@ -153,6 +188,8 @@ function parseIdentity(lines) {
             scriptGuid: fields.get('script'),
             scriptFileId: fields.get('scriptFileID'),
             scriptType: fields.has('scriptType') ? Number(fields.get('scriptType')) : undefined,
+            stripped: fields.get('stripped') === '1',
+            nestedRoot: fields.get('nestedRoot') === '1',
         });
     }
     return result;
@@ -164,6 +201,20 @@ function validateBindings(root, details, identity) {
             throw new Error(`Duplicate STRUCTURE machine identity ${node.machineId}.`);
         used.add(node.machineId);
         const go = identity.get(node.machineId);
+        if (node.nestedSourceGuid) {
+            if (!go || go.kind !== 'prefabInstance' || go.typeId !== 1001) {
+                throw new Error(`Nested STRUCTURE ${node.machineId} is not bound to a PrefabInstance identity.`);
+            }
+            const rootTransforms = [...identity.values()].filter(record => record.kind === 'stripped' && record.ownerId === node.machineId && record.nestedRoot &&
+                (record.typeId === 4 || record.typeId === 224));
+            if (rootTransforms.length !== 1) {
+                throw new Error(`Nested PrefabInstance ${node.machineId} requires exactly one stripped root Transform.`);
+            }
+            if (node.components.length > 0 || node.children.length > 0) {
+                throw new Error(`Expanded nested STRUCTURE is not implemented for ${node.machineId}.`);
+            }
+            return;
+        }
         if (!go || go.kind !== 'gameObject' || go.typeId !== 1) {
             throw new Error(`STRUCTURE ${node.machineId} is not bound to a GameObject identity.`);
         }
@@ -189,10 +240,16 @@ function validateBindings(root, details, identity) {
             throw new Error(`DETAILS target ${machineId} has no IDENTITY record.`);
     }
     for (const record of identity.values()) {
-        if (record.kind !== 'gameObject' && record.ownerId) {
+        if ((record.kind === 'transform' || record.kind === 'component') && record.ownerId) {
             const owner = identity.get(record.ownerId);
             if (!owner || owner.kind !== 'gameObject') {
                 throw new Error(`IDENTITY ${record.machineId} has invalid owner ${record.ownerId}.`);
+            }
+        }
+        if (record.kind === 'stripped' && record.ownerId) {
+            const owner = identity.get(record.ownerId);
+            if (!owner || owner.kind !== 'prefabInstance') {
+                throw new Error(`Stripped IDENTITY ${record.machineId} has invalid owner ${record.ownerId}.`);
             }
         }
     }

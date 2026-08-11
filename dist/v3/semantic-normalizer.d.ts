@@ -4,8 +4,9 @@ export interface SemanticDifference {
     expected: unknown;
     actual: unknown;
 }
-/** Canonical semantic view for the first v3 compiler slice. Structural links
- * are represented explicitly rather than compared as serializer fields. */
+/** Canonical semantic view for regular prefabs. Local structural links are
+ * represented explicitly; ownership documents are compared as serialized
+ * semantic records. */
 export declare function normalizeLocalPrefab(file: UnityFile): unknown;
 export declare function compareLocalPrefabSemantics(expected: UnityFile, actual: UnityFile): SemanticDifference | null;
 //# sourceMappingURL=semantic-normalizer.d.ts.map

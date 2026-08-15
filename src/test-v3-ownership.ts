@@ -1,4 +1,5 @@
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import { compileV3 } from './v3/compiler';
 import { readV3 } from './v3/reader';
@@ -47,6 +48,23 @@ function sourceBackedVariantText() {
   return writeV3(variant, {
     sourceResolver: { resolveFilePath: guid => guid === sourceGuid ? sourcePath : undefined },
   });
+}
+
+function makeVariantSource(sourceGuid: string, sourceRootFileId: string, name?: string) {
+  const variant = parseUnityYaml(sample('variants', 'Ellen_Variant.prefab'));
+  const instance = variant.documents.find(document => document.typeId === 1001)!;
+  instance.properties.m_SourcePrefab = { fileID: 100100000, guid: sourceGuid, type: 3 };
+  instance.properties.m_Modification.m_Modifications = name === undefined ? [] : [{
+    target: { fileID: sourceRootFileId, guid: sourceGuid, type: 3 },
+    propertyPath: 'm_Name',
+    value: name,
+    objectReference: { fileID: 0 },
+  }];
+  instance.properties.m_Modification.m_RemovedComponents = [];
+  instance.properties.m_Modification.m_RemovedGameObjects = [];
+  instance.properties.m_Modification.m_AddedGameObjects = [];
+  instance.properties.m_Modification.m_AddedComponents = [];
+  return parseUnityYaml(writeUnityYaml(variant));
 }
 
 function clearRefsTo(value: any, deleted: Set<string>): any {
@@ -132,6 +150,57 @@ console.log('\n=== v3 ownership cold-boundary edits ===');
     'variant delta edit compiles without the original variant YAML');
   assert(rebuilt.variantSource?.guid === 'a5674d01884853d4e8f2386a171e14d9',
     'variant source GUID survives standalone compilation');
+}
+
+{
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'ubridge-v3-chain-'));
+  try {
+    const base = parseUnityYaml(sample('prefabs', 'Amount.prefab'));
+    const basePath = path.join(__dirname, '..', 'samples', 'prefabs', 'Amount.prefab');
+    const baseGuid = '11111111111111111111111111111111';
+    const middleGuid = '22222222222222222222222222222222';
+    const middle = makeVariantSource(baseGuid, base.hierarchy!.fileId, 'MiddleVariantRoot');
+    const middlePath = path.join(directory, 'Middle.prefab');
+    fs.writeFileSync(middlePath, writeUnityYaml(middle));
+    const leaf = makeVariantSource(middleGuid, base.hierarchy!.fileId);
+    const text = writeV3(leaf, {
+      sourceResolver: {
+        resolveFilePath: guid => guid === middleGuid ? middlePath : guid === baseGuid ? basePath : undefined,
+      },
+    });
+    const document = readV3(text);
+    const inheritedRoot = document.variantRoots![0];
+    const inheritedIdentity = document.identity.get(inheritedRoot.machineId)!;
+    const rebuilt = parseUnityYaml(writeUnityYaml(compileV3(document)));
+    assert(inheritedRoot.name === 'MiddleVariantRoot' &&
+           inheritedIdentity.sourceGuid === middleGuid &&
+           inheritedIdentity.sourceFileId === base.hierarchy!.fileId,
+      'variant-of-variant expands the direct source effective tree and preserves direct ownership');
+    assert(rebuilt.documents.length === leaf.documents.length &&
+           rebuilt.variantSource?.guid === middleGuid &&
+           rebuilt.prefabInstances[0].modifications.length === 0,
+      'untouched variant-of-variant cold-compiles without source YAML');
+
+    const middleInstance = middle.documents.find(item => item.typeId === 1001)!;
+    middleInstance.properties.m_Modification.m_Modifications.push({
+      target: { fileID: base.hierarchy!.fileId, guid: baseGuid, type: 3 },
+      propertyPath: 'm_Name',
+      value: 'ConflictingMiddleName',
+      objectReference: { fileID: 0 },
+    });
+    fs.writeFileSync(middlePath, writeUnityYaml(middle));
+    expectThrow(
+      () => writeV3(leaf, {
+        sourceResolver: {
+          resolveFilePath: guid => guid === middleGuid ? middlePath : guid === baseGuid ? basePath : undefined,
+        },
+      }),
+      'ambiguous name ownership',
+      'variant source-chain expansion rejects ambiguous intermediate ownership'
+    );
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 }
 
 {

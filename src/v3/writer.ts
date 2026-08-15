@@ -405,11 +405,8 @@ function buildInheritedVariantRoots(
 ): V3StructureNode[] {
   const sourcePath = options.sourceResolver?.resolveFilePath(sourceGuid);
   if (!sourcePath) return [];
-  const source = parseUnityYaml(readFileSync(sourcePath, 'utf-8'));
-  if (source.type !== 'prefab' || !source.hierarchy) {
-    throw new Error(`Variant source ${sourceGuid} does not resolve to a prefab hierarchy.`);
-  }
-  const sourceById = new Map(source.documents.map(document => [document.fileId, document]));
+  const source = resolveEffectiveVariantSource(sourceGuid, options, new Set());
+  const sourceById = source.documents;
   let gameObjectIndex = 0;
   let transformIndex = 0;
   let componentIndex = 0;
@@ -510,6 +507,94 @@ function buildInheritedVariantRoots(
     }
   }
   return roots;
+}
+
+interface EffectiveVariantSource {
+  hierarchy: GameObjectNode;
+  documents: Map<string, UnityDocument>;
+}
+
+function resolveEffectiveVariantSource(
+  sourceGuid: string,
+  options: V3WriterOptions,
+  resolving: Set<string>
+): EffectiveVariantSource {
+  if (resolving.has(sourceGuid)) {
+    throw new Error(`Variant source chain contains a cycle at ${sourceGuid}.`);
+  }
+  const sourcePath = options.sourceResolver?.resolveFilePath(sourceGuid);
+  if (!sourcePath) throw new Error(`Variant source chain cannot resolve GUID ${sourceGuid}.`);
+  resolving.add(sourceGuid);
+  try {
+    const source = parseUnityYaml(readFileSync(sourcePath, 'utf-8'));
+    if (source.type === 'prefab' && source.hierarchy) {
+      return {
+        hierarchy: cloneHierarchy(source.hierarchy),
+        documents: new Map(source.documents.map(document => [document.fileId, document])),
+      };
+    }
+    if (source.type !== 'variant') {
+      throw new Error(`Variant source ${sourceGuid} does not resolve to a prefab or variant hierarchy.`);
+    }
+    if (source.hierarchy) {
+      throw new Error(`Variant source chain ${sourceGuid} with variant-added roots is not implemented.`);
+    }
+    const roots = source.prefabInstances.filter(instance => String(instance.transformParent.fileID) === '0');
+    if (roots.length !== 1 || !roots[0].sourcePrefab.guid) {
+      throw new Error(`Variant source chain ${sourceGuid} must have exactly one root PrefabInstance owner.`);
+    }
+    const root = roots[0];
+    const parentGuid = root.sourcePrefab.guid!;
+    if (root.removedGameObjects.length > 0 || root.removedComponents.length > 0 ||
+        root.addedComponents.length > 0) {
+      throw new Error(`Variant source chain ${sourceGuid} with structural deltas is not implemented.`);
+    }
+    const effective = resolveEffectiveVariantSource(parentGuid, options, resolving);
+    applyVariantChainNames(effective.hierarchy, root, sourceGuid);
+    return effective;
+  } finally {
+    resolving.delete(sourceGuid);
+  }
+}
+
+function applyVariantChainNames(
+  hierarchy: GameObjectNode,
+  instance: UnityFile['prefabInstances'][number],
+  variantGuid: string
+): void {
+  const byFileId = new Map<string, GameObjectNode>();
+  const collect = (node: GameObjectNode): void => {
+    if (byFileId.has(node.fileId)) {
+      throw new Error(`Variant source chain ${variantGuid} has ambiguous GameObject fileID ${node.fileId}.`);
+    }
+    byFileId.set(node.fileId, node);
+    node.children.forEach(collect);
+  };
+  collect(hierarchy);
+  const renamed = new Set<string>();
+  for (const modification of instance.modifications) {
+    if (modification.propertyPath !== 'm_Name') continue;
+    const targetFileId = String(modification.target.fileID);
+    const target = byFileId.get(targetFileId);
+    if (!target) {
+      throw new Error(`Variant source chain ${variantGuid} name target ${targetFileId} is not in its effective tree.`);
+    }
+    if (renamed.has(targetFileId)) {
+      throw new Error(`Variant source chain ${variantGuid} has ambiguous name ownership for ${targetFileId}.`);
+    }
+    target.name = modification.value;
+    renamed.add(targetFileId);
+  }
+}
+
+function cloneHierarchy(node: GameObjectNode): GameObjectNode {
+  return {
+    ...node,
+    transform: { ...node.transform, properties: { ...node.transform.properties } },
+    components: node.components.map(component => ({ ...component, properties: { ...component.properties } })),
+    children: node.children.map(cloneHierarchy),
+    nestedPrefab: node.nestedPrefab ? { ...node.nestedPrefab } : undefined,
+  };
 }
 
 function applySourceFingerprints(

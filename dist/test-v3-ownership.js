@@ -34,6 +34,7 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
 const fs = __importStar(require("fs"));
+const os = __importStar(require("os"));
 const path = __importStar(require("path"));
 const compiler_1 = require("./v3/compiler");
 const reader_1 = require("./v3/reader");
@@ -76,6 +77,22 @@ function sourceBackedVariantText() {
     return (0, writer_1.writeV3)(variant, {
         sourceResolver: { resolveFilePath: guid => guid === sourceGuid ? sourcePath : undefined },
     });
+}
+function makeVariantSource(sourceGuid, sourceRootFileId, name) {
+    const variant = (0, unity_yaml_parser_1.parseUnityYaml)(sample('variants', 'Ellen_Variant.prefab'));
+    const instance = variant.documents.find(document => document.typeId === 1001);
+    instance.properties.m_SourcePrefab = { fileID: 100100000, guid: sourceGuid, type: 3 };
+    instance.properties.m_Modification.m_Modifications = name === undefined ? [] : [{
+            target: { fileID: sourceRootFileId, guid: sourceGuid, type: 3 },
+            propertyPath: 'm_Name',
+            value: name,
+            objectReference: { fileID: 0 },
+        }];
+    instance.properties.m_Modification.m_RemovedComponents = [];
+    instance.properties.m_Modification.m_RemovedGameObjects = [];
+    instance.properties.m_Modification.m_AddedGameObjects = [];
+    instance.properties.m_Modification.m_AddedComponents = [];
+    return (0, unity_yaml_parser_1.parseUnityYaml)((0, unity_yaml_writer_1.writeUnityYaml)(variant));
 }
 function clearRefsTo(value, deleted) {
     if (Array.isArray(value))
@@ -144,6 +161,50 @@ console.log('\n=== v3 ownership cold-boundary edits ===');
         .find(modification => modification.propertyPath === 'm_Name');
     assert(rebuiltName?.value === 'Ellen_v3_edited', 'variant delta edit compiles without the original variant YAML');
     assert(rebuilt.variantSource?.guid === 'a5674d01884853d4e8f2386a171e14d9', 'variant source GUID survives standalone compilation');
+}
+{
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'ubridge-v3-chain-'));
+    try {
+        const base = (0, unity_yaml_parser_1.parseUnityYaml)(sample('prefabs', 'Amount.prefab'));
+        const basePath = path.join(__dirname, '..', 'samples', 'prefabs', 'Amount.prefab');
+        const baseGuid = '11111111111111111111111111111111';
+        const middleGuid = '22222222222222222222222222222222';
+        const middle = makeVariantSource(baseGuid, base.hierarchy.fileId, 'MiddleVariantRoot');
+        const middlePath = path.join(directory, 'Middle.prefab');
+        fs.writeFileSync(middlePath, (0, unity_yaml_writer_1.writeUnityYaml)(middle));
+        const leaf = makeVariantSource(middleGuid, base.hierarchy.fileId);
+        const text = (0, writer_1.writeV3)(leaf, {
+            sourceResolver: {
+                resolveFilePath: guid => guid === middleGuid ? middlePath : guid === baseGuid ? basePath : undefined,
+            },
+        });
+        const document = (0, reader_1.readV3)(text);
+        const inheritedRoot = document.variantRoots[0];
+        const inheritedIdentity = document.identity.get(inheritedRoot.machineId);
+        const rebuilt = (0, unity_yaml_parser_1.parseUnityYaml)((0, unity_yaml_writer_1.writeUnityYaml)((0, compiler_1.compileV3)(document)));
+        assert(inheritedRoot.name === 'MiddleVariantRoot' &&
+            inheritedIdentity.sourceGuid === middleGuid &&
+            inheritedIdentity.sourceFileId === base.hierarchy.fileId, 'variant-of-variant expands the direct source effective tree and preserves direct ownership');
+        assert(rebuilt.documents.length === leaf.documents.length &&
+            rebuilt.variantSource?.guid === middleGuid &&
+            rebuilt.prefabInstances[0].modifications.length === 0, 'untouched variant-of-variant cold-compiles without source YAML');
+        const middleInstance = middle.documents.find(item => item.typeId === 1001);
+        middleInstance.properties.m_Modification.m_Modifications.push({
+            target: { fileID: base.hierarchy.fileId, guid: baseGuid, type: 3 },
+            propertyPath: 'm_Name',
+            value: 'ConflictingMiddleName',
+            objectReference: { fileID: 0 },
+        });
+        fs.writeFileSync(middlePath, (0, unity_yaml_writer_1.writeUnityYaml)(middle));
+        expectThrow(() => (0, writer_1.writeV3)(leaf, {
+            sourceResolver: {
+                resolveFilePath: guid => guid === middleGuid ? middlePath : guid === baseGuid ? basePath : undefined,
+            },
+        }), 'ambiguous name ownership', 'variant source-chain expansion rejects ambiguous intermediate ownership');
+    }
+    finally {
+        fs.rmSync(directory, { recursive: true, force: true });
+    }
 }
 {
     const baselineText = sourceBackedVariantText();

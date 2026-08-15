@@ -65,15 +65,19 @@ remain intentionally unsupported. When a variant base prefab is available throug
 the source resolver, v3 exposes its inherited GameObject/component hierarchy in
 the effective STRUCTURE, applies existing name overrides, records
 `origin:inherited` source identities, and cold-compiles the untouched view without
-emitting source objects as local documents. An inherited GameObject removal is an
-explicit tombstone, for example `└─ - LegacyButton @ig2 [Button @ic4]`; it compiles
-to `m_RemovedGameObjects`, while removing an inherited component from the brackets
-compiles to `m_RemovedComponents`. A new local child beneath an inherited node
-compiles to `m_AddedGameObjects` using the inherited parent Transform identity.
-Existing removed deltas are projected back into the same effective representation.
-Expansion currently fails closed for inherited nested PrefabInstances, a source
-tree mixed with variant-added roots, and local component additions on inherited
-GameObjects. Without a source resolver, nested and variant baseline ownership
+emitting source objects as local documents. Variant-of-variant sources are expanded
+through an unambiguous source chain; intermediate name overrides become effective
+state while emitted identities remain owned by the variant's direct source. An
+inherited GameObject removal is an explicit tombstone, for example
+`└─ - LegacyButton @ig2 [Button @ic4]`; it compiles to `m_RemovedGameObjects`, while
+removing an inherited component from the brackets compiles to `m_RemovedComponents`.
+A new local child beneath an inherited node compiles to `m_AddedGameObjects` using
+the inherited parent Transform identity. Existing removed deltas are projected back
+into the same effective representation. Source-chain expansion currently fails
+closed for intermediate structural deltas or variant-added roots, inherited nested
+PrefabInstances, a direct source tree mixed with variant-added roots, and local
+component additions on inherited GameObjects. Without a source resolver, nested
+and variant baseline ownership
 documents remain standalone, and existing PrefabInstance delta values can be
 edited in DETAILS. Local objects not yet exposed in the effective STRUCTURE are
 kept as explicit `owned` identity/details records until ownership-aware

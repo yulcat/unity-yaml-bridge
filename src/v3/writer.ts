@@ -745,25 +745,177 @@ function resolveEffectiveVariantSource(
     if (source.type !== 'variant') {
       throw new Error(`Variant source ${sourceGuid} does not resolve to a prefab or variant hierarchy.`);
     }
-    if (source.hierarchy) {
-      throw new Error(`Variant source chain ${sourceGuid} with variant-added roots is not implemented.`);
-    }
     const roots = source.prefabInstances.filter(instance => String(instance.transformParent.fileID) === '0');
     if (roots.length !== 1 || !roots[0].sourcePrefab.guid) {
       throw new Error(`Variant source chain ${sourceGuid} must have exactly one root PrefabInstance owner.`);
     }
     const root = roots[0];
     const parentGuid = root.sourcePrefab.guid!;
-    if (root.addedComponents.length > 0) {
-      throw new Error(`Variant source chain ${sourceGuid} with structural deltas is not implemented.`);
-    }
     const effective = resolveEffectiveVariantSource(parentGuid, options, resolving);
+    applyVariantChainAddedRoots(effective, root, source, sourceGuid, parentGuid);
+    applyVariantChainAddedComponents(effective, root, source, sourceGuid);
     applyVariantChainRemovedGameObjects(effective.hierarchy, root, sourceGuid, parentGuid);
     applyVariantChainRemovedComponents(effective.hierarchy, root, sourceGuid, parentGuid);
     applyVariantChainNames(effective.hierarchy, root, sourceGuid);
     return effective;
   } finally {
     resolving.delete(sourceGuid);
+  }
+}
+
+function applyVariantChainAddedRoots(
+  effective: EffectiveVariantSource,
+  instance: UnityFile['prefabInstances'][number],
+  variant: UnityFile,
+  variantGuid: string,
+  parentGuid: string
+): void {
+  if (!variant.hierarchy) return;
+  const localDocuments = new Map(variant.documents.map(document => [document.fileId, document]));
+  const localRoots = variant.hierarchy.name === '__added_root__' ||
+    !localDocuments.has(variant.hierarchy.fileId)
+    ? variant.hierarchy.children
+    : [variant.hierarchy];
+  const rootDocument = localDocuments.get(instance.fileId);
+  const additions: any[] = rootDocument?.properties.m_Modification?.m_AddedGameObjects ?? [];
+  const additionsByObject = new Map<string, any>();
+  for (const addition of additions) {
+    const target = addition?.targetCorrespondingSourceObject;
+    const addedFileId = String(addition?.addedObject?.fileID ?? '0');
+    if (String(target?.guid ?? '') !== parentGuid || String(target?.fileID ?? '0') === '0' ||
+        addedFileId === '0' || additionsByObject.has(addedFileId)) {
+      throw new Error(
+        `Variant source chain ${variantGuid} has ambiguous added-root ownership for ${addedFileId}.`
+      );
+    }
+    additionsByObject.set(addedFileId, addition);
+  }
+
+  const inheritedParents = new Map<string, GameObjectNode[]>();
+  const collectInherited = (node: GameObjectNode): void => {
+    const matches = inheritedParents.get(node.transform.fileId) ?? [];
+    matches.push(node);
+    inheritedParents.set(node.transform.fileId, matches);
+    node.children.forEach(collectInherited);
+  };
+  collectInherited(effective.hierarchy);
+
+  const addDocuments = (node: GameObjectNode): void => {
+    if (node.nestedPrefab) {
+      throw new Error(
+        `Variant source chain ${variantGuid} has unsupported nested content in added root ${node.name}.`
+      );
+    }
+    for (const fileId of [node.fileId, node.transform.fileId, ...node.components.map(item => item.fileId)]) {
+      const document = localDocuments.get(fileId);
+      if (!document || effective.documents.has(fileId)) {
+        throw new Error(
+          `Variant source chain ${variantGuid} has ambiguous added-root document ${fileId}.`
+        );
+      }
+      effective.documents.set(fileId, document);
+    }
+    node.children.forEach(addDocuments);
+  };
+
+  for (const localRoot of localRoots) {
+    const addition = additionsByObject.get(localRoot.transform.fileId);
+    if (!addition) {
+      throw new Error(
+        `Variant source chain ${variantGuid} added root ${localRoot.fileId} has no direct owner.`
+      );
+    }
+    additionsByObject.delete(localRoot.transform.fileId);
+    const targetFileId = String(addition.targetCorrespondingSourceObject.fileID);
+    const parentMatches = inheritedParents.get(targetFileId) ?? [];
+    if (parentMatches.length !== 1) {
+      throw new Error(
+        `Variant source chain ${variantGuid} added-root parent ${targetFileId} ` +
+        'is not uniquely owned by its direct source.'
+      );
+    }
+    const transformDocument = localDocuments.get(localRoot.transform.fileId);
+    const parentStubId = String(transformDocument?.properties.m_Father?.fileID ?? '0');
+    const parentStub = localDocuments.get(parentStubId);
+    const stubSource = parentStub?.properties.m_CorrespondingSourceObject;
+    if (!transformDocument || transformDocument.stripped ||
+        !parentStub?.stripped || (parentStub.typeId !== 4 && parentStub.typeId !== 224) ||
+        String(stubSource?.fileID ?? '0') !== targetFileId ||
+        String(stubSource?.guid ?? '') !== parentGuid ||
+        String(parentStub.properties.m_PrefabInstance?.fileID ?? '0') !== instance.fileId) {
+      throw new Error(
+        `Variant source chain ${variantGuid} added root ${localRoot.fileId} ` +
+        'has ambiguous direct-owner parent identity.'
+      );
+    }
+    const projected = cloneHierarchy(localRoot);
+    addDocuments(projected);
+    const parent = parentMatches[0];
+    const requestedIndex = Number(addition.insertIndex ?? -1);
+    const insertionIndex = requestedIndex < 0
+      ? parent.children.length
+      : Math.min(requestedIndex, parent.children.length);
+    parent.children.splice(insertionIndex, 0, projected);
+  }
+  if (additionsByObject.size > 0) {
+    throw new Error(
+      `Variant source chain ${variantGuid} addedObject ${additionsByObject.keys().next().value} ` +
+      'is not an exposed added root.'
+    );
+  }
+}
+
+function applyVariantChainAddedComponents(
+  effective: EffectiveVariantSource,
+  instance: UnityFile['prefabInstances'][number],
+  variant: UnityFile,
+  variantGuid: string
+): void {
+  const localDocuments = new Map(variant.documents.map(document => [document.fileId, document]));
+  const additionsByGameObject = collectVariantAddedComponents(instance, localDocuments);
+  const owners = new Map<string, GameObjectNode[]>();
+  const collect = (node: GameObjectNode): void => {
+    const matches = owners.get(node.fileId) ?? [];
+    matches.push(node);
+    owners.set(node.fileId, matches);
+    node.children.forEach(collect);
+  };
+  collect(effective.hierarchy);
+
+  for (const [targetFileId, additions] of additionsByGameObject) {
+    const matches = owners.get(targetFileId) ?? [];
+    if (matches.length !== 1) {
+      throw new Error(
+        `Variant source chain ${variantGuid} added-component target ${targetFileId} ` +
+        'is not uniquely owned by its direct source.'
+      );
+    }
+    const owner = matches[0];
+    for (const document of additions) {
+      if (effective.documents.has(document.fileId) ||
+          owner.components.some(component => component.fileId === document.fileId)) {
+        throw new Error(
+          `Variant source chain ${variantGuid} has ambiguous added component ${document.fileId}.`
+        );
+      }
+      const script = document.typeId === 114 ? document.properties.m_Script : undefined;
+      const requestedIndex = instance.addedComponents.find(entry =>
+        String(entry.addedComponent.fileID) === document.fileId
+      )?.insertIndex ?? -1;
+      const component = {
+        typeName: script?.guid ? String(script.guid) : document.typeName,
+        typeId: document.typeId,
+        fileId: document.fileId,
+        scriptGuid: script?.guid ? String(script.guid) : undefined,
+        properties: { ...document.properties },
+        stripped: false,
+      };
+      const insertionIndex = requestedIndex < 0
+        ? owner.components.length
+        : Math.min(requestedIndex, owner.components.length);
+      owner.components.splice(insertionIndex, 0, component);
+      effective.documents.set(document.fileId, document);
+    }
   }
 }
 

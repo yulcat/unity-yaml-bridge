@@ -297,6 +297,114 @@ console.log('\n=== v3 ownership cold-boundary edits ===');
 }
 
 {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'ubridge-v3-chain-added-root-'));
+  try {
+    const base = parseUnityYaml(sample('prefabs', 'Amount.prefab'));
+    const basePath = path.join(__dirname, '..', 'samples', 'prefabs', 'Amount.prefab');
+    const baseGuid = '30303030303030303030303030303030';
+    const middleGuid = '40404040404040404040404040404040';
+    const middle = makeMixedVariant(baseGuid);
+    const middleAddedRoot = middle.hierarchy!.name === '__added_root__'
+      ? middle.hierarchy!.children[0]
+      : middle.hierarchy!;
+    const middlePath = path.join(directory, 'MiddleAddedRoot.prefab');
+    fs.writeFileSync(middlePath, writeUnityYaml(middle));
+
+    const leaf = makeVariantSource(middleGuid, base.hierarchy!.fileId);
+    const document = readV3(writeV3(leaf, {
+      sourceResolver: {
+        resolveFilePath: guid => guid === middleGuid ? middlePath : guid === baseGuid ? basePath : undefined,
+      },
+    }));
+    const inheritedAddedRoot = document.variantRoots![0].children.find(node =>
+      node.name === 'VariantAdded'
+    );
+    const addedRootIdentity = inheritedAddedRoot && document.identity.get(inheritedAddedRoot.machineId);
+    const addedTransformIdentity = inheritedAddedRoot && [...document.identity.values()].find(identity =>
+      identity.kind === 'transform' && identity.ownerId === inheritedAddedRoot.machineId
+    );
+    const rebuilt = parseUnityYaml(writeUnityYaml(compileV3(document)));
+    assert(addedRootIdentity?.origin === 'inherited' &&
+           addedRootIdentity.sourceGuid === middleGuid &&
+           addedRootIdentity.sourceFileId === middleAddedRoot.fileId &&
+           addedTransformIdentity?.sourceGuid === middleGuid &&
+           addedTransformIdentity.sourceFileId === middleAddedRoot.transform.fileId &&
+           rebuilt.documents.length === leaf.documents.length &&
+           rebuilt.documents.find(item => item.typeId === 1001)!
+             .properties.m_Modification.m_AddedGameObjects.length === 0,
+      'intermediate variant-added root projects into the leaf effective tree with direct-source identity');
+
+    const localTransformDocument = middle.documents.find(item =>
+      item.fileId === middleAddedRoot.transform.fileId
+    )!;
+    const parentStub = middle.documents.find(item =>
+      item.fileId === String(localTransformDocument.properties.m_Father.fileID)
+    )!;
+    parentStub.properties.m_PrefabInstance.fileID = '999999999999999999';
+    fs.writeFileSync(middlePath, writeUnityYaml(middle));
+    expectThrow(
+      () => writeV3(leaf, {
+        sourceResolver: {
+          resolveFilePath: guid => guid === middleGuid ? middlePath : guid === baseGuid ? basePath : undefined,
+        },
+      }),
+      'ambiguous direct-owner parent identity',
+      'intermediate variant-added root rejects an ambiguous direct PrefabInstance owner'
+    );
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+}
+
+{
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'ubridge-v3-chain-added-component-'));
+  try {
+    const base = parseUnityYaml(sample('prefabs', 'Amount.prefab'));
+    const basePath = path.join(__dirname, '..', 'samples', 'prefabs', 'Amount.prefab');
+    const baseGuid = '10101010101010101010101010101010';
+    const middleGuid = '20202020202020202020202020202020';
+    const middleDocument = readV3(writeV3(
+      makeVariantSource(baseGuid, base.hierarchy!.fileId),
+      { sourceResolver: { resolveFilePath: guid => guid === baseGuid ? basePath : undefined } }
+    ));
+    const middleRoot = middleDocument.variantRoots![0];
+    middleDocument.identity.set('middleAddedComponent', {
+      machineId: 'middleAddedComponent', kind: 'component', typeId: 65,
+      typeName: 'BoxCollider', displayName: 'BoxCollider', ownerId: middleRoot.machineId,
+      prefabOwnerId: middleDocument.variantRootId,
+    });
+    middleDocument.details.set('middleAddedComponent', {
+      m_Enabled: 1, serializedVersion: 3,
+      m_Size: { x: 2, y: 3, z: 4 }, m_Center: { x: 0, y: 0, z: 0 },
+    });
+    middleRoot.components.push({ typeName: 'BoxCollider', machineId: 'middleAddedComponent' });
+    const middle = parseUnityYaml(writeUnityYaml(compileV3(middleDocument)));
+    const middleComponent = middle.documents.find(document => document.typeId === 65)!;
+    const middlePath = path.join(directory, 'MiddleAddedComponent.prefab');
+    fs.writeFileSync(middlePath, writeUnityYaml(middle));
+
+    const leaf = makeVariantSource(middleGuid, base.hierarchy!.fileId);
+    const document = readV3(writeV3(leaf, {
+      sourceResolver: {
+        resolveFilePath: guid => guid === middleGuid ? middlePath : guid === baseGuid ? basePath : undefined,
+      },
+    }));
+    const inheritedRoot = document.variantRoots![0];
+    const projected = inheritedRoot.components.find(component => component.typeName === 'BoxCollider');
+    const projectedIdentity = projected && document.identity.get(projected.machineId);
+    const rebuilt = parseUnityYaml(writeUnityYaml(compileV3(document)));
+    assert(projectedIdentity?.origin === 'inherited' &&
+           projectedIdentity.sourceGuid === middleGuid &&
+           projectedIdentity.sourceFileId === middleComponent.fileId &&
+           rebuilt.documents.length === leaf.documents.length &&
+           rebuilt.prefabInstances[0].addedComponents.length === 0,
+      'intermediate added-component delta projects into the leaf effective tree with direct-source identity');
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+}
+
+{
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'ubridge-v3-chain-remove-component-'));
   try {
     const base = parseUnityYaml(sample('prefabs', 'Amount.prefab'));

@@ -92,13 +92,18 @@ pre-existing variant-added GameObject roots: each local root is attached beneath
 inherited source Transform from `m_AddedGameObjects`, remains locally owned in
 IDENTITY, and cold-compiles with its original local and stripped-parent fileIDs.
 Missing, duplicate, indirect, or otherwise ambiguous added-root ownership fails
-closed. Source-chain expansion currently fails closed for intermediate added components
-or variant-added roots, expanded internals or structural edits of inherited
-nested PrefabInstances. Without a source resolver, nested and variant baseline
-ownership documents remain standalone, and existing PrefabInstance delta values can
-be edited in DETAILS. Local objects not yet exposed in the effective STRUCTURE are
-kept as explicit `owned` identity/details records until ownership-aware
-reconciliation is implemented.
+closed. Intermediate variants' added components and variant-added GameObject roots
+are projected through source chains into the leaf effective tree. Their inherited
+IDENTITY records bind to the leaf's direct source GUID and the intermediate local
+fileIDs, while untouched leaf compilation emits only the leaf PrefabInstance and does
+not replay intermediate addition deltas. Added-root parent stubs and added-component
+targets must resolve to exactly one direct PrefabInstance owner; ambiguous, indirect,
+missing, or duplicate ownership fails closed. Source-chain expansion still fails closed
+for expanded internals or structural edits of inherited nested PrefabInstances. Without
+a source resolver, nested and variant baseline ownership documents remain standalone,
+and existing PrefabInstance delta values can be edited in DETAILS. Local objects not yet
+exposed in the effective STRUCTURE are kept as explicit `owned` identity/details records
+until ownership-aware reconciliation is implemented.
 
 ## CLI
 

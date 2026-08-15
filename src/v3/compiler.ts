@@ -440,7 +440,14 @@ function compileVariant(document: V3Document): UnityFile {
                    (!transformIdentity.sourceGuid || !transformIdentity.sourceFileId)) {
           throw new Error(`Inherited parent ${transformIdentity.machineId} has no source identity.`);
         }
-        buildNode(child, '0', index, transformIdentity.machineId);
+        let inheritedParentTransformId = '0';
+        if (!child.nestedSourceGuid && childIdentity.origin !== 'inherited') {
+          const existingParentStub = findInheritedTransformStub(document, transformIdentity);
+          if (existingParentStub) {
+            inheritedParentTransformId = allocated.get(existingParentStub.machineId)!;
+          }
+        }
+        buildNode(child, inheritedParentTransformId, index, transformIdentity.machineId);
       });
       return;
     }
@@ -654,6 +661,36 @@ function allocateSyntheticFileId(
     }
     salt++;
   }
+}
+
+function findInheritedTransformStub(
+  document: V3Document,
+  transform: V3IdentityRecord
+): V3IdentityRecord | undefined {
+  const sourceMatches = [...document.identity.values()].filter(identity => {
+    if (identity.kind !== 'stripped' || (identity.typeId !== 4 && identity.typeId !== 224)) {
+      return false;
+    }
+    const details: any = document.details.get(identity.machineId);
+    const source = details?.m_CorrespondingSourceObject;
+    return String(source?.fileID ?? '0') === transform.sourceFileId &&
+      String(source?.guid ?? '') === transform.sourceGuid;
+  });
+  const directMatches = sourceMatches.filter(identity => {
+    if (identity.ownerId !== document.variantRootId) return false;
+    const owner: any = document.details.get(identity.machineId)?.m_PrefabInstance;
+    const root = document.variantRootId
+      ? document.identity.get(document.variantRootId)
+      : undefined;
+    return owner?.$ref === document.variantRootId ||
+      (!!root?.fileId && String(owner?.fileID ?? '0') === root.fileId);
+  });
+  if (sourceMatches.length > 0 && directMatches.length !== 1) {
+    throw new Error(
+      `Inherited Transform ${transform.machineId} has ambiguous stripped Transform ownership.`
+    );
+  }
+  return directMatches[0];
 }
 
 function findInheritedGameObjectStub(

@@ -94,6 +94,51 @@ function makeVariantSource(sourceGuid, sourceRootFileId, name) {
     instance.properties.m_Modification.m_AddedComponents = [];
     return (0, unity_yaml_parser_1.parseUnityYaml)((0, unity_yaml_writer_1.writeUnityYaml)(variant));
 }
+function makeMixedVariant(sourceGuid) {
+    const source = (0, unity_yaml_parser_1.parseUnityYaml)(sample('prefabs', 'Amount.prefab'));
+    const variant = makeVariantSource(sourceGuid, source.hierarchy.fileId);
+    const instance = variant.documents.find(document => document.typeId === 1001);
+    const sourceTransformId = source.hierarchy.transform.fileId;
+    const gameObjectFileId = '9100000000000000001';
+    const transformFileId = '9100000000000000002';
+    const strippedParentFileId = '9100000000000000003';
+    instance.properties.m_Modification.m_AddedGameObjects = [{
+            targetCorrespondingSourceObject: { fileID: sourceTransformId, guid: sourceGuid, type: 3 },
+            insertIndex: -1,
+            addedObject: { fileID: transformFileId },
+        }];
+    variant.documents.push({
+        typeId: 1, typeName: 'GameObject', fileId: gameObjectFileId, stripped: false,
+        properties: {
+            m_ObjectHideFlags: 0, m_CorrespondingSourceObject: { fileID: 0 },
+            m_PrefabInstance: { fileID: 0 }, m_PrefabAsset: { fileID: 0 },
+            serializedVersion: 6, m_Component: [{ component: { fileID: transformFileId } }],
+            m_Layer: 0, m_Name: 'VariantAdded', m_TagString: 'Untagged', m_Icon: { fileID: 0 },
+            m_NavMeshLayer: 0, m_StaticEditorFlags: 0, m_IsActive: 1,
+        },
+    }, {
+        typeId: 224, typeName: 'RectTransform', fileId: transformFileId, stripped: false,
+        properties: {
+            m_ObjectHideFlags: 0, m_CorrespondingSourceObject: { fileID: 0 },
+            m_PrefabInstance: { fileID: 0 }, m_PrefabAsset: { fileID: 0 },
+            m_GameObject: { fileID: gameObjectFileId }, serializedVersion: 2,
+            m_LocalRotation: { x: 0, y: 0, z: 0, w: 1 },
+            m_LocalPosition: { x: 0, y: 0, z: 0 }, m_LocalScale: { x: 1, y: 1, z: 1 },
+            m_Children: [], m_Father: { fileID: strippedParentFileId }, m_RootOrder: 0,
+            m_LocalEulerAnglesHint: { x: 0, y: 0, z: 0 },
+            m_AnchorMin: { x: 0.5, y: 0.5 }, m_AnchorMax: { x: 0.5, y: 0.5 },
+            m_AnchoredPosition: { x: 0, y: 0 }, m_SizeDelta: { x: 100, y: 100 },
+            m_Pivot: { x: 0.5, y: 0.5 },
+        },
+    }, {
+        typeId: 224, typeName: 'RectTransform', fileId: strippedParentFileId, stripped: true,
+        properties: {
+            m_CorrespondingSourceObject: { fileID: sourceTransformId, guid: sourceGuid, type: 3 },
+            m_PrefabInstance: { fileID: instance.fileId }, m_PrefabAsset: { fileID: 0 },
+        },
+    });
+    return (0, unity_yaml_parser_1.parseUnityYaml)((0, unity_yaml_writer_1.writeUnityYaml)(variant));
+}
 function clearRefsTo(value, deleted) {
     if (Array.isArray(value))
         return value.map(item => clearRefsTo(item, deleted));
@@ -161,6 +206,40 @@ console.log('\n=== v3 ownership cold-boundary edits ===');
         .find(modification => modification.propertyPath === 'm_Name');
     assert(rebuiltName?.value === 'Ellen_v3_edited', 'variant delta edit compiles without the original variant YAML');
     assert(rebuilt.variantSource?.guid === 'a5674d01884853d4e8f2386a171e14d9', 'variant source GUID survives standalone compilation');
+}
+{
+    const sourceGuid = '99999999999999999999999999999999';
+    const sourcePath = path.join(__dirname, '..', 'samples', 'prefabs', 'Amount.prefab');
+    const mixed = makeMixedVariant(sourceGuid);
+    const originalFileIds = new Set(mixed.documents.map(item => item.fileId));
+    const document = (0, reader_1.readV3)((0, writer_1.writeV3)(mixed, {
+        sourceResolver: { resolveFilePath: guid => guid === sourceGuid ? sourcePath : undefined },
+    }));
+    const inheritedRoot = document.variantRoots[0];
+    const localChild = inheritedRoot.children.find(child => child.name === 'VariantAdded');
+    const localIdentity = localChild && document.identity.get(localChild.machineId);
+    const localTransform = localChild && [...document.identity.values()].find(identity => identity.kind === 'transform' && identity.ownerId === localChild.machineId);
+    const rebuilt = (0, unity_yaml_parser_1.parseUnityYaml)((0, unity_yaml_writer_1.writeUnityYaml)((0, compiler_1.compileV3)(document)));
+    const rebuiltInstance = rebuilt.documents.find(item => item.typeId === 1001);
+    const rebuiltAdded = rebuiltInstance.properties.m_Modification.m_AddedGameObjects[0];
+    const rebuiltTransform = rebuilt.documents.find(item => item.fileId === localTransform?.fileId);
+    assert(!!localChild && localIdentity?.origin !== 'inherited' &&
+        localIdentity?.prefabOwnerId === document.variantRootId &&
+        rebuilt.documents.length === mixed.documents.length &&
+        rebuilt.documents.every(item => originalFileIds.has(item.fileId)) &&
+        String(rebuiltAdded.addedObject.fileID) === localTransform?.fileId &&
+        String(rebuiltTransform.properties.m_Father.fileID) === '9100000000000000003', 'mixed inherited and variant-added effective tree exports and cold-compiles with stable ownership');
+}
+{
+    const sourceGuid = '99999999999999999999999999999999';
+    const sourcePath = path.join(__dirname, '..', 'samples', 'prefabs', 'Amount.prefab');
+    const mixed = makeMixedVariant(sourceGuid);
+    const instance = mixed.documents.find(item => item.typeId === 1001);
+    instance.properties.m_Modification.m_AddedGameObjects[0]
+        .targetCorrespondingSourceObject.fileID = 999999;
+    expectThrow(() => (0, writer_1.writeV3)(mixed, {
+        sourceResolver: { resolveFilePath: guid => guid === sourceGuid ? sourcePath : undefined },
+    }), 'outside the direct source effective tree', 'mixed effective-tree export rejects a variant-added root with ambiguous direct-source parent');
 }
 {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'ubridge-v3-chain-'));

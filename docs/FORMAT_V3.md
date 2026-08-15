@@ -83,13 +83,16 @@ deterministic, while exported existing additions preserve their component and
 stripped-object fileIDs. Export and compilation fail closed when the target source
 GameObject, direct PrefabInstance owner, or stripped-object ownership is missing or
 ambiguous. Existing removed and added-component deltas are projected back into the
-same effective representation. Source-chain expansion currently fails closed for
-intermediate structural deltas or variant-added roots, expanded internals or structural
-edits of inherited nested PrefabInstances, and a direct source tree mixed with
-variant-added roots. Without a
-source resolver, nested and variant baseline ownership
-documents remain standalone, and existing PrefabInstance delta values can be
-edited in DETAILS. Local objects not yet exposed in the effective STRUCTURE are
+same effective representation. A direct source effective tree can also be mixed with
+pre-existing variant-added GameObject roots: each local root is attached beneath its
+inherited source Transform from `m_AddedGameObjects`, remains locally owned in
+IDENTITY, and cold-compiles with its original local and stripped-parent fileIDs.
+Missing, duplicate, indirect, or otherwise ambiguous added-root ownership fails
+closed. Source-chain expansion currently fails closed for intermediate structural
+deltas or variant-added roots, expanded internals or structural edits of inherited
+nested PrefabInstances. Without a source resolver, nested and variant baseline
+ownership documents remain standalone, and existing PrefabInstance delta values can
+be edited in DETAILS. Local objects not yet exposed in the effective STRUCTURE are
 kept as explicit `owned` identity/details records until ownership-aware
 reconciliation is implemented.
 

@@ -341,9 +341,11 @@ function writeVariantV3(file: UnityFile, options: V3WriterOptions): string {
     rootId,
     addedComponentsBySourceGameObject
   );
-  if (inheritedRoots.length > 0 && variantRoots.length > 0) {
-    throw new Error('Inherited effective-tree expansion with variant-added roots is not implemented.');
-  }
+  const effectiveRoots = inheritedRoots.length > 0 && variantRoots.length > 0
+    ? attachVariantAddedRoots(
+        variantRoots, inheritedRoots, rootInstance, byId, identities, rootId
+      )
+    : inheritedRoots.length > 0 ? inheritedRoots : variantRoots;
   const inferredOwners = inferNestedOwnership(file, byId, identities, documentIds);
 
   for (const document of file.documents) {
@@ -363,7 +365,7 @@ function writeVariantV3(file: UnityFile, options: V3WriterOptions): string {
     `# ubridge v3 | variant | profile:${options.profile || 'unity-generic-v1'}${options.assetGuid ? ` | asset-guid:${options.assetGuid}` : ''}`,
     '--- STRUCTURE',
     `(variant @${rootId} source:${rootInstance.sourcePrefab.guid})`,
-    ...writeVariantRoots(inheritedRoots.length > 0 ? inheritedRoots : variantRoots),
+    ...writeVariantRoots(effectiveRoots),
     '--- DETAILS',
   ];
   for (const document of file.documents) {
@@ -404,6 +406,99 @@ function identityFor(
       ? String(sourceReference.fileID)
       : undefined,
   };
+}
+
+function attachVariantAddedRoots(
+  localRoots: V3StructureNode[],
+  inheritedRoots: V3StructureNode[],
+  rootInstance: UnityFile['prefabInstances'][number],
+  byId: Map<string, UnityDocument>,
+  identities: Map<string, V3IdentityRecord>,
+  rootId: string
+): V3StructureNode[] {
+  const rootDocument = byId.get(rootInstance.fileId);
+  const additions: any[] = rootDocument?.properties.m_Modification?.m_AddedGameObjects ?? [];
+  const additionsByObject = new Map<string, any>();
+  for (const addition of additions) {
+    const target = addition?.targetCorrespondingSourceObject;
+    const addedFileId = String(addition?.addedObject?.fileID ?? '0');
+    if (String(target?.guid ?? '') !== rootInstance.sourcePrefab.guid ||
+        String(target?.fileID ?? '0') === '0' || addedFileId === '0' ||
+        additionsByObject.has(addedFileId)) {
+      throw new Error(`Variant m_AddedGameObjects has ambiguous direct ownership for ${addedFileId}.`);
+    }
+    additionsByObject.set(addedFileId, addition);
+  }
+
+  const inheritedNodesByTransform = new Map<string, V3StructureNode>();
+  const collectInherited = (node: V3StructureNode): void => {
+    const transforms = [...identities.values()].filter(identity =>
+      identity.kind === 'transform' && identity.origin === 'inherited' &&
+      identity.ownerId === node.machineId && identity.sourceGuid === rootInstance.sourcePrefab.guid
+    );
+    if (transforms.length === 1 && transforms[0].sourceFileId) {
+      if (inheritedNodesByTransform.has(transforms[0].sourceFileId!)) {
+        throw new Error(
+          `Variant direct source has ambiguous Transform ${transforms[0].sourceFileId}.`
+        );
+      }
+      inheritedNodesByTransform.set(transforms[0].sourceFileId!, node);
+    }
+    node.children.forEach(collectInherited);
+  };
+  inheritedRoots.forEach(collectInherited);
+
+  const rootTransformIdentity = (node: V3StructureNode): V3IdentityRecord => {
+    const matches = [...identities.values()].filter(identity =>
+      node.nestedSourceGuid
+        ? identity.kind === 'stripped' && identity.ownerId === node.machineId && identity.nestedRoot
+        : identity.kind === 'transform' && identity.ownerId === node.machineId
+    );
+    if (matches.length !== 1 || !matches[0].fileId) {
+      throw new Error(`Variant-added root ${node.machineId} has ambiguous local Transform ownership.`);
+    }
+    return matches[0];
+  };
+
+  for (const localRoot of localRoots) {
+    const transformIdentity = rootTransformIdentity(localRoot);
+    const addition = additionsByObject.get(transformIdentity.fileId!);
+    if (!addition) {
+      throw new Error(
+        `Variant-added root ${localRoot.machineId} is missing direct m_AddedGameObjects ownership.`
+      );
+    }
+    additionsByObject.delete(transformIdentity.fileId!);
+    const sourceTransformFileId = String(
+      addition.targetCorrespondingSourceObject.fileID
+    );
+    const parentNode = inheritedNodesByTransform.get(sourceTransformFileId);
+    if (!parentNode) {
+      throw new Error(
+        `Variant-added root ${localRoot.machineId} targets Transform ${sourceTransformFileId} ` +
+        'outside the direct source effective tree.'
+      );
+    }
+    const parentTransform = [...identities.values()].find(identity =>
+      identity.kind === 'transform' && identity.origin === 'inherited' &&
+      identity.ownerId === parentNode.machineId && identity.sourceFileId === sourceTransformFileId &&
+      identity.sourceGuid === rootInstance.sourcePrefab.guid
+    )!;
+    transformIdentity.baselineParentId = parentTransform.machineId;
+    const requestedIndex = Number(addition.insertIndex ?? -1);
+    const insertionIndex = requestedIndex < 0
+      ? parentNode.children.length
+      : Math.min(requestedIndex, parentNode.children.length);
+    parentNode.children.splice(insertionIndex, 0, localRoot);
+    identities.get(localRoot.machineId)!.prefabOwnerId ??= rootId;
+  }
+  if (additionsByObject.size > 0) {
+    throw new Error(
+      `Variant m_AddedGameObjects addedObject ${additionsByObject.keys().next().value} ` +
+      'is not an exposed local root.'
+    );
+  }
+  return inheritedRoots;
 }
 
 function buildInheritedVariantRoots(

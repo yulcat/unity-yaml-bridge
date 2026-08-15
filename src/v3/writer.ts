@@ -423,6 +423,7 @@ function buildInheritedVariantRoots(
   let transformIndex = 0;
   let componentIndex = 0;
   let addedComponentIndex = 0;
+  let inheritedPrefabInstanceIndex = 0;
   const removedGameObjectIds = new Set(variant.prefabInstances.flatMap(instance =>
     instance.removedGameObjects.filter(reference => !reference.guid || reference.guid === sourceGuid)
       .map(reference => String(reference.fileID))
@@ -445,7 +446,35 @@ function buildInheritedVariantRoots(
     siblingIndex = 0
   ): V3StructureNode => {
     if (node.nestedPrefab) {
-      throw new Error(`Inherited effective-tree expansion does not yet support nested PrefabInstance ${node.name}.`);
+      if (node.components.length > 0 || node.children.length > 0) {
+        throw new Error(`Inherited nested PrefabInstance ${node.name} has unsupported mixed effective content.`);
+      }
+      const sourceDocument = sourceById.get(node.nestedPrefab.instanceId);
+      if (!sourceDocument || sourceDocument.typeId !== 1001) {
+        throw new Error(
+          `Inherited nested PrefabInstance ${node.name} is missing source document ${node.nestedPrefab.instanceId}.`
+        );
+      }
+      const prefabInstanceId = `ip${++inheritedPrefabInstanceIndex}`;
+      identities.set(prefabInstanceId, {
+        machineId: prefabInstanceId,
+        kind: 'prefabInstance',
+        origin: 'inherited',
+        typeId: sourceDocument.typeId,
+        typeName: sourceDocument.typeName,
+        displayName: node.name,
+        baselineParentId: parentTransformMachineId,
+        baselineOrder: siblingIndex,
+        sourceGuid,
+        sourceFileId: node.nestedPrefab.instanceId,
+      });
+      return {
+        name: node.name,
+        machineId: prefabInstanceId,
+        components: [],
+        children: [],
+        nestedSourceGuid: node.nestedPrefab.sourceGuid,
+      };
     }
     const gameObjectDocument = sourceById.get(node.fileId);
     const transformDocument = sourceById.get(node.transform.fileId);

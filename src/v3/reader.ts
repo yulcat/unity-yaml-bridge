@@ -241,12 +241,14 @@ function validateBindings(
       if (!go || go.kind !== 'prefabInstance' || go.typeId !== 1001) {
         throw new Error(`Nested STRUCTURE ${node.machineId} is not bound to a PrefabInstance identity.`);
       }
-      const rootTransforms = [...identity.values()].filter(record =>
-        record.kind === 'stripped' && record.ownerId === node.machineId && record.nestedRoot &&
-        (record.typeId === 4 || record.typeId === 224)
-      );
-      if (rootTransforms.length !== 1) {
-        throw new Error(`Nested PrefabInstance ${node.machineId} requires exactly one stripped root Transform.`);
+      if (go.origin !== 'inherited') {
+        const rootTransforms = [...identity.values()].filter(record =>
+          record.kind === 'stripped' && record.ownerId === node.machineId && record.nestedRoot &&
+          (record.typeId === 4 || record.typeId === 224)
+        );
+        if (rootTransforms.length !== 1) {
+          throw new Error(`Nested PrefabInstance ${node.machineId} requires exactly one stripped root Transform.`);
+        }
       }
       if (node.components.length > 0 || node.children.length > 0) {
         throw new Error(`Expanded nested STRUCTURE is not implemented for ${node.machineId}.`);

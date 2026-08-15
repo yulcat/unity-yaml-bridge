@@ -207,6 +207,96 @@ console.log('\n=== v3 ownership cold-boundary edits ===');
     }
 }
 {
+    const sourceGuid = '33333333333333333333333333333333';
+    const sourcePath = path.join(__dirname, '..', 'samples', 'prefabs', 'Button.prefab');
+    const source = (0, unity_yaml_parser_1.parseUnityYaml)(sample('prefabs', 'Button.prefab'));
+    const nestedSourceNode = source.hierarchy.children.find(node => node.nestedPrefab);
+    const variant = makeVariantSource(sourceGuid, source.hierarchy.fileId);
+    const document = (0, reader_1.readV3)((0, writer_1.writeV3)(variant, {
+        sourceResolver: { resolveFilePath: guid => guid === sourceGuid ? sourcePath : undefined },
+    }));
+    const inheritedNested = document.variantRoots[0].children.find(node => node.nestedSourceGuid);
+    const inheritedNestedIdentity = inheritedNested && document.identity.get(inheritedNested.machineId);
+    const rebuilt = (0, unity_yaml_parser_1.parseUnityYaml)((0, unity_yaml_writer_1.writeUnityYaml)((0, compiler_1.compileV3)(document)));
+    assert(inheritedNested?.name === nestedSourceNode.name &&
+        inheritedNested?.nestedSourceGuid === nestedSourceNode.nestedPrefab.sourceGuid &&
+        inheritedNestedIdentity?.kind === 'prefabInstance' &&
+        inheritedNestedIdentity?.origin === 'inherited' &&
+        inheritedNestedIdentity?.sourceGuid === sourceGuid &&
+        inheritedNestedIdentity?.sourceFileId === nestedSourceNode.nestedPrefab.instanceId, 'source-backed variant expands an inherited nested PrefabInstance with direct-source ownership');
+    assert(rebuilt.documents.length === variant.documents.length &&
+        rebuilt.prefabInstances.length === variant.prefabInstances.length &&
+        rebuilt.variantSource?.guid === sourceGuid, 'untouched inherited nested PrefabInstance cold-compiles without emitting source documents');
+}
+{
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'ubridge-v3-nested-chain-'));
+    try {
+        const base = (0, unity_yaml_parser_1.parseUnityYaml)(sample('prefabs', 'Button.prefab'));
+        const basePath = path.join(__dirname, '..', 'samples', 'prefabs', 'Button.prefab');
+        const baseGuid = '44444444444444444444444444444444';
+        const middleGuid = '55555555555555555555555555555555';
+        const middle = makeVariantSource(baseGuid, base.hierarchy.fileId);
+        const middlePath = path.join(directory, 'MiddleNested.prefab');
+        fs.writeFileSync(middlePath, (0, unity_yaml_writer_1.writeUnityYaml)(middle));
+        const leaf = makeVariantSource(middleGuid, base.hierarchy.fileId);
+        const document = (0, reader_1.readV3)((0, writer_1.writeV3)(leaf, {
+            sourceResolver: {
+                resolveFilePath: guid => guid === middleGuid ? middlePath : guid === baseGuid ? basePath : undefined,
+            },
+        }));
+        const inheritedNested = document.variantRoots[0].children.find(node => node.nestedSourceGuid);
+        const inheritedIdentity = document.identity.get(inheritedNested.machineId);
+        const rebuilt = (0, unity_yaml_parser_1.parseUnityYaml)((0, unity_yaml_writer_1.writeUnityYaml)((0, compiler_1.compileV3)(document)));
+        assert(inheritedIdentity.sourceGuid === middleGuid &&
+            inheritedIdentity.sourceFileId === base.hierarchy.children.find(node => node.nestedPrefab).nestedPrefab.instanceId &&
+            rebuilt.documents.length === leaf.documents.length, 'variant source chain expands inherited nested PrefabInstance with direct-source ownership');
+    }
+    finally {
+        fs.rmSync(directory, { recursive: true, force: true });
+    }
+}
+{
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'ubridge-v3-source-failures-'));
+    try {
+        const rootFileId = (0, unity_yaml_parser_1.parseUnityYaml)(sample('prefabs', 'Button.prefab')).hierarchy.fileId;
+        const firstGuid = '66666666666666666666666666666666';
+        const secondGuid = '77777777777777777777777777777777';
+        const missingGuid = '88888888888888888888888888888888';
+        const firstPath = path.join(directory, 'First.prefab');
+        const secondPath = path.join(directory, 'Second.prefab');
+        fs.writeFileSync(firstPath, (0, unity_yaml_writer_1.writeUnityYaml)(makeVariantSource(secondGuid, rootFileId)));
+        fs.writeFileSync(secondPath, (0, unity_yaml_writer_1.writeUnityYaml)(makeVariantSource(firstGuid, rootFileId)));
+        const leaf = makeVariantSource(firstGuid, rootFileId);
+        expectThrow(() => (0, writer_1.writeV3)(leaf, {
+            sourceResolver: {
+                resolveFilePath: guid => guid === firstGuid ? firstPath : guid === secondGuid ? secondPath : undefined,
+            },
+        }), 'contains a cycle', 'variant source-chain expansion rejects cycles');
+        fs.writeFileSync(firstPath, (0, unity_yaml_writer_1.writeUnityYaml)(makeVariantSource(missingGuid, rootFileId)));
+        expectThrow(() => (0, writer_1.writeV3)(leaf, {
+            sourceResolver: { resolveFilePath: guid => guid === firstGuid ? firstPath : undefined },
+        }), `cannot resolve GUID ${missingGuid}`, 'variant source-chain expansion rejects a missing intermediate source');
+    }
+    finally {
+        fs.rmSync(directory, { recursive: true, force: true });
+    }
+}
+{
+    const sourceGuid = '33333333333333333333333333333333';
+    const sourcePath = path.join(__dirname, '..', 'samples', 'prefabs', 'Button.prefab');
+    const source = (0, unity_yaml_parser_1.parseUnityYaml)(sample('prefabs', 'Button.prefab'));
+    const variant = makeVariantSource(sourceGuid, source.hierarchy.fileId);
+    const document = (0, reader_1.readV3)((0, writer_1.writeV3)(variant, {
+        sourceResolver: { resolveFilePath: guid => guid === sourceGuid ? sourcePath : undefined },
+    }));
+    const inheritedNested = document.variantRoots[0].children.find(node => node.nestedSourceGuid);
+    inheritedNested.name = 'SilentlyIgnoredRename';
+    expectThrow(() => (0, compiler_1.compileV3)(document), 'Structural editing of inherited nested PrefabInstance', 'inherited nested PrefabInstance edits fail closed instead of compiling as no-ops');
+    inheritedNested.name = document.identity.get(inheritedNested.machineId).displayName;
+    document.variantRoots[0].children = document.variantRoots[0].children.filter(node => node.machineId !== inheritedNested.machineId);
+    expectThrow(() => (0, compiler_1.compileV3)(document), 'is missing from variant STRUCTURE', 'removing an inherited nested PrefabInstance fails closed instead of compiling as a no-op');
+}
+{
     const baselineText = sourceBackedVariantText();
     const baseline = (0, reader_1.readV3)(baselineText);
     const inheritedChild = baseline.variantRoots[0].children[0];

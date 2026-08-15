@@ -62,13 +62,17 @@ reference is removed or redirected in the same edit.
 
 Nested prefab effective-tree structural editing and versioned default profiles
 remain intentionally unsupported. When a variant base prefab is available through
-the source resolver, v3 exposes its inherited GameObject/component hierarchy in
-the effective STRUCTURE, applies existing name overrides, records
-`origin:inherited` source identities, and cold-compiles the untouched view without
-emitting source objects as local documents. Variant-of-variant sources are expanded
-through an unambiguous source chain; intermediate name overrides become effective
-state while emitted identities remain owned by the variant's direct source. An
-inherited GameObject removal is an explicit tombstone, for example
+the source resolver, v3 exposes its inherited GameObject/component hierarchy and inherited
+nested PrefabInstance placeholders in the effective STRUCTURE, applies existing name
+overrides, records `origin:inherited` source identities, and cold-compiles the untouched
+view without emitting source objects as local documents. Nested placeholders retain their
+nested source GUID while their identity is bound to the variant's direct source GUID and
+PrefabInstance fileID. Variant-of-variant sources are expanded through an unambiguous
+source chain; intermediate name overrides become effective state while emitted identities
+remain owned by the variant's direct source. Cycles, missing intermediate sources, and
+ambiguous ownership fail closed. Structural edits to inherited nested PrefabInstances are
+not yet supported and fail rather than compiling as no-ops. An inherited GameObject
+removal is an explicit tombstone, for example
 `└─ - LegacyButton @ig2 [Button @ic4]`; it compiles to `m_RemovedGameObjects`, while
 removing an inherited component from the brackets compiles to `m_RemovedComponents`.
 A new local child beneath an inherited node compiles to `m_AddedGameObjects` using
@@ -80,8 +84,9 @@ stripped-object fileIDs. Export and compilation fail closed when the target sour
 GameObject, direct PrefabInstance owner, or stripped-object ownership is missing or
 ambiguous. Existing removed and added-component deltas are projected back into the
 same effective representation. Source-chain expansion currently fails closed for
-intermediate structural deltas or variant-added roots, inherited nested
-PrefabInstances, and a direct source tree mixed with variant-added roots. Without a
+intermediate structural deltas or variant-added roots, expanded internals or structural
+edits of inherited nested PrefabInstances, and a direct source tree mixed with
+variant-added roots. Without a
 source resolver, nested and variant baseline ownership
 documents remain standalone, and existing PrefabInstance delta values can be
 edited in DETAILS. Local objects not yet exposed in the effective STRUCTURE are

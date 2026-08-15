@@ -180,9 +180,13 @@ ubridge parse Input.prefab --format v3 -o Input.ubridge
 ubridge compile Input.ubridge -o Rebuilt.prefab
 ```
 
-The v3 compiler does not accept `--yaml`. The initial implementation supports
-local regular prefabs and rejects nested prefabs and variants until their
-ownership-aware compiler phases are implemented.
+The v3 compiler does not accept `--yaml`. It supports standalone regular-prefab
+reconstruction plus source-backed variant and nested-prefab effective trees,
+including ownership-aware inherited additions/removals, variant chains, recursive
+nested-source expansion, and scalar property overrides. Operations that cannot yet
+be mapped to an unambiguous Unity ownership delta fail closed instead of silently
+falling back to the original YAML. See the v3 specification for the exact current
+boundary.
 
 ## Usage
 

@@ -65,15 +65,22 @@ function buttonV3() {
 function rootVariantV3() {
     return (0, reader_1.readV3)((0, writer_1.writeV3)((0, unity_yaml_parser_1.parseUnityYaml)(sample('prefabs', 'RootPrefabInstance.prefab'))));
 }
-function sourceBackedVariantText() {
+function sourceBackedVariant() {
     const variant = (0, unity_yaml_parser_1.parseUnityYaml)(sample('variants', 'Ellen_Variant.prefab'));
     const source = (0, unity_yaml_parser_1.parseUnityYaml)(sample('prefabs', 'Amount.prefab'));
+    const sourceGuid = variant.variantSource.guid;
+    for (const modification of variant.prefabInstances[0].modifications) {
+        modification.target.fileID = modification.propertyPath === 'm_Name'
+            ? source.hierarchy.fileId
+            : source.hierarchy.transform.fileId;
+        modification.target.guid = sourceGuid;
+    }
+    return variant;
+}
+function sourceBackedVariantText() {
+    const variant = sourceBackedVariant();
     const sourcePath = path.join(__dirname, '..', 'samples', 'prefabs', 'Amount.prefab');
     const sourceGuid = variant.variantSource.guid;
-    const nameOverride = variant.prefabInstances[0].modifications
-        .find(modification => modification.propertyPath === 'm_Name');
-    nameOverride.target.fileID = source.hierarchy.fileId;
-    nameOverride.target.guid = sourceGuid;
     return (0, writer_1.writeV3)(variant, {
         sourceResolver: { resolveFilePath: guid => guid === sourceGuid ? sourcePath : undefined },
     });
@@ -174,14 +181,10 @@ console.log('\n=== v3 ownership cold-boundary edits ===');
     expectThrow(() => (0, compiler_1.compileV3)(document, { sourceResolver: { resolveFilePath: () => undefined } }), 'cannot resolve GUID', 'project validation rejects an unavailable source GUID');
 }
 {
-    const variant = (0, unity_yaml_parser_1.parseUnityYaml)(sample('variants', 'Ellen_Variant.prefab'));
+    const variant = sourceBackedVariant();
     const source = (0, unity_yaml_parser_1.parseUnityYaml)(sample('prefabs', 'Amount.prefab'));
     const sourcePath = path.join(__dirname, '..', 'samples', 'prefabs', 'Amount.prefab');
     const sourceGuid = variant.variantSource.guid;
-    const nameOverride = variant.prefabInstances[0].modifications
-        .find(modification => modification.propertyPath === 'm_Name');
-    nameOverride.target.fileID = source.hierarchy.fileId;
-    nameOverride.target.guid = sourceGuid;
     const v3Text = (0, writer_1.writeV3)(variant, {
         sourceResolver: { resolveFilePath: guid => guid === sourceGuid ? sourcePath : undefined },
     });
@@ -206,6 +209,37 @@ console.log('\n=== v3 ownership cold-boundary edits ===');
         .find(modification => modification.propertyPath === 'm_Name');
     assert(rebuiltName?.value === 'Ellen_v3_edited', 'variant delta edit compiles without the original variant YAML');
     assert(rebuilt.variantSource?.guid === 'a5674d01884853d4e8f2386a171e14d9', 'variant source GUID survives standalone compilation');
+}
+{
+    const sourceGuid = '99999999999999999999999999999999';
+    const sourcePath = path.join(__dirname, '..', 'samples', 'prefabs', 'Amount.prefab');
+    const variant = makeVariantSource(sourceGuid, '999999', 'UnknownTargetName');
+    expectThrow(() => (0, writer_1.writeV3)(variant, {
+        sourceResolver: { resolveFilePath: guid => guid === sourceGuid ? sourcePath : undefined },
+    }), 'direct-source modification target', 'variant export rejects an unknown direct-source m_Name target fileID');
+}
+{
+    const sourceGuid = '99999999999999999999999999999999';
+    const sourcePath = path.join(__dirname, '..', 'samples', 'prefabs', 'Amount.prefab');
+    const variant = makeVariantSource(sourceGuid, '0');
+    variant.prefabInstances[0].modifications.push({
+        target: { fileID: '999999', guid: sourceGuid, type: 3 },
+        propertyPath: 'm_Enabled', value: '0', objectReference: { fileID: '0' },
+    });
+    expectThrow(() => (0, writer_1.writeV3)(variant, {
+        sourceResolver: { resolveFilePath: guid => guid === sourceGuid ? sourcePath : undefined },
+    }), 'direct-source modification target', 'variant export rejects an unknown direct-source scalar target fileID');
+}
+{
+    const sourceGuid = '99999999999999999999999999999999';
+    const source = (0, unity_yaml_parser_1.parseUnityYaml)(sample('prefabs', 'Amount.prefab'));
+    const sourcePath = path.join(__dirname, '..', 'samples', 'prefabs', 'Amount.prefab');
+    const variant = makeVariantSource(sourceGuid, '0');
+    const target = { fileID: source.hierarchy.components[0].fileId, guid: sourceGuid, type: 3 };
+    variant.prefabInstances[0].modifications.push({ target: { ...target }, propertyPath: 'm_Enabled', value: '0', objectReference: { fileID: '0' } }, { target: { ...target }, propertyPath: 'm_Enabled', value: '1', objectReference: { fileID: '0' } });
+    expectThrow(() => (0, writer_1.writeV3)(variant, {
+        sourceResolver: { resolveFilePath: guid => guid === sourceGuid ? sourcePath : undefined },
+    }), 'duplicate direct-source modification', 'variant export rejects a duplicate direct-source scalar target tuple');
 }
 {
     const sourceGuid = '99999999999999999999999999999999';
@@ -854,7 +888,7 @@ console.log('\n=== v3 ownership cold-boundary edits ===');
     const baseline = (0, reader_1.readV3)(sourceBackedVariantText());
     const inheritedChild = baseline.variantRoots[0].children[0];
     const sourceIdentity = baseline.identity.get(inheritedChild.machineId);
-    const variant = (0, unity_yaml_parser_1.parseUnityYaml)(sample('variants', 'Ellen_Variant.prefab'));
+    const variant = sourceBackedVariant();
     const sourcePath = path.join(__dirname, '..', 'samples', 'prefabs', 'Amount.prefab');
     const sourceGuid = variant.variantSource.guid;
     variant.prefabInstances[0].removedGameObjects = [{
@@ -870,7 +904,7 @@ console.log('\n=== v3 ownership cold-boundary edits ===');
     const inheritedRoot = baseline.variantRoots[0];
     const rootIdentity = baseline.identity.get(inheritedRoot.machineId);
     const childIdentity = baseline.identity.get(inheritedRoot.children[0].machineId);
-    const variant = (0, unity_yaml_parser_1.parseUnityYaml)(sample('variants', 'Ellen_Variant.prefab'));
+    const variant = sourceBackedVariant();
     const sourcePath = path.join(__dirname, '..', 'samples', 'prefabs', 'Amount.prefab');
     const sourceGuid = variant.variantSource.guid;
     variant.prefabInstances[0].removedGameObjects = [{
@@ -904,7 +938,7 @@ console.log('\n=== v3 ownership cold-boundary edits ===');
     const inheritedRoot = baseline.variantRoots[0];
     const removedComponent = inheritedRoot.components[0];
     const sourceIdentity = baseline.identity.get(removedComponent.machineId);
-    const variant = (0, unity_yaml_parser_1.parseUnityYaml)(sample('variants', 'Ellen_Variant.prefab'));
+    const variant = sourceBackedVariant();
     const sourcePath = path.join(__dirname, '..', 'samples', 'prefabs', 'Amount.prefab');
     const sourceGuid = variant.variantSource.guid;
     variant.prefabInstances[0].removedComponents = [{

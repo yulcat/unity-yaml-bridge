@@ -553,11 +553,30 @@ function buildInheritedVariantRoots(
     rootInstance.removedComponents, 'removed-component'
   );
   const matchedRemovedComponentIds = new Set<string>();
+  const directSourceModificationKeys = new Set<string>();
+  for (const modification of rootInstance.modifications) {
+    if (String(modification.target.guid ?? '') !== sourceGuid) continue;
+    const fileId = String(modification.target.fileID ?? '0');
+    if (fileId === '0' || !sourceById.has(fileId)) {
+      throw new Error(
+        `Variant root ${rootInstance.fileId} direct-source modification target ${sourceGuid}:${fileId} ` +
+        'is not exactly one resolved source identity.'
+      );
+    }
+    const key = `${sourceGuid}:${fileId}:${modification.propertyPath}`;
+    if (directSourceModificationKeys.has(key)) {
+      if (modification.propertyPath === 'm_Name') {
+        throw new Error(`Variant root ${rootInstance.fileId} has ambiguous name ownership for ${fileId}.`);
+      }
+      throw new Error(`Variant root ${rootInstance.fileId} has duplicate direct-source modification ${key}.`);
+    }
+    directSourceModificationKeys.add(key);
+  }
   const nameOverrides = new Map<string, string>();
   for (const modification of rootInstance.modifications) {
     if (modification.propertyPath !== 'm_Name' || modification.target.guid !== sourceGuid) continue;
     const fileId = String(modification.target.fileID ?? '0');
-    if (fileId === '0' || nameOverrides.has(fileId)) {
+    if (nameOverrides.has(fileId)) {
       throw new Error(`Variant root ${rootInstance.fileId} has ambiguous name ownership for ${fileId}.`);
     }
     nameOverrides.set(fileId, modification.value);

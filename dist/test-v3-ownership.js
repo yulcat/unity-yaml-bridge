@@ -481,6 +481,45 @@ console.log('\n=== v3 ownership cold-boundary edits ===');
         rebuilt.variantSource?.guid === sourceGuid, 'untouched inherited nested PrefabInstance cold-compiles without emitting source documents');
 }
 {
+    const sourceGuid = '33333333333333333333333333333333';
+    const sourcePath = path.join(__dirname, '..', 'samples', 'prefabs', 'Button.prefab');
+    const source = (0, unity_yaml_parser_1.parseUnityYaml)(sample('prefabs', 'Button.prefab'));
+    const inheritedNestedSource = source.hierarchy.children.find(node => node.nestedPrefab).nestedPrefab;
+    const nestedPath = path.join(__dirname, '..', 'samples', 'prefabs', 'Amount.prefab');
+    const nested = (0, unity_yaml_parser_1.parseUnityYaml)(sample('prefabs', 'Amount.prefab'));
+    const nestedChild = nested.hierarchy.children[0];
+    const variant = makeVariantSource(sourceGuid, source.hierarchy.fileId);
+    const document = (0, reader_1.readV3)((0, writer_1.writeV3)(variant, {
+        sourceResolver: {
+            resolveFilePath: guid => guid === sourceGuid ? sourcePath :
+                guid === inheritedNestedSource.sourceGuid ? nestedPath : undefined,
+        },
+    }));
+    const inheritedNested = document.variantRoots[0].children.find(node => node.nestedSourceGuid);
+    const internalChild = inheritedNested.children[0];
+    const internalGameObject = internalChild && document.identity.get(internalChild.machineId);
+    const internalComponent = internalChild && document.identity.get(internalChild.components[0]?.machineId);
+    const rebuilt = (0, unity_yaml_parser_1.parseUnityYaml)((0, unity_yaml_writer_1.writeUnityYaml)((0, compiler_1.compileV3)(document)));
+    assert(inheritedNested.nestedSourceGuid === inheritedNestedSource.sourceGuid &&
+        inheritedNested.children.length === 1 && internalChild.name === nestedChild.name &&
+        internalGameObject?.origin === 'inherited' &&
+        internalGameObject.sourceGuid === inheritedNestedSource.sourceGuid &&
+        internalGameObject.sourceFileId === nestedChild.fileId &&
+        internalGameObject.prefabOwnerId === inheritedNested.machineId &&
+        internalComponent?.origin === 'inherited' &&
+        internalComponent.ownerId === internalChild.machineId &&
+        internalComponent.prefabOwnerId === inheritedNested.machineId, 'inherited nested PrefabInstance exposes read-only internal children and components with nested ownership');
+    assert(rebuilt.documents.length === variant.documents.length &&
+        rebuilt.prefabInstances.length === variant.prefabInstances.length, 'expanded inherited nested internals cold-compile without emitting nested source documents');
+    internalChild.name = 'UnsupportedInternalRename';
+    expectThrow(() => (0, compiler_1.compileV3)(document), 'Structural editing of inherited nested PrefabInstance', 'renaming an inherited nested internal fails closed instead of compiling as a no-op');
+    internalChild.name = nestedChild.name;
+    inheritedNested.children = [];
+    expectThrow(() => (0, compiler_1.compileV3)(document), 'is missing from variant STRUCTURE', 'removing an inherited nested internal fails closed instead of compiling as a no-op');
+    inheritedNested.children = [internalChild, internalChild];
+    expectThrow(() => (0, compiler_1.compileV3)(document), 'Structural editing of inherited nested PrefabInstance', 'ambiguous duplicate addition of an inherited nested internal fails closed');
+}
+{
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'ubridge-v3-nested-chain-'));
     try {
         const base = (0, unity_yaml_parser_1.parseUnityYaml)(sample('prefabs', 'Button.prefab'));

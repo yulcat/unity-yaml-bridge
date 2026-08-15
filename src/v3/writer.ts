@@ -535,6 +535,86 @@ function buildInheritedVariantRoots(
     ).map(modification => [String(modification.target.fileID), modification.value] as const)
   ));
 
+  const buildNestedInternal = (
+    node: GameObjectNode,
+    nestedSourceGuid: string,
+    prefabOwnerId: string,
+    nestedDocuments: Map<string, UnityDocument>,
+    parentTransformMachineId: string,
+    siblingIndex: number
+  ): V3StructureNode => {
+    if (node.nestedPrefab) {
+      throw new Error(
+        `Inherited nested PrefabInstance ${prefabOwnerId} contains unsupported nested-in-nested internals.`
+      );
+    }
+    const gameObjectDocument = nestedDocuments.get(node.fileId);
+    const transformDocument = nestedDocuments.get(node.transform.fileId);
+    if (!gameObjectDocument || !transformDocument) {
+      throw new Error(
+        `Inherited nested PrefabInstance ${prefabOwnerId} has incomplete internal identity for ${node.name}.`
+      );
+    }
+    const goId = `ig${++gameObjectIndex}`;
+    const transformId = `it${++transformIndex}`;
+    identities.set(goId, {
+      machineId: goId,
+      kind: 'gameObject',
+      origin: 'inherited',
+      typeId: gameObjectDocument.typeId,
+      typeName: gameObjectDocument.typeName,
+      displayName: node.name,
+      prefabOwnerId,
+      sourceGuid: nestedSourceGuid,
+      sourceFileId: node.fileId,
+    });
+    identities.set(transformId, {
+      machineId: transformId,
+      kind: 'transform',
+      origin: 'inherited',
+      typeId: transformDocument.typeId,
+      typeName: transformDocument.typeName,
+      ownerId: goId,
+      prefabOwnerId,
+      baselineParentId: parentTransformMachineId,
+      baselineOrder: siblingIndex,
+      sourceGuid: nestedSourceGuid,
+      sourceFileId: node.transform.fileId,
+    });
+    const components = node.components.map((component, index) => {
+      const sourceDocument = nestedDocuments.get(component.fileId);
+      if (!sourceDocument) {
+        throw new Error(
+          `Inherited nested component ${component.fileId} is missing from source ${nestedSourceGuid}.`
+        );
+      }
+      const componentId = `ic${++componentIndex}`;
+      identities.set(componentId, {
+        machineId: componentId,
+        kind: 'component',
+        origin: 'inherited',
+        typeId: sourceDocument.typeId,
+        typeName: sourceDocument.typeName,
+        displayName: component.typeName,
+        ownerId: goId,
+        prefabOwnerId,
+        baselineOrder: index,
+        scriptGuid: component.scriptGuid,
+        sourceGuid: nestedSourceGuid,
+        sourceFileId: component.fileId,
+      });
+      return { typeName: component.typeName, machineId: componentId };
+    });
+    return {
+      name: node.name,
+      machineId: goId,
+      components,
+      children: node.children.map((child, index) => buildNestedInternal(
+        child, nestedSourceGuid, prefabOwnerId, nestedDocuments, transformId, index
+      )),
+    };
+  };
+
   const build = (
     node: GameObjectNode,
     parentTransformMachineId?: string,
@@ -563,12 +643,29 @@ function buildInheritedVariantRoots(
         sourceGuid,
         sourceFileId: node.nestedPrefab.instanceId,
       });
+      const nestedSourceGuid = node.nestedPrefab.sourceGuid;
+      const nestedPath = options.sourceResolver?.resolveFilePath(nestedSourceGuid);
+      const internalChildren = nestedPath
+        ? (() => {
+            const nestedSource = resolveEffectiveVariantSource(
+              nestedSourceGuid, options, new Set([sourceGuid])
+            );
+            return nestedSource.hierarchy.children.map((child, index) => buildNestedInternal(
+              child,
+              nestedSourceGuid,
+              prefabInstanceId,
+              nestedSource.documents,
+              prefabInstanceId,
+              index
+            ));
+          })()
+        : [];
       return {
         name: node.name,
         machineId: prefabInstanceId,
         components: [],
-        children: [],
-        nestedSourceGuid: node.nestedPrefab.sourceGuid,
+        children: internalChildren,
+        nestedSourceGuid,
       };
     }
     const gameObjectDocument = sourceById.get(node.fileId);

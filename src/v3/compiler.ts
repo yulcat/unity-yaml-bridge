@@ -278,9 +278,62 @@ function compileVariant(document: V3Document): UnityFile {
   const inheritedGameObjectStubs = new Map<string, string>();
   const usedInheritedStubIds = new Set<string>();
   const desiredInheritedNestedInstances = new Set<string>();
+  const desiredInheritedNestedInternals = new Set<string>();
   const hasInheritedStructure = [...document.identity.values()].some(identity =>
     identity.origin === 'inherited'
   );
+
+  const validateInheritedNestedInternal = (
+    node: V3StructureNode,
+    prefabOwnerId: string,
+    nestedSourceGuid: string,
+    parentTransformMachineId: string,
+    siblingIndex: number
+  ): void => {
+    if (node.nestedSourceGuid || node.tombstone) {
+      throw new Error(
+        `Structural editing of inherited nested PrefabInstance ${prefabOwnerId} internals is not implemented.`
+      );
+    }
+    const gameObject = requireIdentity(document, node.machineId, 'gameObject');
+    const transform = findOwnedTransform(document, node.machineId);
+    if (gameObject.origin !== 'inherited' || gameObject.prefabOwnerId !== prefabOwnerId ||
+        gameObject.sourceGuid !== nestedSourceGuid || !gameObject.sourceFileId ||
+        gameObject.displayName !== node.name || transform.origin !== 'inherited' ||
+        transform.prefabOwnerId !== prefabOwnerId || transform.sourceGuid !== nestedSourceGuid ||
+        !transform.sourceFileId || transform.baselineParentId !== parentTransformMachineId ||
+        transform.baselineOrder !== siblingIndex) {
+      throw new Error(
+        `Structural editing of inherited nested PrefabInstance ${prefabOwnerId} internals is not implemented.`
+      );
+    }
+    desiredInheritedNestedInternals.add(gameObject.machineId);
+    desiredInheritedNestedInternals.add(transform.machineId);
+    const baselineComponents = [...document.identity.values()]
+      .filter(identity => identity.kind === 'component' && identity.origin === 'inherited' &&
+        identity.prefabOwnerId === prefabOwnerId && identity.ownerId === gameObject.machineId)
+      .sort((left, right) => (left.baselineOrder ?? -1) - (right.baselineOrder ?? -1));
+    if (baselineComponents.length !== node.components.length) {
+      throw new Error(
+        `Structural editing of inherited nested PrefabInstance ${prefabOwnerId} internals is not implemented.`
+      );
+    }
+    node.components.forEach((component, index) => {
+      const identity = requireIdentity(document, component.machineId, 'component');
+      if (identity !== baselineComponents[index] || identity.ownerId !== gameObject.machineId ||
+          identity.prefabOwnerId !== prefabOwnerId || identity.sourceGuid !== nestedSourceGuid ||
+          !identity.sourceFileId || identity.baselineOrder !== index ||
+          (identity.displayName || identity.typeName) !== component.typeName) {
+        throw new Error(
+          `Structural editing of inherited nested PrefabInstance ${prefabOwnerId} internals is not implemented.`
+        );
+      }
+      desiredInheritedNestedInternals.add(identity.machineId);
+    });
+    node.children.forEach((child, index) => validateInheritedNestedInternal(
+      child, prefabOwnerId, nestedSourceGuid, transform.machineId, index
+    ));
+  };
 
   const buildNode = (
     node: V3StructureNode,
@@ -309,7 +362,7 @@ function compileVariant(document: V3Document): UnityFile {
         if (!identity.sourceGuid || !identity.sourceFileId) {
           throw new Error(`Inherited nested PrefabInstance ${node.machineId} has no direct source identity.`);
         }
-        if (node.components.length > 0 || node.children.length > 0 ||
+        if (node.components.length > 0 ||
             node.name !== identity.displayName ||
             identity.baselineParentId !== parentTransformMachineId ||
             identity.baselineOrder !== siblingIndex) {
@@ -317,6 +370,9 @@ function compileVariant(document: V3Document): UnityFile {
             `Structural editing of inherited nested PrefabInstance ${node.machineId} is not implemented.`
           );
         }
+        node.children.forEach((child, index) => validateInheritedNestedInternal(
+          child, node.machineId, node.nestedSourceGuid!, node.machineId, index
+        ));
         desiredInheritedNestedInstances.add(node.machineId);
         return;
       }
@@ -541,6 +597,16 @@ function compileVariant(document: V3Document): UnityFile {
     if (identity.kind === 'prefabInstance' && identity.origin === 'inherited' &&
         !desiredInheritedNestedInstances.has(identity.machineId)) {
       throw new Error(`Inherited nested PrefabInstance ${identity.machineId} is missing from variant STRUCTURE.`);
+    }
+    if ((identity.kind === 'gameObject' || identity.kind === 'transform' || identity.kind === 'component') &&
+        identity.origin === 'inherited' && identity.prefabOwnerId &&
+        document.identity.get(identity.prefabOwnerId)?.kind === 'prefabInstance' &&
+        document.identity.get(identity.prefabOwnerId)?.origin === 'inherited' &&
+        !desiredInheritedNestedInternals.has(identity.machineId)) {
+      throw new Error(
+        `Inherited nested PrefabInstance ${identity.prefabOwnerId} internal ${identity.machineId} ` +
+        'is missing from variant STRUCTURE.'
+      );
     }
   }
   const desiredOwnership = new Map<string, boolean>();

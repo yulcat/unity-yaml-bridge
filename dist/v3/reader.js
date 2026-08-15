@@ -249,9 +249,13 @@ function validateBindings(root, details, identity, used = new Set()) {
                     throw new Error(`Nested PrefabInstance ${node.machineId} requires exactly one stripped root Transform.`);
                 }
             }
-            if (node.components.length > 0 || node.children.length > 0) {
+            if (node.components.length > 0) {
+                throw new Error(`Inherited nested root components are not implemented for ${node.machineId}.`);
+            }
+            if (go.origin !== 'inherited' && node.children.length > 0) {
                 throw new Error(`Expanded nested STRUCTURE is not implemented for ${node.machineId}.`);
             }
+            node.children.forEach(visit);
             return;
         }
         if (!go || go.kind !== 'gameObject' || go.typeId !== 1) {

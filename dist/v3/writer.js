@@ -227,15 +227,17 @@ function writeVariantV3(file, options) {
         documentIds.set(document.fileId, machineId);
         identities.set(machineId, identityFor(byId, document.fileId, machineId, 'prefabInstance'));
     }
-    const rootInstance = file.prefabInstances.find(instance => String(instance.transformParent.fileID) === '0');
-    if (!rootInstance)
-        throw new Error('v3 variant requires a root PrefabInstance.');
+    const rootInstances = file.prefabInstances.filter(instance => String(instance.transformParent.fileID) === '0');
+    if (rootInstances.length !== 1)
+        throw new Error('v3 variant requires exactly one root PrefabInstance.');
+    const rootInstance = rootInstances[0];
     const rootId = documentIds.get(rootInstance.fileId);
     if (!rootId || !rootInstance.sourcePrefab.guid)
         throw new Error('v3 variant root source identity is incomplete.');
     let gameObjectIndex = 0;
     let transformIndex = 0;
     let componentIndex = 0;
+    const projectedDetails = new Map();
     const buildVariantNode = (node, parentTransformMachineId, siblingIndex = 0) => {
         if (node.nestedPrefab) {
             const machineId = documentIds.get(node.nestedPrefab.instanceId);
@@ -319,7 +321,7 @@ function writeVariantV3(file, options) {
         : [];
     const variantRoots = variantHierarchyRoots.map((node, index) => buildVariantNode(node, undefined, index));
     const addedComponentsBySourceGameObject = collectVariantAddedComponents(rootInstance, byId);
-    const inheritedRoots = buildInheritedVariantRoots(file, rootInstance.sourcePrefab.guid, options, identities, documentIds, rootId, addedComponentsBySourceGameObject);
+    const inheritedRoots = buildInheritedVariantRoots(rootInstance, rootInstance.sourcePrefab.guid, options, identities, documentIds, rootId, addedComponentsBySourceGameObject, projectedDetails);
     const effectiveRoots = inheritedRoots.length > 0 && variantRoots.length > 0
         ? attachVariantAddedRoots(variantRoots, inheritedRoots, rootInstance, byId, identities, rootId)
         : inheritedRoots.length > 0 ? inheritedRoots : variantRoots;
@@ -353,6 +355,12 @@ function writeVariantV3(file, options) {
                 STRUCTURAL_FIELDS.has(key) && key !== 'm_Father' && key !== 'm_RootOrder')
                 continue;
             lines.push(`${key} = ${(0, value_1.formatV3Value)((0, references_1.encodeV3References)(value, documentIds))}`);
+        }
+    }
+    for (const [machineId, properties] of projectedDetails) {
+        lines.push('', `[${machineId} | inherited override]`);
+        for (const [key, value] of Object.entries(properties)) {
+            lines.push(`${key} = ${(0, value_1.formatV3Value)(value)}`);
         }
     }
     lines.push('', '--- IDENTITY');
@@ -447,7 +455,7 @@ function attachVariantAddedRoots(localRoots, inheritedRoots, rootInstance, byId,
     }
     return inheritedRoots;
 }
-function buildInheritedVariantRoots(variant, sourceGuid, options, identities, documentIds, rootId, addedComponentsBySourceGameObject) {
+function buildInheritedVariantRoots(rootInstance, sourceGuid, options, identities, documentIds, rootId, addedComponentsBySourceGameObject, projectedDetails) {
     const sourcePath = options.sourceResolver?.resolveFilePath(sourceGuid);
     if (!sourcePath)
         return [];
@@ -458,13 +466,68 @@ function buildInheritedVariantRoots(variant, sourceGuid, options, identities, do
     let componentIndex = 0;
     let addedComponentIndex = 0;
     let inheritedPrefabInstanceIndex = 0;
-    const removedGameObjectIds = new Set(variant.prefabInstances.flatMap(instance => instance.removedGameObjects.filter(reference => !reference.guid || reference.guid === sourceGuid)
-        .map(reference => String(reference.fileID))));
+    const collectDirectRemovals = (references, label) => {
+        const result = new Set();
+        for (const reference of references) {
+            const fileId = String(reference.fileID ?? '0');
+            if (String(reference.guid ?? '') !== sourceGuid || fileId === '0' || result.has(fileId)) {
+                throw new Error(`Variant root ${rootInstance.fileId} has ambiguous ${label} ownership for ${fileId}.`);
+            }
+            result.add(fileId);
+        }
+        return result;
+    };
+    const removedGameObjectIds = collectDirectRemovals(rootInstance.removedGameObjects, 'removed-GameObject');
     const matchedRemovedGameObjectIds = new Set();
-    const removedComponentIds = new Set(variant.prefabInstances.flatMap(instance => instance.removedComponents.filter(reference => !reference.guid || reference.guid === sourceGuid)
-        .map(reference => String(reference.fileID))));
+    const removedComponentIds = collectDirectRemovals(rootInstance.removedComponents, 'removed-component');
     const matchedRemovedComponentIds = new Set();
-    const nameOverrides = new Map(variant.prefabInstances.flatMap(instance => instance.modifications.filter(modification => modification.propertyPath === 'm_Name' && modification.target.guid === sourceGuid).map(modification => [String(modification.target.fileID), modification.value])));
+    const nameOverrides = new Map();
+    for (const modification of rootInstance.modifications) {
+        if (modification.propertyPath !== 'm_Name' || modification.target.guid !== sourceGuid)
+            continue;
+        const fileId = String(modification.target.fileID ?? '0');
+        if (fileId === '0' || nameOverrides.has(fileId)) {
+            throw new Error(`Variant root ${rootInstance.fileId} has ambiguous name ownership for ${fileId}.`);
+        }
+        nameOverrides.set(fileId, modification.value);
+    }
+    const nestedOverrides = new Map();
+    const matchedNestedOverrides = new Set();
+    for (const modification of rootInstance.modifications) {
+        const guid = String(modification.target.guid ?? '');
+        const fileId = String(modification.target.fileID ?? '0');
+        if (guid === sourceGuid)
+            continue;
+        const key = `${guid}:${fileId}:${modification.propertyPath}`;
+        if (!guid || fileId === '0' || nestedOverrides.has(key)) {
+            throw new Error(`Variant root ${rootInstance.fileId} has ambiguous nested override ownership for ${fileId}.`);
+        }
+        nestedOverrides.set(key, modification);
+    }
+    const projectNestedOverrides = (machineId, guid, fileId, sourceName) => {
+        let name = sourceName;
+        for (const [key, modification] of nestedOverrides) {
+            if (!key.startsWith(`${guid}:${fileId}:`))
+                continue;
+            matchedNestedOverrides.add(key);
+            if (modification.propertyPath === 'm_Name') {
+                name = modification.value;
+                continue;
+            }
+            if (STRUCTURAL_FIELDS.has(modification.propertyPath) ||
+                String(modification.objectReference?.fileID ?? '0') !== '0') {
+                throw new Error(`Variant nested override ${guid}:${fileId}.${modification.propertyPath} is not a scalar semantic override.`);
+            }
+            const numeric = Number(modification.value);
+            const value = modification.value.trim() !== '' && Number.isFinite(numeric)
+                ? numeric
+                : modification.value;
+            const details = projectedDetails.get(machineId) ?? {};
+            details[modification.propertyPath] = value;
+            projectedDetails.set(machineId, details);
+        }
+        return name;
+    };
     const buildNestedInternal = (node, nestedSourceGuid, prefabOwnerId, nestedDocuments, parentTransformMachineId, siblingIndex, resolvingSources) => {
         if (node.nestedPrefab) {
             if (node.components.length > 0 || node.children.length > 0) {
@@ -501,7 +564,7 @@ function buildInheritedVariantRoots(variant, sourceGuid, options, identities, do
             }
             const childSource = resolveEffectiveVariantSource(childSourceGuid, options, new Set(resolvingSources));
             const root = buildNestedInternal(childSource.hierarchy, childSourceGuid, nestedPrefabInstanceId, childSource.documents, parentTransformMachineId, siblingIndex, new Set([...resolvingSources, childSourceGuid]));
-            root.name = node.name;
+            root.name = projectNestedOverrides(root.machineId, childSourceGuid, childSource.hierarchy.fileId, node.name);
             identities.get(root.machineId).displayName = node.name;
             root.nestedSourceGuid = childSourceGuid;
             root.prefabInstanceId = nestedPrefabInstanceId;
@@ -525,6 +588,7 @@ function buildInheritedVariantRoots(variant, sourceGuid, options, identities, do
             sourceGuid: nestedSourceGuid,
             sourceFileId: node.fileId,
         });
+        const effectiveName = projectNestedOverrides(goId, nestedSourceGuid, node.fileId, node.name);
         identities.set(transformId, {
             machineId: transformId,
             kind: 'transform',
@@ -558,10 +622,11 @@ function buildInheritedVariantRoots(variant, sourceGuid, options, identities, do
                 sourceGuid: nestedSourceGuid,
                 sourceFileId: component.fileId,
             });
+            projectNestedOverrides(componentId, nestedSourceGuid, component.fileId);
             return { typeName: component.typeName, machineId: componentId };
         });
         return {
-            name: node.name,
+            name: effectiveName,
             machineId: goId,
             components,
             children: node.children.map((child, index) => buildNestedInternal(child, nestedSourceGuid, prefabOwnerId, nestedDocuments, transformId, index, resolvingSources)),
@@ -596,7 +661,7 @@ function buildInheritedVariantRoots(variant, sourceGuid, options, identities, do
                 ? (() => {
                     const nestedSource = resolveEffectiveVariantSource(nestedSourceGuid, options, new Set([sourceGuid]));
                     const root = buildNestedInternal(nestedSource.hierarchy, nestedSourceGuid, prefabInstanceId, nestedSource.documents, parentTransformMachineId, siblingIndex, new Set([sourceGuid, nestedSourceGuid]));
-                    root.name = node.name;
+                    root.name = projectNestedOverrides(root.machineId, nestedSourceGuid, nestedSource.hierarchy.fileId, node.name);
                     identities.get(root.machineId).displayName = node.name;
                     return root;
                 })()
@@ -630,6 +695,7 @@ function buildInheritedVariantRoots(variant, sourceGuid, options, identities, do
             origin: 'inherited',
             typeId: gameObjectDocument.typeId,
             typeName: gameObjectDocument.typeName,
+            displayName: nameOverrides.get(node.fileId) ?? node.name,
             sourceGuid,
             sourceFileId: node.fileId,
         });
@@ -645,7 +711,7 @@ function buildInheritedVariantRoots(variant, sourceGuid, options, identities, do
             sourceGuid,
             sourceFileId: node.transform.fileId,
         });
-        const components = node.components.flatMap(component => {
+        const components = node.components.flatMap((component, index) => {
             const sourceDocument = sourceById.get(component.fileId);
             if (!sourceDocument)
                 throw new Error(`Inherited component ${component.fileId} is missing from its source.`);
@@ -658,6 +724,7 @@ function buildInheritedVariantRoots(variant, sourceGuid, options, identities, do
                 typeName: sourceDocument.typeName,
                 displayName: component.typeName,
                 ownerId: goId,
+                baselineOrder: index,
                 scriptGuid: component.scriptGuid,
                 sourceGuid,
                 sourceFileId: component.fileId,
@@ -717,6 +784,11 @@ function buildInheritedVariantRoots(variant, sourceGuid, options, identities, do
     for (const fileId of removedComponentIds) {
         if (!matchedRemovedComponentIds.has(fileId)) {
             throw new Error(`Removed inherited component ${fileId} is missing from source ${sourceGuid}.`);
+        }
+    }
+    for (const key of nestedOverrides.keys()) {
+        if (!matchedNestedOverrides.has(key)) {
+            throw new Error(`Variant nested override target ${key} is not uniquely owned by an expanded nested source.`);
         }
     }
     return roots;
@@ -785,7 +857,7 @@ function resolveEffectiveVariantSource(sourceGuid, options, resolving) {
         applyVariantChainAddedComponents(effective, root, source, sourceGuid);
         applyVariantChainRemovedGameObjects(effective.hierarchy, root, sourceGuid, parentGuid);
         applyVariantChainRemovedComponents(effective.hierarchy, root, sourceGuid, parentGuid);
-        applyVariantChainNames(effective.hierarchy, root, sourceGuid);
+        applyVariantChainNames(effective.hierarchy, root, sourceGuid, parentGuid);
         return effective;
     }
     finally {
@@ -962,7 +1034,7 @@ function applyVariantChainRemovedComponents(hierarchy, instance, variantGuid, pa
         removed.add(fileId);
     }
 }
-function applyVariantChainNames(hierarchy, instance, variantGuid) {
+function applyVariantChainNames(hierarchy, instance, variantGuid, parentGuid) {
     const byFileId = new Map();
     const collect = (node) => {
         if (byFileId.has(node.fileId)) {
@@ -977,6 +1049,9 @@ function applyVariantChainNames(hierarchy, instance, variantGuid) {
         if (modification.propertyPath !== 'm_Name')
             continue;
         const targetFileId = String(modification.target.fileID);
+        if (String(modification.target.guid ?? '') !== parentGuid || targetFileId === '0') {
+            throw new Error(`Variant source chain ${variantGuid} has ambiguous name ownership for ${targetFileId}.`);
+        }
         const target = byFileId.get(targetFileId);
         if (!target) {
             throw new Error(`Variant source chain ${variantGuid} name target ${targetFileId} is not in its effective tree.`);

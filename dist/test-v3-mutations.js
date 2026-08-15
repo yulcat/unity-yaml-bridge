@@ -56,6 +56,7 @@ function document(file, fileId) {
     return file.documents.find(item => item.fileId === fileId);
 }
 console.log('\n=== v3 desired-state local mutations ===');
+expectThrow(() => (0, reader_1.readV3)(v3().replace('g1 = gameObject | fileID:10', 'g1 = gameObject | origin:local | fileID:10')), 'Invalid v3 identity origin', 'unknown IDENTITY origin values are rejected instead of normalized');
 {
     const file = compile(v3());
     assert(file.hierarchy?.children[0]?.children[0]?.name === 'Leaf', 'baseline desired hierarchy is compiled');

@@ -268,6 +268,14 @@ console.log('\n=== v3 ownership cold-boundary edits ===');
             rebuilt.variantSource?.guid === middleGuid &&
             rebuilt.prefabInstances[0].modifications.length === 0, 'untouched variant-of-variant cold-compiles without source YAML');
         const middleInstance = middle.documents.find(item => item.typeId === 1001);
+        middleInstance.properties.m_Modification.m_Modifications[0].target.guid = middleGuid;
+        fs.writeFileSync(middlePath, (0, unity_yaml_writer_1.writeUnityYaml)(middle));
+        expectThrow(() => (0, writer_1.writeV3)(leaf, {
+            sourceResolver: {
+                resolveFilePath: guid => guid === middleGuid ? middlePath : guid === baseGuid ? basePath : undefined,
+            },
+        }), 'ambiguous name ownership', 'variant source-chain name override rejects the wrong direct-source GUID owner');
+        middleInstance.properties.m_Modification.m_Modifications[0].target.guid = baseGuid;
         middleInstance.properties.m_Modification.m_Modifications.push({
             target: { fileID: base.hierarchy.fileId, guid: baseGuid, type: 3 },
             propertyPath: 'm_Name',
@@ -479,6 +487,40 @@ console.log('\n=== v3 ownership cold-boundary edits ===');
     assert(rebuilt.documents.length === variant.documents.length &&
         rebuilt.prefabInstances.length === variant.prefabInstances.length &&
         rebuilt.variantSource?.guid === sourceGuid, 'untouched inherited nested PrefabInstance cold-compiles without emitting source documents');
+}
+{
+    const sourceGuid = '33333333333333333333333333333333';
+    const sourcePath = path.join(__dirname, '..', 'samples', 'prefabs', 'Button.prefab');
+    const source = (0, unity_yaml_parser_1.parseUnityYaml)(sample('prefabs', 'Button.prefab'));
+    const nestedSource = source.hierarchy.children.find(node => node.nestedPrefab).nestedPrefab;
+    const nestedPath = path.join(__dirname, '..', 'samples', 'prefabs', 'Amount.prefab');
+    const nested = (0, unity_yaml_parser_1.parseUnityYaml)(sample('prefabs', 'Amount.prefab'));
+    const nestedChild = nested.hierarchy.children[0];
+    const nestedComponent = nestedChild.components[0];
+    const variant = makeVariantSource(sourceGuid, source.hierarchy.fileId);
+    variant.prefabInstances[0].modifications.push({
+        target: { fileID: nestedChild.fileId, guid: nestedSource.sourceGuid, type: 3 },
+        propertyPath: 'm_Name', value: 'ExistingLeafNestedName', objectReference: { fileID: '0' },
+    }, {
+        target: { fileID: nestedComponent.fileId, guid: nestedSource.sourceGuid, type: 3 },
+        propertyPath: 'm_Enabled', value: '0', objectReference: { fileID: '0' },
+    });
+    const document = (0, reader_1.readV3)((0, writer_1.writeV3)(variant, {
+        sourceResolver: {
+            resolveFilePath: guid => guid === sourceGuid ? sourcePath :
+                guid === nestedSource.sourceGuid ? nestedPath : undefined,
+        },
+    }));
+    const nestedBoundary = document.variantRoots[0].children.find(node => node.nestedSourceGuid);
+    const projectedChild = nestedBoundary.children.find(node => document.identity.get(node.machineId)?.sourceFileId === nestedChild.fileId);
+    const projectedComponent = projectedChild.components.find(component => document.identity.get(component.machineId)?.sourceFileId === nestedComponent.fileId);
+    assert(projectedChild.name === 'ExistingLeafNestedName' &&
+        document.details.get(projectedComponent.machineId)?.m_Enabled === 0, 'leaf overrides targeting expanded nested-source internals project into effective STRUCTURE and DETAILS');
+    projectedChild.name = 'ReplacedLeafNestedName';
+    document.details.delete(projectedComponent.machineId);
+    const rebuilt = (0, unity_yaml_parser_1.parseUnityYaml)((0, unity_yaml_writer_1.writeUnityYaml)((0, compiler_1.compileV3)(document)));
+    const nestedOverrides = rebuilt.prefabInstances[0].modifications.filter(modification => modification.target.guid === nestedSource.sourceGuid);
+    assert(nestedOverrides.some(modification => modification.propertyPath === 'm_Name' && modification.value === 'ReplacedLeafNestedName') && !nestedOverrides.some(modification => modification.propertyPath === 'm_Enabled'), 'editing effective nested STRUCTURE replaces projected leaf overrides and removed DETAILS stay removed');
 }
 {
     const sourceGuid = '33333333333333333333333333333333';
@@ -714,6 +756,24 @@ console.log('\n=== v3 ownership cold-boundary edits ===');
     }
 }
 {
+    const directInherited = (0, reader_1.readV3)(sourceBackedVariantText());
+    const root = directInherited.variantRoots[0];
+    const child = root.children[0];
+    child.name = 'SilentlyIgnoredDirectRename';
+    expectThrow(() => (0, compiler_1.compileV3)(directInherited), 'Structural editing of direct inherited', 'direct inherited rename fails closed instead of compiling as a no-op');
+    child.name = directInherited.identity.get(child.machineId).displayName;
+    root.children = root.children.filter(node => node.machineId !== child.machineId);
+    directInherited.variantRoots.push(child);
+    expectThrow(() => (0, compiler_1.compileV3)(directInherited), 'Structural editing of direct inherited', 'direct inherited reparent fails closed instead of compiling as a no-op');
+    directInherited.variantRoots.pop();
+    root.children.push(child);
+    root.components.reverse();
+    expectThrow(() => (0, compiler_1.compileV3)(directInherited), 'Structural editing of direct inherited', 'direct inherited component reorder fails closed instead of compiling as a no-op');
+    root.components.reverse();
+    directInherited.details.set(child.machineId, { m_IsActive: 0 });
+    expectThrow(() => (0, compiler_1.compileV3)(directInherited), 'Structural editing of direct inherited', 'direct inherited semantic DETAILS fail closed instead of compiling as a no-op');
+}
+{
     const sourceGuid = '33333333333333333333333333333333';
     const sourcePath = path.join(__dirname, '..', 'samples', 'prefabs', 'Button.prefab');
     const source = (0, unity_yaml_parser_1.parseUnityYaml)(sample('prefabs', 'Button.prefab'));
@@ -727,6 +787,34 @@ console.log('\n=== v3 ownership cold-boundary edits ===');
     inheritedNested.name = document.identity.get(inheritedNested.machineId).displayName;
     document.variantRoots[0].children = document.variantRoots[0].children.filter(node => node.machineId !== inheritedNested.machineId);
     expectThrow(() => (0, compiler_1.compileV3)(document), 'is missing from variant STRUCTURE', 'removing an inherited nested PrefabInstance fails closed instead of compiling as a no-op');
+}
+{
+    const variant = (0, unity_yaml_parser_1.parseUnityYaml)(sample('variants', 'Ellen_Variant.prefab'));
+    const source = (0, unity_yaml_parser_1.parseUnityYaml)(sample('prefabs', 'Amount.prefab'));
+    const sourcePath = path.join(__dirname, '..', 'samples', 'prefabs', 'Amount.prefab');
+    const sourceGuid = variant.variantSource.guid;
+    const removedChild = source.hierarchy.children[0];
+    variant.prefabInstances[0].removedGameObjects = [{
+            fileID: removedChild.fileId, type: 3,
+        }];
+    expectThrow(() => (0, writer_1.writeV3)(variant, {
+        sourceResolver: { resolveFilePath: guid => guid === sourceGuid ? sourcePath : undefined },
+    }), 'ambiguous removed-GameObject ownership', 'root-owner export rejects GUID-less removed GameObject targets');
+    variant.prefabInstances[0].removedGameObjects = [
+        { fileID: removedChild.fileId, guid: sourceGuid, type: 3 },
+        { fileID: removedChild.fileId, guid: sourceGuid, type: 3 },
+    ];
+    expectThrow(() => (0, writer_1.writeV3)(variant, {
+        sourceResolver: { resolveFilePath: guid => guid === sourceGuid ? sourcePath : undefined },
+    }), 'ambiguous removed-GameObject ownership', 'root-owner export rejects duplicate removed GameObject targets');
+    const duplicateNames = makeVariantSource(sourceGuid, source.hierarchy.fileId, 'FirstName');
+    duplicateNames.prefabInstances[0].modifications.push({
+        target: { fileID: source.hierarchy.fileId, guid: sourceGuid, type: 3 },
+        propertyPath: 'm_Name', value: 'SecondName', objectReference: { fileID: '0' },
+    });
+    expectThrow(() => (0, writer_1.writeV3)(duplicateNames, {
+        sourceResolver: { resolveFilePath: guid => guid === sourceGuid ? sourcePath : undefined },
+    }), 'ambiguous name ownership', 'root-owner export rejects duplicate name override targets');
 }
 {
     const baselineText = sourceBackedVariantText();

@@ -521,6 +521,25 @@ function compileVariant(document: V3Document): UnityFile {
     const goIdentity = requireIdentity(document, node.machineId, 'gameObject');
     const transformIdentity = findOwnedTransform(document, node.machineId);
     if (goIdentity.origin === 'inherited') {
+      const directComponentStructureChanged = node.components.some((component, index) => {
+        const identity = requireIdentity(document, component.machineId, 'component');
+        return identity.origin === 'inherited' &&
+          (identity.ownerId !== goIdentity.machineId || identity.baselineOrder !== index ||
+           (identity.displayName || identity.typeName) !== component.typeName);
+      });
+      const directStructuralChange = goIdentity.displayName !== node.name ||
+        transformIdentity.baselineParentId !== parentTransformMachineId ||
+        transformIdentity.baselineOrder !== siblingIndex || directComponentStructureChanged;
+      const directSemanticChange = document.details.has(goIdentity.machineId) ||
+        document.details.has(transformIdentity.machineId) || node.components.some(component => {
+          const identity = requireIdentity(document, component.machineId, 'component');
+          return identity.origin === 'inherited' && document.details.has(identity.machineId);
+        });
+      if (!goIdentity.prefabOwnerId && (directStructuralChange || directSemanticChange)) {
+        throw new Error(
+          `Structural editing of direct inherited GameObject ${goIdentity.machineId} is not implemented.`
+        );
+      }
       const desiredComponents = new Set(node.components.map(component => component.machineId));
       for (const identity of document.identity.values()) {
         if (identity.kind !== 'component' || identity.origin !== 'inherited' ||
@@ -776,6 +795,18 @@ function compileVariant(document: V3Document): UnityFile {
       modification.m_RemovedComponents = removedComponents;
       modification.m_AddedGameObjects = addedGameObjects;
       modification.m_AddedComponents = addedComponents;
+      const nestedTargets = new Set([...document.identity.values()]
+        .filter(candidate => candidate.origin === 'inherited' && candidate.prefabOwnerId &&
+          candidate.sourceGuid && candidate.sourceFileId)
+        .map(candidate => `${candidate.sourceGuid}:${candidate.sourceFileId}`));
+      if (Array.isArray(modification.m_Modifications)) {
+        modification.m_Modifications = (modification.m_Modifications as any[]).filter(entry => {
+          const targetKey = `${String(entry?.target?.guid ?? '')}:${String(entry?.target?.fileID ?? '0')}`;
+          const propertyPath = String(entry?.propertyPath ?? '');
+          return !nestedTargets.has(targetKey) ||
+            propertyPath !== 'm_Name' && INHERITED_OVERRIDE_STRUCTURAL_FIELDS.has(propertyPath);
+        });
+      }
       for (const override of inheritedNestedOverrides) {
         if (override.ownerId !== identity.machineId) continue;
         if (!Array.isArray(modification.m_Modifications)) modification.m_Modifications = [];

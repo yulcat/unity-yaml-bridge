@@ -211,10 +211,14 @@ function parseIdentity(lines) {
         if (!Number.isInteger(typeId) || !typeName) {
             throw new Error(`v3 identity ${machineId} requires type and typeName.`);
         }
+        const origin = fields.get('origin');
+        if (origin !== undefined && origin !== 'inherited') {
+            throw new Error(`Invalid v3 identity origin for ${machineId}: ${origin}`);
+        }
         result.set(machineId, {
             machineId,
             kind,
-            origin: fields.get('origin') === 'inherited' ? 'inherited' : undefined,
+            origin,
             fileId: fields.get('fileID'),
             typeId,
             typeName,

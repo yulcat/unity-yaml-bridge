@@ -72,12 +72,17 @@ inherited GameObject removal is an explicit tombstone, for example
 `└─ - LegacyButton @ig2 [Button @ic4]`; it compiles to `m_RemovedGameObjects`, while
 removing an inherited component from the brackets compiles to `m_RemovedComponents`.
 A new local child beneath an inherited node compiles to `m_AddedGameObjects` using
-the inherited parent Transform identity. Existing removed deltas are projected back
-into the same effective representation. Source-chain expansion currently fails
-closed for intermediate structural deltas or variant-added roots, inherited nested
-PrefabInstances, a direct source tree mixed with variant-added roots, and local
-component additions on inherited GameObjects. Without a source resolver, nested
-and variant baseline ownership
+the inherited parent Transform identity. A local component listed on an inherited
+GameObject compiles to a local component document, a direct-owner stripped
+GameObject, and the root PrefabInstance's `m_AddedComponents`; new fileIDs are
+deterministic, while exported existing additions preserve their component and
+stripped-object fileIDs. Export and compilation fail closed when the target source
+GameObject, direct PrefabInstance owner, or stripped-object ownership is missing or
+ambiguous. Existing removed and added-component deltas are projected back into the
+same effective representation. Source-chain expansion currently fails closed for
+intermediate structural deltas or variant-added roots, inherited nested
+PrefabInstances, and a direct source tree mixed with variant-added roots. Without a
+source resolver, nested and variant baseline ownership
 documents remain standalone, and existing PrefabInstance delta values can be
 edited in DETAILS. Local objects not yet exposed in the effective STRUCTURE are
 kept as explicit `owned` identity/details records until ownership-aware

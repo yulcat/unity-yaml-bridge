@@ -227,6 +227,9 @@ function compileVariant(document) {
     const removedGameObjects = [];
     const removedComponents = [];
     const addedGameObjects = [];
+    const addedComponents = [];
+    const inheritedGameObjectStubs = new Map();
+    const usedInheritedStubIds = new Set();
     const hasInheritedStructure = [...document.identity.values()].some(identity => identity.origin === 'inherited');
     const buildNode = (node, parentTransformId, siblingIndex, parentTransformMachineId) => {
         if (node.tombstone) {
@@ -274,8 +277,76 @@ function compileVariant(document) {
                     type: 3,
                 });
             }
-            if (transformIdentity.origin !== 'inherited' || node.components.some(component => requireIdentity(document, component.machineId, 'component').origin !== 'inherited')) {
+            if (transformIdentity.origin !== 'inherited') {
                 throw new Error(`Inherited STRUCTURE node ${node.machineId} has mixed local ownership.`);
+            }
+            for (const component of node.components) {
+                const identity = requireIdentity(document, component.machineId, 'component');
+                if (identity.origin === 'inherited')
+                    continue;
+                if (identity.ownerId !== goIdentity.machineId ||
+                    !identity.prefabOwnerId || identity.prefabOwnerId !== document.variantRootId) {
+                    throw new Error(`Local component ${identity.machineId} on inherited GameObject ${goIdentity.machineId} ` +
+                        'requires its direct PrefabInstance owner.');
+                }
+                if (!goIdentity.sourceGuid || !goIdentity.sourceFileId) {
+                    throw new Error(`Inherited GameObject ${goIdentity.machineId} has no source identity.`);
+                }
+                const ownerIdentity = requireIdentity(document, identity.prefabOwnerId, 'prefabInstance');
+                let strippedGameObjectId = inheritedGameObjectStubs.get(goIdentity.machineId);
+                if (!strippedGameObjectId) {
+                    const existingStub = findInheritedGameObjectStub(document, goIdentity, ownerIdentity);
+                    if (existingStub) {
+                        strippedGameObjectId = allocated.get(existingStub.machineId);
+                        usedInheritedStubIds.add(existingStub.machineId);
+                    }
+                    else {
+                        strippedGameObjectId = allocateSyntheticFileId(document, `inherited-game-object:${goIdentity.machineId}`, allocated);
+                        documents.push({
+                            typeId: 1,
+                            typeName: 'GameObject',
+                            fileId: strippedGameObjectId,
+                            stripped: true,
+                            properties: {
+                                m_CorrespondingSourceObject: {
+                                    fileID: goIdentity.sourceFileId,
+                                    guid: goIdentity.sourceGuid,
+                                    type: 3,
+                                },
+                                m_PrefabInstance: { fileID: allocated.get(ownerIdentity.machineId) },
+                                m_PrefabAsset: { fileID: 0 },
+                            },
+                        });
+                    }
+                    inheritedGameObjectStubs.set(goIdentity.machineId, strippedGameObjectId);
+                }
+                const componentProperties = mergeDetails(COMMON_LOCAL_ENVELOPE, document.details.get(identity.machineId));
+                componentProperties.m_GameObject = { fileID: strippedGameObjectId };
+                if (identity.typeId === 114) {
+                    if (!identity.scriptGuid) {
+                        throw new Error(`MonoBehaviour ${identity.machineId} requires script GUID identity.`);
+                    }
+                    componentProperties.m_Enabled ?? (componentProperties.m_Enabled = 1);
+                    componentProperties.m_EditorHideFlags ?? (componentProperties.m_EditorHideFlags = 0);
+                    componentProperties.m_Script = {
+                        fileID: identity.scriptFileId ?? 11500000,
+                        guid: identity.scriptGuid,
+                        type: identity.scriptType ?? 3,
+                    };
+                    componentProperties.m_Name ?? (componentProperties.m_Name = '');
+                    componentProperties.m_EditorClassIdentifier ?? (componentProperties.m_EditorClassIdentifier = '');
+                }
+                documents.push(makeDocument(identity, allocated.get(identity.machineId), componentProperties));
+                emitted.add(identity.machineId);
+                addedComponents.push({
+                    targetCorrespondingSourceObject: {
+                        fileID: goIdentity.sourceFileId,
+                        guid: goIdentity.sourceGuid,
+                        type: 3,
+                    },
+                    insertIndex: -1,
+                    addedObject: { $ref: identity.machineId },
+                });
             }
             node.children.forEach((child, index) => {
                 const childIdentity = requireIdentity(document, child.machineId, 'gameObject');
@@ -387,6 +458,10 @@ function compileVariant(document) {
             continue;
         if (identity.kind !== 'prefabInstance' && identity.kind !== 'stripped' && identity.kind !== 'owned')
             continue;
+        if (identity.kind === 'stripped' && identity.typeId === 1 &&
+            isDirectInheritedGameObjectStub(document, identity) &&
+            !usedInheritedStubIds.has(identity.machineId))
+            continue;
         if ((identity.ownerId || identity.kind === 'prefabInstance') && !isDesiredOwnership(identity.machineId))
             continue;
         const details = document.details.get(identity.machineId);
@@ -401,6 +476,7 @@ function compileVariant(document) {
             modification.m_RemovedGameObjects = removedGameObjects;
             modification.m_RemovedComponents = removedComponents;
             modification.m_AddedGameObjects = addedGameObjects;
+            modification.m_AddedComponents = addedComponents;
         }
         if (identity.kind === 'prefabInstance' && nestedPlans.has(identity.machineId)) {
             properties = applyNestedInstancePlan(document, identity, nestedPlans.get(identity.machineId), properties);
@@ -467,6 +543,59 @@ function allocateFileIds(document) {
         }
     }
     return result;
+}
+function allocateSyntheticFileId(document, key, allocated) {
+    const existing = allocated.get(key);
+    if (existing)
+        return existing;
+    const occupied = new Set(allocated.values());
+    let salt = 0;
+    while (true) {
+        const seed = `${document.assetGuid || document.profile}|${key}|stripped|${salt}`;
+        const digest = (0, crypto_1.createHash)('sha256').update(seed).digest();
+        const candidate = (digest.readBigUInt64BE(0) & 0x7fffffffffffffffn).toString();
+        if (candidate !== '0' && !occupied.has(candidate)) {
+            allocated.set(key, candidate);
+            return candidate;
+        }
+        salt++;
+    }
+}
+function findInheritedGameObjectStub(document, gameObject, owner) {
+    const sourceMatches = [...document.identity.values()].filter(identity => {
+        if (identity.kind !== 'stripped' || identity.typeId !== 1)
+            return false;
+        const details = document.details.get(identity.machineId);
+        const source = details?.m_CorrespondingSourceObject;
+        return String(source?.fileID ?? '0') === gameObject.sourceFileId &&
+            String(source?.guid ?? '') === gameObject.sourceGuid;
+    });
+    const directMatches = sourceMatches.filter(identity => {
+        if (identity.ownerId !== owner.machineId)
+            return false;
+        const prefabInstance = document.details.get(identity.machineId)?.m_PrefabInstance;
+        return prefabInstance?.$ref === owner.machineId ||
+            (!!owner.fileId && String(prefabInstance?.fileID ?? '0') === owner.fileId);
+    });
+    if (sourceMatches.length > 0 && directMatches.length !== 1) {
+        throw new Error(`Inherited GameObject ${gameObject.machineId} has ambiguous stripped GameObject ownership.`);
+    }
+    return directMatches[0];
+}
+function isDirectInheritedGameObjectStub(document, identity) {
+    if (!document.variantRootId || identity.ownerId !== document.variantRootId)
+        return false;
+    const details = document.details.get(identity.machineId);
+    const source = details?.m_CorrespondingSourceObject;
+    const prefabInstance = details?.m_PrefabInstance;
+    const root = document.identity.get(document.variantRootId);
+    const hasDirectOwner = prefabInstance?.$ref === document.variantRootId ||
+        (!!root?.fileId && String(prefabInstance?.fileID ?? '0') === root.fileId);
+    if (!hasDirectOwner)
+        return false;
+    return [...document.identity.values()].some(candidate => candidate.kind === 'gameObject' && candidate.origin === 'inherited' &&
+        candidate.sourceFileId === String(source?.fileID ?? '0') &&
+        candidate.sourceGuid === String(source?.guid ?? ''));
 }
 function requireIdentity(document, machineId, kind) {
     const identity = document.identity.get(machineId);

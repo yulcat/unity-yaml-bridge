@@ -286,6 +286,84 @@ console.log('\n=== v3 ownership cold-boundary edits ===');
 {
     const document = (0, reader_1.readV3)(sourceBackedVariantText());
     const inheritedRoot = document.variantRoots[0];
+    const inheritedIdentity = document.identity.get(inheritedRoot.machineId);
+    document.identity.set('cAdded', {
+        machineId: 'cAdded', kind: 'component', typeId: 65, typeName: 'BoxCollider',
+        displayName: 'BoxCollider', ownerId: inheritedRoot.machineId,
+        prefabOwnerId: document.variantRootId,
+    });
+    document.details.set('cAdded', {
+        m_Enabled: 1,
+        serializedVersion: 3,
+        m_Size: { x: 1, y: 1, z: 1 },
+        m_Center: { x: 0, y: 0, z: 0 },
+    });
+    inheritedRoot.components.push({ typeName: 'BoxCollider', machineId: 'cAdded' });
+    const first = (0, unity_yaml_parser_1.parseUnityYaml)((0, unity_yaml_writer_1.writeUnityYaml)((0, compiler_1.compileV3)(document)));
+    const second = (0, unity_yaml_parser_1.parseUnityYaml)((0, unity_yaml_writer_1.writeUnityYaml)((0, compiler_1.compileV3)(document)));
+    const instance = first.documents.find(item => item.fileId ===
+        document.identity.get(document.variantRootId).fileId);
+    const added = instance.properties.m_Modification.m_AddedComponents[0];
+    const component = first.documents.find(item => item.typeId === 65);
+    const strippedGameObject = first.documents.find(item => item.stripped && item.typeId === 1 &&
+        item.fileId === String(component.properties.m_GameObject.fileID));
+    const secondComponent = second.documents.find(item => item.typeId === 65);
+    assert(String(added.targetCorrespondingSourceObject.fileID) === inheritedIdentity.sourceFileId &&
+        added.targetCorrespondingSourceObject.guid === inheritedIdentity.sourceGuid &&
+        String(added.addedObject.fileID) === component.fileId &&
+        String(strippedGameObject.properties.m_PrefabInstance.fileID) === instance.fileId &&
+        String(strippedGameObject.properties.m_CorrespondingSourceObject.fileID) === inheritedIdentity.sourceFileId &&
+        strippedGameObject.properties.m_CorrespondingSourceObject.guid === inheritedIdentity.sourceGuid &&
+        component.fileId === secondComponent.fileId, 'adding a local component to an inherited GameObject emits direct-owner m_AddedComponents deterministically');
+    const sourcePath = path.join(__dirname, '..', 'samples', 'prefabs', 'Amount.prefab');
+    const exported = (0, reader_1.readV3)((0, writer_1.writeV3)(first, {
+        sourceResolver: {
+            resolveFilePath: guid => guid === inheritedIdentity.sourceGuid ? sourcePath : undefined,
+        },
+    }));
+    const exportedRoot = exported.variantRoots[0];
+    const exportedComponent = exportedRoot.components.find(item => item.typeName === 'BoxCollider');
+    const exportedIdentity = exportedComponent && exported.identity.get(exportedComponent.machineId);
+    const recompiled = (0, unity_yaml_parser_1.parseUnityYaml)((0, unity_yaml_writer_1.writeUnityYaml)((0, compiler_1.compileV3)(exported)));
+    const recompiledAdded = recompiled.prefabInstances[0].addedComponents[0];
+    const recompiledComponent = recompiled.documents.find(item => item.fileId === exportedIdentity?.fileId);
+    const sourceStubs = recompiled.documents.filter(item => item.stripped && item.typeId === 1 &&
+        String(item.properties.m_CorrespondingSourceObject?.fileID) === inheritedIdentity.sourceFileId &&
+        item.properties.m_CorrespondingSourceObject?.guid === inheritedIdentity.sourceGuid);
+    assert(exportedIdentity?.origin !== 'inherited' &&
+        exportedIdentity?.ownerId === exportedRoot.machineId &&
+        exportedIdentity?.prefabOwnerId === exported.variantRootId &&
+        exportedIdentity?.fileId === component.fileId &&
+        exported.details.has(exportedIdentity.machineId) &&
+        String(recompiledAdded.targetGameObject.fileID) === inheritedIdentity.sourceFileId &&
+        recompiledAdded.targetGameObject.guid === inheritedIdentity.sourceGuid &&
+        sourceStubs.length === 1 &&
+        String(recompiledComponent.properties.m_GameObject.fileID) === strippedGameObject.fileId, 'existing m_AddedComponents exports into inherited STRUCTURE and cold-roundtrips');
+    exportedRoot.components = exportedRoot.components.filter(item => item.machineId !== exportedIdentity?.machineId);
+    const removedAgain = (0, unity_yaml_parser_1.parseUnityYaml)((0, unity_yaml_writer_1.writeUnityYaml)((0, compiler_1.compileV3)(exported)));
+    const removedAgainInstance = removedAgain.prefabInstances[0];
+    assert(removedAgainInstance.addedComponents.length === 0 &&
+        !removedAgain.documents.some(item => item.fileId === exportedIdentity?.fileId) &&
+        !removedAgain.documents.some(item => item.stripped && item.typeId === 1 &&
+            String(item.properties.m_CorrespondingSourceObject?.fileID) === inheritedIdentity.sourceFileId &&
+            item.properties.m_CorrespondingSourceObject?.guid === inheritedIdentity.sourceGuid), 'removing an exported local added component removes its delta, document, and unused stripped stub');
+    const unmatchedTarget = (0, unity_yaml_parser_1.parseUnityYaml)((0, unity_yaml_writer_1.writeUnityYaml)(first));
+    const unmatchedInstance = unmatchedTarget.documents.find(item => item.typeId === 1001);
+    unmatchedInstance.properties.m_Modification.m_AddedComponents[0]
+        .targetCorrespondingSourceObject.fileID = 999999;
+    const unmatchedComponent = unmatchedTarget.documents.find(item => item.typeId === 65);
+    const unmatchedStub = unmatchedTarget.documents.find(item => item.fileId ===
+        String(unmatchedComponent.properties.m_GameObject.fileID));
+    unmatchedStub.properties.m_CorrespondingSourceObject.fileID = 999999;
+    expectThrow(() => (0, writer_1.writeV3)(unmatchedTarget, {
+        sourceResolver: {
+            resolveFilePath: guid => guid === inheritedIdentity.sourceGuid ? sourcePath : undefined,
+        },
+    }), 'missing from the direct source', 'added-component export fails closed when its source GameObject target is unknown');
+}
+{
+    const document = (0, reader_1.readV3)(sourceBackedVariantText());
+    const inheritedRoot = document.variantRoots[0];
     const inheritedTransform = [...document.identity.values()].find(identity => identity.kind === 'transform' && identity.ownerId === inheritedRoot.machineId);
     document.identity.set('gAdded', {
         machineId: 'gAdded', kind: 'gameObject', typeId: 1, typeName: 'GameObject',

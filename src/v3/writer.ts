@@ -329,8 +329,17 @@ function writeVariantV3(file: UnityFile, options: V3WriterOptions): string {
       : [file.hierarchy]
     : [];
   const variantRoots = variantHierarchyRoots.map((node, index) => buildVariantNode(node, undefined, index));
+  const addedComponentsBySourceGameObject = collectVariantAddedComponents(
+    rootInstance, byId
+  );
   const inheritedRoots = buildInheritedVariantRoots(
-    file, rootInstance.sourcePrefab.guid, options, identities
+    file,
+    rootInstance.sourcePrefab.guid,
+    options,
+    identities,
+    documentIds,
+    rootId,
+    addedComponentsBySourceGameObject
   );
   if (inheritedRoots.length > 0 && variantRoots.length > 0) {
     throw new Error('Inherited effective-tree expansion with variant-added roots is not implemented.');
@@ -401,7 +410,10 @@ function buildInheritedVariantRoots(
   variant: UnityFile,
   sourceGuid: string,
   options: V3WriterOptions,
-  identities: Map<string, V3IdentityRecord>
+  identities: Map<string, V3IdentityRecord>,
+  documentIds: Map<string, string>,
+  rootId: string,
+  addedComponentsBySourceGameObject: Map<string, UnityDocument[]>
 ): V3StructureNode[] {
   const sourcePath = options.sourceResolver?.resolveFilePath(sourceGuid);
   if (!sourcePath) return [];
@@ -410,6 +422,7 @@ function buildInheritedVariantRoots(
   let gameObjectIndex = 0;
   let transformIndex = 0;
   let componentIndex = 0;
+  let addedComponentIndex = 0;
   const removedGameObjectIds = new Set(variant.prefabInstances.flatMap(instance =>
     instance.removedGameObjects.filter(reference => !reference.guid || reference.guid === sourceGuid)
       .map(reference => String(reference.fileID))
@@ -486,6 +499,32 @@ function buildInheritedVariantRoots(
       }
       return { typeName: component.typeName, machineId: componentId };
     });
+    const localAddedComponents = addedComponentsBySourceGameObject.get(node.fileId) ?? [];
+    if (localAddedComponents.length > 0) addedComponentsBySourceGameObject.delete(node.fileId);
+    for (const addedDocument of localAddedComponents) {
+      const componentId = `ac${++addedComponentIndex}`;
+      documentIds.set(addedDocument.fileId, componentId);
+      identities.set(componentId, {
+        machineId: componentId,
+        kind: 'component',
+        fileId: addedDocument.fileId,
+        typeId: addedDocument.typeId,
+        typeName: addedDocument.typeName,
+        displayName: addedDocument.typeName,
+        ownerId: goId,
+        prefabOwnerId: rootId,
+        scriptGuid: addedDocument.typeId === 114
+          ? String(addedDocument.properties.m_Script?.guid ?? '') || undefined
+          : undefined,
+        scriptFileId: addedDocument.typeId === 114
+          ? String(addedDocument.properties.m_Script?.fileID ?? 11500000)
+          : undefined,
+        scriptType: addedDocument.typeId === 114
+          ? Number(addedDocument.properties.m_Script?.type ?? 3)
+          : undefined,
+      });
+      components.push({ typeName: addedDocument.typeName, machineId: componentId });
+    }
     const children = node.children.map((child, index) => build(child, transformId, index));
     return {
       name: nameOverrides.get(node.fileId) ?? node.name,
@@ -496,6 +535,12 @@ function buildInheritedVariantRoots(
     };
   };
   const roots = [build(source.hierarchy)];
+  if (addedComponentsBySourceGameObject.size > 0) {
+    throw new Error(
+      `Added component target ${addedComponentsBySourceGameObject.keys().next().value} ` +
+      `is missing from the direct source ${sourceGuid}.`
+    );
+  }
   for (const fileId of removedGameObjectIds) {
     if (!matchedRemovedGameObjectIds.has(fileId)) {
       throw new Error(`Removed inherited GameObject ${fileId} is missing from source ${sourceGuid}.`);
@@ -507,6 +552,46 @@ function buildInheritedVariantRoots(
     }
   }
   return roots;
+}
+
+function collectVariantAddedComponents(
+  rootInstance: UnityFile['prefabInstances'][number],
+  byId: Map<string, UnityDocument>
+): Map<string, UnityDocument[]> {
+  const result = new Map<string, UnityDocument[]>();
+  const seenAddedObjects = new Set<string>();
+  for (const entry of rootInstance.addedComponents) {
+    const targetFileId = String(entry.targetGameObject.fileID ?? '0');
+    const targetGuid = String(entry.targetGameObject.guid ?? '');
+    if (targetFileId === '0' || targetGuid !== rootInstance.sourcePrefab.guid) {
+      throw new Error('Variant m_AddedComponents target is not owned by the direct source PrefabInstance.');
+    }
+    const addedFileId = String(entry.addedComponent.fileID ?? '0');
+    if (addedFileId === '0' || seenAddedObjects.has(addedFileId)) {
+      throw new Error(`Variant m_AddedComponents has an ambiguous addedObject ${addedFileId}.`);
+    }
+    seenAddedObjects.add(addedFileId);
+    const addedDocument = byId.get(addedFileId);
+    if (!addedDocument || addedDocument.stripped ||
+        addedDocument.typeId === 1 || addedDocument.typeId === 4 || addedDocument.typeId === 224) {
+      throw new Error(`Variant m_AddedComponents addedObject ${addedFileId} is not a local component.`);
+    }
+    const strippedGameObjectId = String(addedDocument.properties.m_GameObject?.fileID ?? '0');
+    const strippedGameObject = byId.get(strippedGameObjectId);
+    const source = strippedGameObject?.properties.m_CorrespondingSourceObject;
+    const ownerFileId = String(strippedGameObject?.properties.m_PrefabInstance?.fileID ?? '0');
+    if (!strippedGameObject?.stripped || strippedGameObject.typeId !== 1 ||
+        String(source?.fileID ?? '0') !== targetFileId ||
+        String(source?.guid ?? '') !== targetGuid || ownerFileId !== rootInstance.fileId) {
+      throw new Error(
+        `Variant added component ${addedFileId} has no unambiguous direct-owner stripped GameObject.`
+      );
+    }
+    const additions = result.get(targetFileId) ?? [];
+    additions.push(addedDocument);
+    result.set(targetFileId, additions);
+  }
+  return result;
 }
 
 interface EffectiveVariantSource {

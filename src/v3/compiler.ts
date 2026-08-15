@@ -291,9 +291,51 @@ function compileVariant(document: V3Document): UnityFile {
     siblingIndex: number,
     sourceRoot = false
   ): void => {
-    if ((node.nestedSourceGuid && !sourceRoot) || node.tombstone) {
+    if (node.tombstone) {
       throw new Error(
         `Structural editing of inherited nested PrefabInstance ${prefabOwnerId} internals is not implemented.`
+      );
+    }
+    if (node.nestedSourceGuid && !sourceRoot) {
+      if (node.prefabInstanceId) {
+        const nestedPrefab = requireIdentity(document, node.prefabInstanceId, 'prefabInstance');
+        if (nestedPrefab.origin !== 'inherited' || nestedPrefab.prefabOwnerId !== prefabOwnerId ||
+            nestedPrefab.sourceGuid !== nestedSourceGuid || !nestedPrefab.sourceFileId ||
+            nestedPrefab.displayName !== node.name ||
+            nestedPrefab.baselineParentId !== parentTransformMachineId ||
+            nestedPrefab.baselineOrder !== siblingIndex) {
+          throw new Error(
+            `Structural editing of inherited nested PrefabInstance ${node.prefabInstanceId} internals is not implemented.`
+          );
+        }
+        desiredInheritedNestedInstances.add(nestedPrefab.machineId);
+        validateInheritedNestedInternal(
+          node,
+          nestedPrefab.machineId,
+          node.nestedSourceGuid,
+          parentTransformMachineId,
+          siblingIndex,
+          true
+        );
+        return;
+      }
+      const unresolvedPrefab = requireIdentity(document, node.machineId, 'prefabInstance');
+      if (unresolvedPrefab.origin !== 'inherited' || unresolvedPrefab.prefabOwnerId !== prefabOwnerId ||
+          unresolvedPrefab.sourceGuid !== nestedSourceGuid || !unresolvedPrefab.sourceFileId ||
+          unresolvedPrefab.displayName !== node.name ||
+          unresolvedPrefab.baselineParentId !== parentTransformMachineId ||
+          unresolvedPrefab.baselineOrder !== siblingIndex || node.components.length > 0 ||
+          node.children.length > 0) {
+        throw new Error(
+          `Structural editing of inherited nested PrefabInstance ${node.machineId} internals is not implemented.`
+        );
+      }
+      desiredInheritedNestedInstances.add(unresolvedPrefab.machineId);
+      return;
+    }
+    if (sourceRoot && node.prefabInstanceId !== prefabOwnerId) {
+      throw new Error(
+        `Nested source-root ${node.machineId} is not directly owned by ${prefabOwnerId}.`
       );
     }
     const gameObject = requireIdentity(document, node.machineId, 'gameObject');

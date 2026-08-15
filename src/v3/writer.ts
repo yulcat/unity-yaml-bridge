@@ -541,12 +541,61 @@ function buildInheritedVariantRoots(
     prefabOwnerId: string,
     nestedDocuments: Map<string, UnityDocument>,
     parentTransformMachineId: string | undefined,
-    siblingIndex: number
+    siblingIndex: number,
+    resolvingSources: Set<string>
   ): V3StructureNode => {
     if (node.nestedPrefab) {
-      throw new Error(
-        `Inherited nested PrefabInstance ${prefabOwnerId} contains unsupported nested-in-nested internals.`
+      if (node.components.length > 0 || node.children.length > 0) {
+        throw new Error(`Inherited nested PrefabInstance ${node.name} has unsupported mixed effective content.`);
+      }
+      const sourceDocument = nestedDocuments.get(node.nestedPrefab.instanceId);
+      if (!sourceDocument || sourceDocument.typeId !== 1001) {
+        throw new Error(
+          `Inherited nested PrefabInstance ${node.name} is missing source document ${node.nestedPrefab.instanceId}.`
+        );
+      }
+      const nestedPrefabInstanceId = `ip${++inheritedPrefabInstanceIndex}`;
+      identities.set(nestedPrefabInstanceId, {
+        machineId: nestedPrefabInstanceId,
+        kind: 'prefabInstance',
+        origin: 'inherited',
+        typeId: sourceDocument.typeId,
+        typeName: sourceDocument.typeName,
+        displayName: node.name,
+        prefabOwnerId,
+        baselineParentId: parentTransformMachineId,
+        baselineOrder: siblingIndex,
+        sourceGuid: nestedSourceGuid,
+        sourceFileId: node.nestedPrefab.instanceId,
+      });
+      const childSourceGuid = node.nestedPrefab.sourceGuid;
+      const childPath = options.sourceResolver?.resolveFilePath(childSourceGuid);
+      if (!childPath) {
+        return {
+          name: node.name,
+          machineId: nestedPrefabInstanceId,
+          components: [],
+          children: [],
+          nestedSourceGuid: childSourceGuid,
+        };
+      }
+      const childSource = resolveEffectiveVariantSource(
+        childSourceGuid, options, new Set(resolvingSources)
       );
+      const root = buildNestedInternal(
+        childSource.hierarchy,
+        childSourceGuid,
+        nestedPrefabInstanceId,
+        childSource.documents,
+        parentTransformMachineId,
+        siblingIndex,
+        new Set([...resolvingSources, childSourceGuid])
+      );
+      root.name = node.name;
+      identities.get(root.machineId)!.displayName = node.name;
+      root.nestedSourceGuid = childSourceGuid;
+      root.prefabInstanceId = nestedPrefabInstanceId;
+      return root;
     }
     const gameObjectDocument = nestedDocuments.get(node.fileId);
     const transformDocument = nestedDocuments.get(node.transform.fileId);
@@ -610,7 +659,7 @@ function buildInheritedVariantRoots(
       machineId: goId,
       components,
       children: node.children.map((child, index) => buildNestedInternal(
-        child, nestedSourceGuid, prefabOwnerId, nestedDocuments, transformId, index
+        child, nestedSourceGuid, prefabOwnerId, nestedDocuments, transformId, index, resolvingSources
       )),
     };
   };
@@ -656,7 +705,8 @@ function buildInheritedVariantRoots(
               prefabInstanceId,
               nestedSource.documents,
               parentTransformMachineId,
-              siblingIndex
+              siblingIndex,
+              new Set([sourceGuid, nestedSourceGuid])
             );
             root.name = node.name;
             identities.get(root.machineId)!.displayName = node.name;

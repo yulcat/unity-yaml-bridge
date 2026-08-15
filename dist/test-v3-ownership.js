@@ -544,6 +544,82 @@ console.log('\n=== v3 ownership cold-boundary edits ===');
     expectThrow(() => (0, compiler_1.compileV3)(document), 'Structural editing of inherited nested PrefabInstance', 'ambiguous duplicate addition of an inherited nested internal fails closed');
 }
 {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'ubridge-v3-recursive-nested-'));
+    try {
+        const outerGuid = '56565656565656565656565656565656';
+        const innerGuid = '78787878787878787878787878787878';
+        const outerPath = path.join(__dirname, '..', 'samples', 'prefabs', 'Button.prefab');
+        const outer = (0, unity_yaml_parser_1.parseUnityYaml)(sample('prefabs', 'Button.prefab'));
+        const middleGuid = outer.hierarchy.children.find(node => node.nestedPrefab).nestedPrefab.sourceGuid;
+        const middle = (0, unity_yaml_parser_1.parseUnityYaml)(sample('prefabs', 'Button.prefab'));
+        const middleInstance = middle.documents.find(document => document.typeId === 1001);
+        middleInstance.properties.m_SourcePrefab.guid = innerGuid;
+        const middlePath = path.join(directory, 'MiddleNested.prefab');
+        fs.writeFileSync(middlePath, (0, unity_yaml_writer_1.writeUnityYaml)(middle));
+        const reparsedMiddle = (0, unity_yaml_parser_1.parseUnityYaml)(fs.readFileSync(middlePath, 'utf-8'));
+        const middleNested = reparsedMiddle.hierarchy.children.find(node => node.nestedPrefab).nestedPrefab;
+        const innerPath = path.join(__dirname, '..', 'samples', 'prefabs', 'Amount.prefab');
+        const inner = (0, unity_yaml_parser_1.parseUnityYaml)(sample('prefabs', 'Amount.prefab'));
+        const variant = makeVariantSource(outerGuid, outer.hierarchy.fileId);
+        const text = (0, writer_1.writeV3)(variant, {
+            sourceResolver: {
+                resolveFilePath: guid => guid === outerGuid ? outerPath :
+                    guid === middleGuid ? middlePath : guid === innerGuid ? innerPath : undefined,
+            },
+        });
+        const document = (0, reader_1.readV3)(text);
+        const outerBoundary = document.variantRoots[0].children.find(node => node.nestedSourceGuid === middleGuid);
+        const innerBoundary = outerBoundary.children.find(node => node.nestedSourceGuid === innerGuid);
+        const outerPrefab = document.identity.get(outerBoundary.prefabInstanceId);
+        const innerPrefab = document.identity.get(innerBoundary.prefabInstanceId);
+        const innerRoot = document.identity.get(innerBoundary.machineId);
+        const rebuilt = (0, unity_yaml_parser_1.parseUnityYaml)((0, unity_yaml_writer_1.writeUnityYaml)((0, compiler_1.compileV3)(document)));
+        assert(!!innerBoundary &&
+            text.includes(`@${outerBoundary.machineId} {prefab:@${outerBoundary.prefabInstanceId} source:${middleGuid}}`) &&
+            text.includes(`@${innerBoundary.machineId} {prefab:@${innerBoundary.prefabInstanceId} source:${innerGuid}}`) &&
+            innerPrefab.kind === 'prefabInstance' && innerPrefab.origin === 'inherited' &&
+            innerPrefab.prefabOwnerId === outerPrefab.machineId &&
+            innerPrefab.sourceGuid === middleGuid &&
+            innerPrefab.sourceFileId === middleNested.instanceId &&
+            innerRoot.kind === 'gameObject' && innerRoot.prefabOwnerId === innerPrefab.machineId &&
+            innerRoot.sourceGuid === innerGuid && innerRoot.sourceFileId === inner.hierarchy.fileId, 'nested-in-nested sources recursively expose source roots with direct PrefabInstance ownership');
+        assert(rebuilt.documents.length === variant.documents.length &&
+            rebuilt.prefabInstances.length === variant.prefabInstances.length, 'recursive expanded nested internals cold-compile without source documents');
+        const ambiguousOwnershipText = text.replace(`prefabOwner:${outerPrefab.machineId} | displayName:${innerPrefab.displayName}`, `prefabOwner:${document.variantRootId} | displayName:${innerPrefab.displayName}`);
+        assert(ambiguousOwnershipText !== text, 'nested-in-nested ownership ambiguity fixture changes the direct owner');
+        expectThrow(() => (0, reader_1.readV3)(ambiguousOwnershipText), 'is not directly owned by', 'nested-in-nested PrefabInstance metadata rejects an ambiguous direct owner');
+        innerBoundary.name = 'UnsupportedDeepRename';
+        expectThrow(() => (0, compiler_1.compileV3)(document), 'Structural editing of inherited nested PrefabInstance', 'structural edits to recursively expanded nested internals fail closed');
+    }
+    finally {
+        fs.rmSync(directory, { recursive: true, force: true });
+    }
+}
+{
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'ubridge-v3-recursive-cycle-'));
+    try {
+        const outerGuid = '89898989898989898989898989898989';
+        const outerPath = path.join(__dirname, '..', 'samples', 'prefabs', 'Button.prefab');
+        const outer = (0, unity_yaml_parser_1.parseUnityYaml)(sample('prefabs', 'Button.prefab'));
+        const middleGuid = outer.hierarchy.children.find(node => node.nestedPrefab).nestedPrefab.sourceGuid;
+        const cyclicMiddle = (0, unity_yaml_parser_1.parseUnityYaml)(sample('prefabs', 'Button.prefab'));
+        cyclicMiddle.documents.find(document => document.typeId === 1001)
+            .properties.m_SourcePrefab.guid = middleGuid;
+        const middlePath = path.join(directory, 'CyclicMiddle.prefab');
+        fs.writeFileSync(middlePath, (0, unity_yaml_writer_1.writeUnityYaml)(cyclicMiddle));
+        const variant = makeVariantSource(outerGuid, outer.hierarchy.fileId);
+        expectThrow(() => (0, writer_1.writeV3)(variant, {
+            sourceResolver: {
+                resolveFilePath: guid => guid === outerGuid ? outerPath :
+                    guid === middleGuid ? middlePath : undefined,
+            },
+        }), `contains a cycle at ${middleGuid}`, 'recursive nested source expansion rejects cycles');
+    }
+    finally {
+        fs.rmSync(directory, { recursive: true, force: true });
+    }
+}
+{
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'ubridge-v3-nested-chain-'));
     try {
         const base = (0, unity_yaml_parser_1.parseUnityYaml)(sample('prefabs', 'Button.prefab'));

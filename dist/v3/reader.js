@@ -236,7 +236,7 @@ function parseIdentity(lines) {
     return result;
 }
 function validateBindings(root, details, identity, used = new Set()) {
-    const visit = (node) => {
+    const visit = (node, activePrefabOwnerId, activeSourceGuid) => {
         if (used.has(node.machineId))
             throw new Error(`Duplicate STRUCTURE machine identity ${node.machineId}.`);
         used.add(node.machineId);
@@ -244,6 +244,10 @@ function validateBindings(root, details, identity, used = new Set()) {
         if (node.nestedSourceGuid && !node.prefabInstanceId) {
             if (!go || go.kind !== 'prefabInstance' || go.typeId !== 1001) {
                 throw new Error(`Nested STRUCTURE ${node.machineId} is not bound to a PrefabInstance identity.`);
+            }
+            if (activePrefabOwnerId &&
+                (go.prefabOwnerId !== activePrefabOwnerId || go.sourceGuid !== activeSourceGuid)) {
+                throw new Error(`Nested PrefabInstance ${node.machineId} is not directly owned by ${activePrefabOwnerId}.`);
             }
             if (go.origin !== 'inherited') {
                 const rootTransforms = [...identity.values()].filter(record => record.kind === 'stripped' && record.ownerId === node.machineId && record.nestedRoot &&
@@ -258,9 +262,11 @@ function validateBindings(root, details, identity, used = new Set()) {
             if (go.origin !== 'inherited' && node.children.length > 0) {
                 throw new Error(`Expanded nested STRUCTURE is not implemented for ${node.machineId}.`);
             }
-            node.children.forEach(visit);
+            node.children.forEach(child => visit(child, go.machineId, node.nestedSourceGuid));
             return;
         }
+        let directPrefabOwnerId = activePrefabOwnerId;
+        let directSourceGuid = activeSourceGuid;
         if (node.prefabInstanceId) {
             if (!node.nestedSourceGuid) {
                 throw new Error(`Nested source-root ${node.machineId} has PrefabInstance metadata without a source GUID.`);
@@ -269,16 +275,32 @@ function validateBindings(root, details, identity, used = new Set()) {
             if (!prefabInstance || prefabInstance.kind !== 'prefabInstance' || prefabInstance.typeId !== 1001) {
                 throw new Error(`Nested source-root ${node.machineId} has invalid PrefabInstance metadata ${node.prefabInstanceId}.`);
             }
+            if (activePrefabOwnerId &&
+                (prefabInstance.prefabOwnerId !== activePrefabOwnerId ||
+                    prefabInstance.sourceGuid !== activeSourceGuid)) {
+                throw new Error(`Nested PrefabInstance ${node.prefabInstanceId} is not directly owned by ${activePrefabOwnerId}.`);
+            }
             if (!go || go.kind !== 'gameObject' || go.prefabOwnerId !== prefabInstance.machineId) {
                 throw new Error(`Nested source-root ${node.machineId} is not directly owned by ${node.prefabInstanceId}.`);
             }
+            directPrefabOwnerId = prefabInstance.machineId;
+            directSourceGuid = node.nestedSourceGuid;
         }
         if (!go || go.kind !== 'gameObject' || go.typeId !== 1) {
             throw new Error(`STRUCTURE ${node.machineId} is not bound to a GameObject identity.`);
         }
+        if (directPrefabOwnerId &&
+            (go.prefabOwnerId !== directPrefabOwnerId || go.sourceGuid !== directSourceGuid)) {
+            throw new Error(`Inherited nested GameObject ${node.machineId} is not directly owned by ${directPrefabOwnerId}.`);
+        }
         const transforms = [...identity.values()].filter(record => record.kind === 'transform' && record.ownerId === node.machineId);
         if (transforms.length !== 1 || ![4, 224].includes(transforms[0].typeId)) {
             throw new Error(`GameObject ${node.machineId} requires exactly one Transform identity.`);
+        }
+        if (directPrefabOwnerId &&
+            (transforms[0].prefabOwnerId !== directPrefabOwnerId ||
+                transforms[0].sourceGuid !== directSourceGuid)) {
+            throw new Error(`Inherited nested Transform ${transforms[0].machineId} is not directly owned by ${directPrefabOwnerId}.`);
         }
         for (const component of node.components) {
             if (used.has(component.machineId))
@@ -286,11 +308,13 @@ function validateBindings(root, details, identity, used = new Set()) {
             used.add(component.machineId);
             const record = identity.get(component.machineId);
             if (!record || record.kind !== 'component' || record.ownerId !== node.machineId ||
-                (record.displayName || record.typeName) !== component.typeName) {
+                (record.displayName || record.typeName) !== component.typeName ||
+                (directPrefabOwnerId &&
+                    (record.prefabOwnerId !== directPrefabOwnerId || record.sourceGuid !== directSourceGuid))) {
                 throw new Error(`Invalid component binding ${component.typeName} @${component.machineId}.`);
             }
         }
-        node.children.forEach(visit);
+        node.children.forEach(child => visit(child, directPrefabOwnerId, directSourceGuid));
     };
     visit(root);
     for (const machineId of details.keys()) {

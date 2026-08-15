@@ -537,32 +537,70 @@ console.log('\n=== v3 ownership cold-boundary edits ===');
   const inheritedNestedSource = source.hierarchy!.children.find(node => node.nestedPrefab)!.nestedPrefab!;
   const nestedPath = path.join(__dirname, '..', 'samples', 'prefabs', 'Amount.prefab');
   const nested = parseUnityYaml(sample('prefabs', 'Amount.prefab'));
-  const nestedChild = nested.hierarchy!.children[0];
+  const nestedRoot = nested.hierarchy!;
+  const nestedChild = nestedRoot.children[0];
   const variant = makeVariantSource(sourceGuid, source.hierarchy!.fileId);
-  const document = readV3(writeV3(variant, {
+  const nestedV3Text = writeV3(variant, {
     sourceResolver: {
       resolveFilePath: guid => guid === sourceGuid ? sourcePath :
         guid === inheritedNestedSource.sourceGuid ? nestedPath : undefined,
     },
-  }));
+  });
+  const document = readV3(nestedV3Text);
   const inheritedNested = document.variantRoots![0].children.find(node => node.nestedSourceGuid)!;
+  const inheritedNestedMetadata = inheritedNested;
+  const nestedRootIdentity = document.identity.get(inheritedNested.machineId);
+  const nestedInstanceIdentity = inheritedNestedMetadata.prefabInstanceId
+    ? document.identity.get(inheritedNestedMetadata.prefabInstanceId)
+    : undefined;
+  const nestedRootComponents = inheritedNested.components.map(component =>
+    document.identity.get(component.machineId)!
+  );
   const internalChild = inheritedNested.children[0];
   const internalGameObject = internalChild && document.identity.get(internalChild.machineId);
   const internalComponent = internalChild && document.identity.get(internalChild.components[0]?.machineId);
   const rebuilt = parseUnityYaml(writeUnityYaml(compileV3(document)));
+  assert(nestedRootIdentity?.kind === 'gameObject' &&
+         nestedRootIdentity.origin === 'inherited' &&
+         nestedRootIdentity.sourceGuid === inheritedNestedSource.sourceGuid &&
+         nestedRootIdentity.sourceFileId === nestedRoot.fileId &&
+         nestedRootIdentity.prefabOwnerId === inheritedNestedMetadata.prefabInstanceId &&
+         nestedInstanceIdentity?.kind === 'prefabInstance' &&
+         nestedInstanceIdentity.sourceGuid === sourceGuid &&
+         nestedInstanceIdentity.sourceFileId === inheritedNestedSource.instanceId &&
+         nestedV3Text.includes(
+           `@${inheritedNested.machineId} {prefab:@${inheritedNestedMetadata.prefabInstanceId} ` +
+           `source:${inheritedNestedSource.sourceGuid}}`
+         ) &&
+         inheritedNested.components.length === nestedRoot.components.length &&
+         nestedRootComponents.every((identity, index) =>
+           identity.ownerId === inheritedNested.machineId &&
+           identity.prefabOwnerId === inheritedNestedMetadata.prefabInstanceId &&
+           identity.sourceGuid === inheritedNestedSource.sourceGuid &&
+           identity.sourceFileId === nestedRoot.components[index].fileId
+         ),
+    'inherited nested STRUCTURE uses the source-root GameObject with explicit PrefabInstance metadata and root components');
   assert(inheritedNested.nestedSourceGuid === inheritedNestedSource.sourceGuid &&
          inheritedNested.children.length === 1 && internalChild.name === nestedChild.name &&
          internalGameObject?.origin === 'inherited' &&
          internalGameObject.sourceGuid === inheritedNestedSource.sourceGuid &&
          internalGameObject.sourceFileId === nestedChild.fileId &&
-         internalGameObject.prefabOwnerId === inheritedNested.machineId &&
+         internalGameObject.prefabOwnerId === inheritedNestedMetadata.prefabInstanceId &&
          internalComponent?.origin === 'inherited' &&
          internalComponent.ownerId === internalChild.machineId &&
-         internalComponent.prefabOwnerId === inheritedNested.machineId,
+         internalComponent.prefabOwnerId === inheritedNestedMetadata.prefabInstanceId,
     'inherited nested PrefabInstance exposes read-only internal children and components with nested ownership');
   assert(rebuilt.documents.length === variant.documents.length &&
          rebuilt.prefabInstances.length === variant.prefabInstances.length,
     'expanded inherited nested internals cold-compile without emitting nested source documents');
+  expectThrow(
+    () => readV3(nestedV3Text.replace(
+      `prefab:@${inheritedNestedMetadata.prefabInstanceId}`,
+      `prefab:@${document.variantRootId}`
+    )),
+    'is not directly owned by',
+    'nested source-root metadata rejects a mismatched PrefabInstance owner'
+  );
   internalChild.name = 'UnsupportedInternalRename';
   expectThrow(
     () => compileV3(document),

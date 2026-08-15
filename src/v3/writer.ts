@@ -540,7 +540,7 @@ function buildInheritedVariantRoots(
     nestedSourceGuid: string,
     prefabOwnerId: string,
     nestedDocuments: Map<string, UnityDocument>,
-    parentTransformMachineId: string,
+    parentTransformMachineId: string | undefined,
     siblingIndex: number
   ): V3StructureNode => {
     if (node.nestedPrefab) {
@@ -645,26 +645,34 @@ function buildInheritedVariantRoots(
       });
       const nestedSourceGuid = node.nestedPrefab.sourceGuid;
       const nestedPath = options.sourceResolver?.resolveFilePath(nestedSourceGuid);
-      const internalChildren = nestedPath
+      const sourceRoot = nestedPath
         ? (() => {
             const nestedSource = resolveEffectiveVariantSource(
               nestedSourceGuid, options, new Set([sourceGuid])
             );
-            return nestedSource.hierarchy.children.map((child, index) => buildNestedInternal(
-              child,
+            const root = buildNestedInternal(
+              nestedSource.hierarchy,
               nestedSourceGuid,
               prefabInstanceId,
               nestedSource.documents,
-              prefabInstanceId,
-              index
-            ));
+              parentTransformMachineId,
+              siblingIndex
+            );
+            root.name = node.name;
+            identities.get(root.machineId)!.displayName = node.name;
+            return root;
           })()
-        : [];
+        : undefined;
+      if (sourceRoot) {
+        sourceRoot.nestedSourceGuid = nestedSourceGuid;
+        sourceRoot.prefabInstanceId = prefabInstanceId;
+        return sourceRoot;
+      }
       return {
         name: node.name,
         machineId: prefabInstanceId,
         components: [],
-        children: internalChildren,
+        children: [],
         nestedSourceGuid,
       };
     }
@@ -1154,7 +1162,9 @@ function writeStructure(root: V3StructureNode): string[] {
     const components = node.components.length
       ? ` [${node.components.map(component => `${component.typeName} @${component.machineId}`).join(', ')}]`
       : '';
-    const nested = node.nestedSourceGuid ? ` {source:${node.nestedSourceGuid}}` : '';
+    const nested = node.nestedSourceGuid
+      ? ` {${node.prefabInstanceId ? `prefab:@${node.prefabInstanceId} ` : ''}source:${node.nestedSourceGuid}}`
+      : '';
     lines.push(`${branch}${node.name} @${node.machineId}${nested}${components}`);
     const childPrefix = isRoot ? '' : `${prefix}${isLast ? '   ' : '│  '}`;
     node.children.forEach((child, index) => visit(child, childPrefix, index === node.children.length - 1, false));
@@ -1192,7 +1202,9 @@ function writeVariantRoots(roots: V3StructureNode[]): string[] {
     const components = node.components.length
       ? ` [${node.components.map(component => `${component.typeName} @${component.machineId}`).join(', ')}]`
       : '';
-    const nested = node.nestedSourceGuid ? ` {source:${node.nestedSourceGuid}}` : '';
+    const nested = node.nestedSourceGuid
+      ? ` {${node.prefabInstanceId ? `prefab:@${node.prefabInstanceId} ` : ''}source:${node.nestedSourceGuid}}`
+      : '';
     const tombstone = node.tombstone ? '- ' : '';
     lines.push(`${prefix}${isLast ? '└─ ' : '├─ '}${tombstone}${node.name} @${node.machineId}${nested}${components}`);
     const childPrefix = `${prefix}${isLast ? '   ' : '│  '}`;

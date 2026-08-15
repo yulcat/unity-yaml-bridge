@@ -33,6 +33,24 @@ t2 = transform | fileID:500 | type:4 | typeName:Transform | owner:g2
 - Unknown, ambiguous, or unsupported states must fail instead of falling back
   to an original YAML file.
 
+A resolved inherited nested prefab in a source-backed variant is represented by
+its source-root GameObject, not by its PrefabInstance document and not by an
+extra same-name child level. The PrefabInstance machine identity is explicit
+metadata on that GameObject line:
+
+```text
+└─ NestedRoot @ig3 {prefab:@ip1 source:0123456789abcdef0123456789abcdef} [BoxCollider @ic7]
+```
+
+Here `ig3` is a `gameObject` identity whose `sourceGuid`/`sourceFileID` identify
+the nested prefab's source root. `ip1` is the separate `prefabInstance`
+identity owned by the containing prefab source; `ig3`, its Transform, root
+components, and descendants bind directly to it through `prefabOwner:ip1`.
+The reader continues to accept the earlier experimental
+`Name @ip1 {source:<guid>}` form for unresolved/current v3 files. The
+source-backed variant writer emits the source-root form when the nested source
+resolves.
+
 ## Current implementation slice
 
 The current slices support regular prefabs, including:
@@ -67,16 +85,20 @@ nested PrefabInstances in the effective STRUCTURE, applies existing name
 overrides, records `origin:inherited` source identities, and cold-compiles the untouched
 view without emitting source objects as local documents. Nested instances retain their
 nested source GUID while their PrefabInstance identity is bound to the variant's direct
-source GUID/fileID. When that nested source also resolves, this slice expands the nested
-source root's non-root GameObject subtrees and their components as read-only inherited
-children. Those internal identities retain the nested source GUID/fileIDs and bind
-`prefabOwner` to the inherited PrefabInstance. Nested-source root components and
-nested-in-nested internals are not yet exposed. Renaming, reparenting, reordering,
-removing, adding, or duplicating expanded internals fails closed; untouched cold
-compilation emits only the leaf variant's own documents. Variant-of-variant sources
-are expanded through an unambiguous source chain; intermediate name overrides and
-inherited GameObject/component removals become effective state while emitted identities
-remain owned by the variant's direct source. An untouched leaf cold-compiles only its own PrefabInstance documents and does
+source GUID/fileID. When that nested source also resolves, this slice exposes
+its source-root GameObject directly at the instance's visible hierarchy
+position, with the inherited PrefabInstance identity linked as
+`{prefab:@<id> source:<guid>}` metadata. The source root, its components, and
+its non-root descendants retain the nested source GUID/fileIDs and bind
+`prefabOwner` directly to that PrefabInstance. No duplicate same-name source
+root level is added. Nested-in-nested internals are not yet exposed. Renaming,
+reparenting, reordering, removing, adding, or duplicating expanded internals
+fails closed; untouched cold compilation emits only the leaf variant's own
+documents. Variant-of-variant sources are expanded through an unambiguous
+source chain; intermediate name overrides and inherited GameObject/component
+removals become effective state while emitted identities remain owned by the
+variant's direct source. An untouched leaf cold-compiles only its own
+PrefabInstance documents and does
 not replay intermediate removal deltas. Intermediate removal targets must belong
 uniquely to that intermediate variant's direct source; indirect, missing, or duplicate
 ownership fails closed. Cycles, missing intermediate sources, and other ambiguous
@@ -104,7 +126,7 @@ IDENTITY records bind to the leaf's direct source GUID and the intermediate loca
 fileIDs, while untouched leaf compilation emits only the leaf PrefabInstance and does
 not replay intermediate addition deltas. Added-root parent stubs and added-component
 targets must resolve to exactly one direct PrefabInstance owner; ambiguous, indirect,
-missing, or duplicate ownership fails closed. Nested-in-nested internals, nested-source root components, and all structural
+missing, or duplicate ownership fails closed. Nested-in-nested internals and all structural
 edits to expanded inherited nested internals still fail closed. Without
 a source resolver, nested and variant baseline ownership documents remain standalone,
 and existing PrefabInstance delta values can be edited in DETAILS. Local objects not yet

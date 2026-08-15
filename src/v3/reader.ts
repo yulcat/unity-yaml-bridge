@@ -126,9 +126,13 @@ function parseStructureLine(line: string): V3StructureNode {
   }
 
   let nestedSourceGuid: string | undefined;
-  const nestedMatch = text.match(/\s+\{source:([a-f0-9]{32})\}$/i);
+  let prefabInstanceId: string | undefined;
+  const nestedMatch = text.match(
+    new RegExp(`\\s+\\{(?:prefab:@(${MACHINE_ID}) )?source:([a-f0-9]{32})\\}$`, 'i')
+  );
   if (nestedMatch) {
-    nestedSourceGuid = nestedMatch[1];
+    prefabInstanceId = nestedMatch[1];
+    nestedSourceGuid = nestedMatch[2];
     text = text.slice(0, nestedMatch.index).trim();
   }
 
@@ -140,6 +144,7 @@ function parseStructureLine(line: string): V3StructureNode {
     components,
     children: [],
     nestedSourceGuid,
+    prefabInstanceId,
     tombstone,
   };
 }
@@ -237,7 +242,7 @@ function validateBindings(
     if (used.has(node.machineId)) throw new Error(`Duplicate STRUCTURE machine identity ${node.machineId}.`);
     used.add(node.machineId);
     const go = identity.get(node.machineId);
-    if (node.nestedSourceGuid) {
+    if (node.nestedSourceGuid && !node.prefabInstanceId) {
       if (!go || go.kind !== 'prefabInstance' || go.typeId !== 1001) {
         throw new Error(`Nested STRUCTURE ${node.machineId} is not bound to a PrefabInstance identity.`);
       }
@@ -258,6 +263,18 @@ function validateBindings(
       }
       node.children.forEach(visit);
       return;
+    }
+    if (node.prefabInstanceId) {
+      if (!node.nestedSourceGuid) {
+        throw new Error(`Nested source-root ${node.machineId} has PrefabInstance metadata without a source GUID.`);
+      }
+      const prefabInstance = identity.get(node.prefabInstanceId);
+      if (!prefabInstance || prefabInstance.kind !== 'prefabInstance' || prefabInstance.typeId !== 1001) {
+        throw new Error(`Nested source-root ${node.machineId} has invalid PrefabInstance metadata ${node.prefabInstanceId}.`);
+      }
+      if (!go || go.kind !== 'gameObject' || go.prefabOwnerId !== prefabInstance.machineId) {
+        throw new Error(`Nested source-root ${node.machineId} is not directly owned by ${node.prefabInstanceId}.`);
+      }
     }
     if (!go || go.kind !== 'gameObject' || go.typeId !== 1) {
       throw new Error(`STRUCTURE ${node.machineId} is not bound to a GameObject identity.`);

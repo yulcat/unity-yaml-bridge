@@ -233,8 +233,8 @@ function compileVariant(document) {
     const desiredInheritedNestedInstances = new Set();
     const desiredInheritedNestedInternals = new Set();
     const hasInheritedStructure = [...document.identity.values()].some(identity => identity.origin === 'inherited');
-    const validateInheritedNestedInternal = (node, prefabOwnerId, nestedSourceGuid, parentTransformMachineId, siblingIndex) => {
-        if (node.nestedSourceGuid || node.tombstone) {
+    const validateInheritedNestedInternal = (node, prefabOwnerId, nestedSourceGuid, parentTransformMachineId, siblingIndex, sourceRoot = false) => {
+        if ((node.nestedSourceGuid && !sourceRoot) || node.tombstone) {
             throw new Error(`Structural editing of inherited nested PrefabInstance ${prefabOwnerId} internals is not implemented.`);
         }
         const gameObject = requireIdentity(document, node.machineId, 'gameObject');
@@ -282,6 +282,15 @@ function compileVariant(document) {
                 guid: identity.sourceGuid,
                 type: 3,
             });
+            return;
+        }
+        if (node.nestedSourceGuid && node.prefabInstanceId) {
+            const identity = requireIdentity(document, node.prefabInstanceId, 'prefabInstance');
+            if (identity.origin !== 'inherited' || !identity.sourceGuid || !identity.sourceFileId) {
+                throw new Error(`Inherited nested PrefabInstance ${node.prefabInstanceId} has no direct source identity.`);
+            }
+            validateInheritedNestedInternal(node, identity.machineId, node.nestedSourceGuid, parentTransformMachineId, siblingIndex, true);
+            desiredInheritedNestedInstances.add(identity.machineId);
             return;
         }
         if (node.nestedSourceGuid) {
@@ -405,8 +414,14 @@ function compileVariant(document) {
                 if (!childIdentity)
                     throw new Error(`Missing identity ${child.machineId}.`);
                 if (child.nestedSourceGuid) {
-                    if (childIdentity.kind !== 'prefabInstance' || childIdentity.origin !== 'inherited') {
-                        throw new Error(`Adding nested PrefabInstance ${child.machineId} below an inherited parent is not implemented.`);
+                    const prefabIdentity = document.identity.get(child.prefabInstanceId || child.machineId);
+                    const validNested = child.prefabInstanceId
+                        ? childIdentity.kind === 'gameObject' && childIdentity.origin === 'inherited' &&
+                            prefabIdentity?.kind === 'prefabInstance' && prefabIdentity.origin === 'inherited'
+                        : childIdentity.kind === 'prefabInstance' && childIdentity.origin === 'inherited';
+                    if (!validNested) {
+                        throw new Error(`Adding nested PrefabInstance ${child.prefabInstanceId || child.machineId} ` +
+                            'below an inherited parent is not implemented.');
                     }
                 }
                 else if (childIdentity.kind !== 'gameObject') {

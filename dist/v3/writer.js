@@ -664,16 +664,67 @@ function resolveEffectiveVariantSource(sourceGuid, options, resolving) {
         }
         const root = roots[0];
         const parentGuid = root.sourcePrefab.guid;
-        if (root.removedGameObjects.length > 0 || root.removedComponents.length > 0 ||
-            root.addedComponents.length > 0) {
+        if (root.addedComponents.length > 0) {
             throw new Error(`Variant source chain ${sourceGuid} with structural deltas is not implemented.`);
         }
         const effective = resolveEffectiveVariantSource(parentGuid, options, resolving);
+        applyVariantChainRemovedGameObjects(effective.hierarchy, root, sourceGuid, parentGuid);
+        applyVariantChainRemovedComponents(effective.hierarchy, root, sourceGuid, parentGuid);
         applyVariantChainNames(effective.hierarchy, root, sourceGuid);
         return effective;
     }
     finally {
         resolving.delete(sourceGuid);
+    }
+}
+function applyVariantChainRemovedGameObjects(hierarchy, instance, variantGuid, parentGuid) {
+    const owners = new Map();
+    const collect = (node) => {
+        for (const child of node.children) {
+            const matches = owners.get(child.fileId) ?? [];
+            matches.push(node);
+            owners.set(child.fileId, matches);
+            collect(child);
+        }
+    };
+    collect(hierarchy);
+    const removed = new Set();
+    for (const reference of instance.removedGameObjects) {
+        const fileId = String(reference.fileID ?? '0');
+        if (String(reference.guid ?? '') !== parentGuid || fileId === '0' || removed.has(fileId)) {
+            throw new Error(`Variant source chain ${variantGuid} has ambiguous removed-GameObject ownership for ${fileId}.`);
+        }
+        const matches = owners.get(fileId) ?? [];
+        if (matches.length !== 1) {
+            throw new Error(`Variant source chain ${variantGuid} removed GameObject ${fileId} is not uniquely owned by its direct source.`);
+        }
+        matches[0].children = matches[0].children.filter(child => child.fileId !== fileId);
+        removed.add(fileId);
+    }
+}
+function applyVariantChainRemovedComponents(hierarchy, instance, variantGuid, parentGuid) {
+    const owners = new Map();
+    const collect = (node) => {
+        for (const component of node.components) {
+            const matches = owners.get(component.fileId) ?? [];
+            matches.push(node);
+            owners.set(component.fileId, matches);
+        }
+        node.children.forEach(collect);
+    };
+    collect(hierarchy);
+    const removed = new Set();
+    for (const reference of instance.removedComponents) {
+        const fileId = String(reference.fileID ?? '0');
+        if (String(reference.guid ?? '') !== parentGuid || fileId === '0' || removed.has(fileId)) {
+            throw new Error(`Variant source chain ${variantGuid} has ambiguous removed-component ownership for ${fileId}.`);
+        }
+        const matches = owners.get(fileId) ?? [];
+        if (matches.length !== 1) {
+            throw new Error(`Variant source chain ${variantGuid} removed component ${fileId} is not uniquely owned by its direct source.`);
+        }
+        matches[0].components = matches[0].components.filter(component => component.fileId !== fileId);
+        removed.add(fileId);
     }
 }
 function applyVariantChainNames(hierarchy, instance, variantGuid) {

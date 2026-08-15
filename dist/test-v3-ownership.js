@@ -286,6 +286,91 @@ console.log('\n=== v3 ownership cold-boundary edits ===');
     }
 }
 {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'ubridge-v3-chain-remove-component-'));
+    try {
+        const base = (0, unity_yaml_parser_1.parseUnityYaml)(sample('prefabs', 'Amount.prefab'));
+        const basePath = path.join(__dirname, '..', 'samples', 'prefabs', 'Amount.prefab');
+        const baseGuid = '12121212121212121212121212121212';
+        const middleGuid = '23232323232323232323232323232323';
+        const removedComponent = base.hierarchy.components[0];
+        const middle = makeVariantSource(baseGuid, base.hierarchy.fileId);
+        const middleInstance = middle.documents.find(item => item.typeId === 1001);
+        middleInstance.properties.m_Modification.m_RemovedComponents = [{
+                fileID: removedComponent.fileId,
+                guid: baseGuid,
+                type: 3,
+            }];
+        const middlePath = path.join(directory, 'MiddleRemovedComponent.prefab');
+        fs.writeFileSync(middlePath, (0, unity_yaml_writer_1.writeUnityYaml)(middle));
+        const leaf = makeVariantSource(middleGuid, base.hierarchy.fileId);
+        const document = (0, reader_1.readV3)((0, writer_1.writeV3)(leaf, {
+            sourceResolver: {
+                resolveFilePath: guid => guid === middleGuid ? middlePath : guid === baseGuid ? basePath : undefined,
+            },
+        }));
+        const inheritedRoot = document.variantRoots[0];
+        const inheritedComponents = inheritedRoot.components.map(component => document.identity.get(component.machineId));
+        const rebuilt = (0, unity_yaml_parser_1.parseUnityYaml)((0, unity_yaml_writer_1.writeUnityYaml)((0, compiler_1.compileV3)(document)));
+        assert(!inheritedComponents.some(identity => identity.sourceFileId === removedComponent.fileId) &&
+            inheritedComponents.length === base.hierarchy.components.length - 1 &&
+            inheritedComponents.every(identity => identity.sourceGuid === middleGuid) &&
+            rebuilt.documents.length === leaf.documents.length &&
+            rebuilt.prefabInstances[0].removedComponents.length === 0, 'intermediate removed-component delta projects into the leaf effective tree with direct-source identity');
+        middleInstance.properties.m_Modification.m_RemovedComponents[0].guid = middleGuid;
+        fs.writeFileSync(middlePath, (0, unity_yaml_writer_1.writeUnityYaml)(middle));
+        expectThrow(() => (0, writer_1.writeV3)(leaf, {
+            sourceResolver: {
+                resolveFilePath: guid => guid === middleGuid ? middlePath : guid === baseGuid ? basePath : undefined,
+            },
+        }), 'ambiguous removed-component ownership', 'intermediate removed-component delta rejects an indirect source owner');
+    }
+    finally {
+        fs.rmSync(directory, { recursive: true, force: true });
+    }
+}
+{
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'ubridge-v3-chain-remove-gameobject-'));
+    try {
+        const base = (0, unity_yaml_parser_1.parseUnityYaml)(sample('prefabs', 'Amount.prefab'));
+        const basePath = path.join(__dirname, '..', 'samples', 'prefabs', 'Amount.prefab');
+        const baseGuid = '34343434343434343434343434343434';
+        const middleGuid = '45454545454545454545454545454545';
+        const removedChild = base.hierarchy.children[0];
+        const middle = makeVariantSource(baseGuid, base.hierarchy.fileId);
+        const middleInstance = middle.documents.find(item => item.typeId === 1001);
+        middleInstance.properties.m_Modification.m_RemovedGameObjects = [{
+                fileID: removedChild.fileId,
+                guid: baseGuid,
+                type: 3,
+            }];
+        const middlePath = path.join(directory, 'MiddleRemovedGameObject.prefab');
+        fs.writeFileSync(middlePath, (0, unity_yaml_writer_1.writeUnityYaml)(middle));
+        const leaf = makeVariantSource(middleGuid, base.hierarchy.fileId);
+        const document = (0, reader_1.readV3)((0, writer_1.writeV3)(leaf, {
+            sourceResolver: {
+                resolveFilePath: guid => guid === middleGuid ? middlePath : guid === baseGuid ? basePath : undefined,
+            },
+        }));
+        const inheritedRoot = document.variantRoots[0];
+        const rootIdentity = document.identity.get(inheritedRoot.machineId);
+        const rebuilt = (0, unity_yaml_parser_1.parseUnityYaml)((0, unity_yaml_writer_1.writeUnityYaml)((0, compiler_1.compileV3)(document)));
+        assert(inheritedRoot.children.length === 0 && rootIdentity.sourceGuid === middleGuid &&
+            rootIdentity.sourceFileId === base.hierarchy.fileId &&
+            ![...document.identity.values()].some(identity => identity.sourceFileId === removedChild.fileId) && rebuilt.documents.length === leaf.documents.length &&
+            rebuilt.prefabInstances[0].removedGameObjects.length === 0, 'intermediate removed-GameObject delta projects into the leaf effective tree with direct-source identity');
+        middleInstance.properties.m_Modification.m_RemovedGameObjects[0].guid = middleGuid;
+        fs.writeFileSync(middlePath, (0, unity_yaml_writer_1.writeUnityYaml)(middle));
+        expectThrow(() => (0, writer_1.writeV3)(leaf, {
+            sourceResolver: {
+                resolveFilePath: guid => guid === middleGuid ? middlePath : guid === baseGuid ? basePath : undefined,
+            },
+        }), 'ambiguous removed-GameObject ownership', 'intermediate removed-GameObject delta rejects an indirect source owner');
+    }
+    finally {
+        fs.rmSync(directory, { recursive: true, force: true });
+    }
+}
+{
     const sourceGuid = '33333333333333333333333333333333';
     const sourcePath = path.join(__dirname, '..', 'samples', 'prefabs', 'Button.prefab');
     const source = (0, unity_yaml_parser_1.parseUnityYaml)(sample('prefabs', 'Button.prefab'));

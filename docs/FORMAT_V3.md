@@ -68,9 +68,13 @@ overrides, records `origin:inherited` source identities, and cold-compiles the u
 view without emitting source objects as local documents. Nested placeholders retain their
 nested source GUID while their identity is bound to the variant's direct source GUID and
 PrefabInstance fileID. Variant-of-variant sources are expanded through an unambiguous
-source chain; intermediate name overrides become effective state while emitted identities
-remain owned by the variant's direct source. Cycles, missing intermediate sources, and
-ambiguous ownership fail closed. Structural edits to inherited nested PrefabInstances are
+source chain; intermediate name overrides and inherited GameObject/component removals
+become effective state while emitted identities remain owned by the variant's direct
+source. An untouched leaf cold-compiles only its own PrefabInstance documents and does
+not replay intermediate removal deltas. Intermediate removal targets must belong
+uniquely to that intermediate variant's direct source; indirect, missing, or duplicate
+ownership fails closed. Cycles, missing intermediate sources, and other ambiguous
+ownership also fail closed. Structural edits to inherited nested PrefabInstances are
 not yet supported and fail rather than compiling as no-ops. An inherited GameObject
 removal is an explicit tombstone, for example
 `└─ - LegacyButton @ig2 [Button @ic4]`; it compiles to `m_RemovedGameObjects`, while
@@ -88,8 +92,8 @@ pre-existing variant-added GameObject roots: each local root is attached beneath
 inherited source Transform from `m_AddedGameObjects`, remains locally owned in
 IDENTITY, and cold-compiles with its original local and stripped-parent fileIDs.
 Missing, duplicate, indirect, or otherwise ambiguous added-root ownership fails
-closed. Source-chain expansion currently fails closed for intermediate structural
-deltas or variant-added roots, expanded internals or structural edits of inherited
+closed. Source-chain expansion currently fails closed for intermediate added components
+or variant-added roots, expanded internals or structural edits of inherited
 nested PrefabInstances. Without a source resolver, nested and variant baseline
 ownership documents remain standalone, and existing PrefabInstance delta values can
 be edited in DETAILS. Local objects not yet exposed in the effective STRUCTURE are

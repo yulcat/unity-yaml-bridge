@@ -113,6 +113,9 @@ function parseStructure(lines) {
 }
 function parseStructureLine(line) {
     let text = line.replace(/[├└│─]/g, '').trim();
+    const tombstone = text.startsWith('- ');
+    if (tombstone)
+        text = text.slice(2).trim();
     let components = [];
     const componentMatch = text.match(/\s+\[([^\]]*)\]$/);
     if (componentMatch) {
@@ -139,6 +142,7 @@ function parseStructureLine(line) {
         components,
         children: [],
         nestedSourceGuid,
+        tombstone,
     };
 }
 function getTreeDepth(line) {

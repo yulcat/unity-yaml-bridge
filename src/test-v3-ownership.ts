@@ -35,6 +35,20 @@ function rootVariantV3() {
   return readV3(writeV3(parseUnityYaml(sample('prefabs', 'RootPrefabInstance.prefab'))));
 }
 
+function sourceBackedVariantText() {
+  const variant = parseUnityYaml(sample('variants', 'Ellen_Variant.prefab'));
+  const source = parseUnityYaml(sample('prefabs', 'Amount.prefab'));
+  const sourcePath = path.join(__dirname, '..', 'samples', 'prefabs', 'Amount.prefab');
+  const sourceGuid = variant.variantSource!.guid!;
+  const nameOverride = variant.prefabInstances[0].modifications
+    .find(modification => modification.propertyPath === 'm_Name')!;
+  nameOverride.target.fileID = source.hierarchy!.fileId;
+  nameOverride.target.guid = sourceGuid;
+  return writeV3(variant, {
+    sourceResolver: { resolveFilePath: guid => guid === sourceGuid ? sourcePath : undefined },
+  });
+}
+
 function clearRefsTo(value: any, deleted: Set<string>): any {
   if (Array.isArray(value)) return value.map(item => clearRefsTo(item, deleted));
   if (!value || typeof value !== 'object') return value;
@@ -118,6 +132,134 @@ console.log('\n=== v3 ownership cold-boundary edits ===');
     'variant delta edit compiles without the original variant YAML');
   assert(rebuilt.variantSource?.guid === 'a5674d01884853d4e8f2386a171e14d9',
     'variant source GUID survives standalone compilation');
+}
+
+{
+  const baselineText = sourceBackedVariantText();
+  const baseline = readV3(baselineText);
+  const inheritedChild = baseline.variantRoots![0].children[0];
+  const sourceIdentity = baseline.identity.get(inheritedChild.machineId)!;
+  const tombstoneText = baselineText.replace(
+    `${inheritedChild.name} @${inheritedChild.machineId}`,
+    `- ${inheritedChild.name} @${inheritedChild.machineId}`
+  );
+  const rebuilt = parseUnityYaml(writeUnityYaml(compileV3(readV3(tombstoneText))));
+  const removed = rebuilt.prefabInstances[0].removedGameObjects;
+  assert(removed.length === 1 &&
+         String(removed[0].fileID) === sourceIdentity.sourceFileId &&
+         removed[0].guid === sourceIdentity.sourceGuid,
+    'an inherited GameObject tombstone compiles to m_RemovedGameObjects');
+}
+
+{
+  const baseline = readV3(sourceBackedVariantText());
+  const inheritedChild = baseline.variantRoots![0].children[0];
+  const sourceIdentity = baseline.identity.get(inheritedChild.machineId)!;
+  const variant = parseUnityYaml(sample('variants', 'Ellen_Variant.prefab'));
+  const sourcePath = path.join(__dirname, '..', 'samples', 'prefabs', 'Amount.prefab');
+  const sourceGuid = variant.variantSource!.guid!;
+  variant.prefabInstances[0].removedGameObjects = [{
+    fileID: sourceIdentity.sourceFileId!, guid: sourceGuid, type: 3,
+  }];
+  const text = writeV3(variant, {
+    sourceResolver: { resolveFilePath: guid => guid === sourceGuid ? sourcePath : undefined },
+  });
+  assert(text.includes(`- ${inheritedChild.name} @${inheritedChild.machineId}`),
+    'an existing removed GameObject delta is exported as an explicit tombstone');
+}
+
+{
+  const baseline = readV3(sourceBackedVariantText());
+  const inheritedRoot = baseline.variantRoots![0];
+  const rootIdentity = baseline.identity.get(inheritedRoot.machineId)!;
+  const childIdentity = baseline.identity.get(inheritedRoot.children[0].machineId)!;
+  const variant = parseUnityYaml(sample('variants', 'Ellen_Variant.prefab'));
+  const sourcePath = path.join(__dirname, '..', 'samples', 'prefabs', 'Amount.prefab');
+  const sourceGuid = variant.variantSource!.guid!;
+  variant.prefabInstances[0].removedGameObjects = [{
+    fileID: rootIdentity.sourceFileId!, guid: sourceGuid, type: 3,
+  }];
+  const document = readV3(writeV3(variant, {
+    sourceResolver: { resolveFilePath: guid => guid === sourceGuid ? sourcePath : undefined },
+  }));
+  assert(document.variantRoots![0].tombstone === true &&
+         document.variantRoots![0].children.length === 0 &&
+         [...document.identity.values()].some(identity =>
+           identity.kind === 'gameObject' && identity.sourceFileId === childIdentity.sourceFileId
+         ),
+    'a subtree tombstone retains inherited descendant identities outside the effective tree');
+}
+
+{
+  const document = readV3(sourceBackedVariantText());
+  document.variantRoots![0].tombstone = true;
+  expectThrow(
+    () => compileV3(document),
+    'cannot have effective children',
+    'a tombstone with effective children fails closed instead of ignoring the subtree'
+  );
+}
+
+{
+  const document = readV3(sourceBackedVariantText());
+  const inheritedRoot = document.variantRoots![0];
+  const removedComponent = inheritedRoot.components.pop()!;
+  const sourceIdentity = document.identity.get(removedComponent.machineId)!;
+  const rebuilt = parseUnityYaml(writeUnityYaml(compileV3(document)));
+  const removed = rebuilt.prefabInstances[0].removedComponents;
+  assert(removed.length === 1 &&
+         String(removed[0].fileID) === sourceIdentity.sourceFileId &&
+         removed[0].guid === sourceIdentity.sourceGuid,
+    'removing an inherited component compiles to m_RemovedComponents');
+}
+
+{
+  const baseline = readV3(sourceBackedVariantText());
+  const inheritedRoot = baseline.variantRoots![0];
+  const removedComponent = inheritedRoot.components[0];
+  const sourceIdentity = baseline.identity.get(removedComponent.machineId)!;
+  const variant = parseUnityYaml(sample('variants', 'Ellen_Variant.prefab'));
+  const sourcePath = path.join(__dirname, '..', 'samples', 'prefabs', 'Amount.prefab');
+  const sourceGuid = variant.variantSource!.guid!;
+  variant.prefabInstances[0].removedComponents = [{
+    fileID: sourceIdentity.sourceFileId!, guid: sourceGuid, type: 3,
+  }];
+  const document = readV3(writeV3(variant, {
+    sourceResolver: { resolveFilePath: guid => guid === sourceGuid ? sourcePath : undefined },
+  }));
+  assert(!document.variantRoots![0].components.some(component =>
+    component.machineId === removedComponent.machineId
+  ) && document.identity.has(removedComponent.machineId),
+  'an existing removed component delta is absent from effective components but keeps identity');
+}
+
+{
+  const document = readV3(sourceBackedVariantText());
+  const inheritedRoot = document.variantRoots![0];
+  const inheritedTransform = [...document.identity.values()].find(identity =>
+    identity.kind === 'transform' && identity.ownerId === inheritedRoot.machineId
+  )!;
+  document.identity.set('gAdded', {
+    machineId: 'gAdded', kind: 'gameObject', typeId: 1, typeName: 'GameObject',
+    prefabOwnerId: document.variantRootId,
+  });
+  document.identity.set('tAdded', {
+    machineId: 'tAdded', kind: 'transform', typeId: 224, typeName: 'RectTransform', ownerId: 'gAdded',
+  });
+  inheritedRoot.children.push({
+    name: 'AddedChild', machineId: 'gAdded', components: [], children: [],
+  });
+  const rebuilt = parseUnityYaml(writeUnityYaml(compileV3(document)));
+  const instance = rebuilt.documents.find(item => item.typeId === 1001)!;
+  const added = instance.properties.m_Modification.m_AddedGameObjects[0];
+  const addedGameObject = rebuilt.documents.find(item => item.properties.m_Name === 'AddedChild')!;
+  const addedTransform = rebuilt.documents.find(item =>
+    String(item.properties.m_GameObject?.fileID) === addedGameObject.fileId
+  )!;
+  assert(String(added.targetCorrespondingSourceObject.fileID) === inheritedTransform.sourceFileId &&
+         added.targetCorrespondingSourceObject.guid === inheritedTransform.sourceGuid &&
+         String(added.addedObject.fileID) === addedTransform.fileId,
+    'adding a local child beneath inherited hierarchy compiles to m_AddedGameObjects');
 }
 
 {

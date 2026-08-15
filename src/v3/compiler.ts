@@ -271,6 +271,12 @@ function compileVariant(document: V3Document): UnityFile {
   const emitted = new Set<string>();
   const documents: UnityDocument[] = [];
   const nestedPlans = new Map<string, NestedInstancePlan>();
+  const removedGameObjects: Array<Record<string, unknown>> = [];
+  const removedComponents: Array<Record<string, unknown>> = [];
+  const addedGameObjects: Array<Record<string, unknown>> = [];
+  const hasInheritedStructure = [...document.identity.values()].some(identity =>
+    identity.origin === 'inherited'
+  );
 
   const buildNode = (
     node: V3StructureNode,
@@ -278,6 +284,21 @@ function compileVariant(document: V3Document): UnityFile {
     siblingIndex: number,
     parentTransformMachineId?: string
   ): void => {
+    if (node.tombstone) {
+      if (node.children.length > 0) {
+        throw new Error(`GameObject tombstone ${node.machineId} cannot have effective children.`);
+      }
+      const identity = requireIdentity(document, node.machineId, 'gameObject');
+      if (identity.origin !== 'inherited' || !identity.sourceGuid || !identity.sourceFileId) {
+        throw new Error(`GameObject tombstone ${node.machineId} requires inherited source identity.`);
+      }
+      removedGameObjects.push({
+        fileID: identity.sourceFileId,
+        guid: identity.sourceGuid,
+        type: 3,
+      });
+      return;
+    }
     if (node.nestedSourceGuid) {
       if (nestedPlans.has(node.machineId)) {
         throw new Error(`Nested PrefabInstance ${node.machineId} appears more than once in variant STRUCTURE.`);
@@ -294,6 +315,19 @@ function compileVariant(document: V3Document): UnityFile {
     const goIdentity = requireIdentity(document, node.machineId, 'gameObject');
     const transformIdentity = findOwnedTransform(document, node.machineId);
     if (goIdentity.origin === 'inherited') {
+      const desiredComponents = new Set(node.components.map(component => component.machineId));
+      for (const identity of document.identity.values()) {
+        if (identity.kind !== 'component' || identity.origin !== 'inherited' ||
+            identity.ownerId !== goIdentity.machineId || desiredComponents.has(identity.machineId)) continue;
+        if (!identity.sourceGuid || !identity.sourceFileId) {
+          throw new Error(`Removed inherited component ${identity.machineId} has no source identity.`);
+        }
+        removedComponents.push({
+          fileID: identity.sourceFileId,
+          guid: identity.sourceGuid,
+          type: 3,
+        });
+      }
       if (transformIdentity.origin !== 'inherited' || node.components.some(component =>
         requireIdentity(document, component.machineId, 'component').origin !== 'inherited'
       )) {
@@ -301,8 +335,9 @@ function compileVariant(document: V3Document): UnityFile {
       }
       node.children.forEach((child, index) => {
         const childIdentity = requireIdentity(document, child.machineId, 'gameObject');
-        if (childIdentity.origin !== 'inherited') {
-          throw new Error(`Adding local children beneath inherited ${node.machineId} is not implemented.`);
+        if (childIdentity.origin !== 'inherited' &&
+            (!transformIdentity.sourceGuid || !transformIdentity.sourceFileId)) {
+          throw new Error(`Inherited parent ${transformIdentity.machineId} has no source identity.`);
         }
         buildNode(child, '0', index, transformIdentity.machineId);
       });
@@ -316,6 +351,23 @@ function compileVariant(document: V3Document): UnityFile {
     }
     const goId = allocated.get(goIdentity.machineId)!;
     const transformId = allocated.get(transformIdentity.machineId)!;
+    if (parentTransformMachineId) {
+      const parentIdentity = document.identity.get(parentTransformMachineId);
+      if (parentIdentity?.origin === 'inherited') {
+        if (!parentIdentity.sourceGuid || !parentIdentity.sourceFileId) {
+          throw new Error(`Inherited parent ${parentTransformMachineId} has no source identity.`);
+        }
+        addedGameObjects.push({
+          targetCorrespondingSourceObject: {
+            fileID: parentIdentity.sourceFileId,
+            guid: parentIdentity.sourceGuid,
+            type: 3,
+          },
+          insertIndex: siblingIndex,
+          addedObject: { $ref: transformIdentity.machineId },
+        });
+      }
+    }
     const componentIds = node.components.map(component =>
       allocated.get(requireIdentity(document, component.machineId, 'component').machineId)!
     );
@@ -396,6 +448,15 @@ function compileVariant(document: V3Document): UnityFile {
     const details = document.details.get(identity.machineId);
     if (!details) throw new Error(`Variant identity ${identity.machineId} requires DETAILS.`);
     let properties = clone(details);
+    if (identity.machineId === document.variantRootId && hasInheritedStructure) {
+      if (!properties.m_Modification || typeof properties.m_Modification !== 'object') {
+        throw new Error(`Variant root ${identity.machineId} has no m_Modification DETAILS.`);
+      }
+      const modification = properties.m_Modification as Record<string, unknown>;
+      modification.m_RemovedGameObjects = removedGameObjects;
+      modification.m_RemovedComponents = removedComponents;
+      modification.m_AddedGameObjects = addedGameObjects;
+    }
     if (identity.kind === 'prefabInstance' && nestedPlans.has(identity.machineId)) {
       properties = applyNestedInstancePlan(document, identity, nestedPlans.get(identity.machineId)!, properties);
     }

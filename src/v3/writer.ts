@@ -413,6 +413,16 @@ function buildInheritedVariantRoots(
   let gameObjectIndex = 0;
   let transformIndex = 0;
   let componentIndex = 0;
+  const removedGameObjectIds = new Set(variant.prefabInstances.flatMap(instance =>
+    instance.removedGameObjects.filter(reference => !reference.guid || reference.guid === sourceGuid)
+      .map(reference => String(reference.fileID))
+  ));
+  const matchedRemovedGameObjectIds = new Set<string>();
+  const removedComponentIds = new Set(variant.prefabInstances.flatMap(instance =>
+    instance.removedComponents.filter(reference => !reference.guid || reference.guid === sourceGuid)
+      .map(reference => String(reference.fileID))
+  ));
+  const matchedRemovedComponentIds = new Set<string>();
   const nameOverrides = new Map(variant.prefabInstances.flatMap(instance =>
     instance.modifications.filter(modification =>
       modification.propertyPath === 'm_Name' && modification.target.guid === sourceGuid
@@ -434,6 +444,8 @@ function buildInheritedVariantRoots(
     }
     const goId = `ig${++gameObjectIndex}`;
     const transformId = `it${++transformIndex}`;
+    const tombstone = removedGameObjectIds.has(node.fileId);
+    if (tombstone) matchedRemovedGameObjectIds.add(node.fileId);
     identities.set(goId, {
       machineId: goId,
       kind: 'gameObject',
@@ -455,7 +467,7 @@ function buildInheritedVariantRoots(
       sourceGuid,
       sourceFileId: node.transform.fileId,
     });
-    const components = node.components.map(component => {
+    const components = node.components.flatMap(component => {
       const sourceDocument = sourceById.get(component.fileId);
       if (!sourceDocument) throw new Error(`Inherited component ${component.fileId} is missing from its source.`);
       const componentId = `ic${++componentIndex}`;
@@ -471,16 +483,33 @@ function buildInheritedVariantRoots(
         sourceGuid,
         sourceFileId: component.fileId,
       });
+      if (removedComponentIds.has(component.fileId)) {
+        matchedRemovedComponentIds.add(component.fileId);
+        return [];
+      }
       return { typeName: component.typeName, machineId: componentId };
     });
+    const children = node.children.map((child, index) => build(child, transformId, index));
     return {
       name: nameOverrides.get(node.fileId) ?? node.name,
       machineId: goId,
       components,
-      children: node.children.map((child, index) => build(child, transformId, index)),
+      children: tombstone ? [] : children,
+      tombstone,
     };
   };
-  return [build(source.hierarchy)];
+  const roots = [build(source.hierarchy)];
+  for (const fileId of removedGameObjectIds) {
+    if (!matchedRemovedGameObjectIds.has(fileId)) {
+      throw new Error(`Removed inherited GameObject ${fileId} is missing from source ${sourceGuid}.`);
+    }
+  }
+  for (const fileId of removedComponentIds) {
+    if (!matchedRemovedComponentIds.has(fileId)) {
+      throw new Error(`Removed inherited component ${fileId} is missing from source ${sourceGuid}.`);
+    }
+  }
+  return roots;
 }
 
 function applySourceFingerprints(
@@ -548,7 +577,8 @@ function writeVariantRoots(roots: V3StructureNode[]): string[] {
       ? ` [${node.components.map(component => `${component.typeName} @${component.machineId}`).join(', ')}]`
       : '';
     const nested = node.nestedSourceGuid ? ` {source:${node.nestedSourceGuid}}` : '';
-    lines.push(`${prefix}${isLast ? '└─ ' : '├─ '}${node.name} @${node.machineId}${nested}${components}`);
+    const tombstone = node.tombstone ? '- ' : '';
+    lines.push(`${prefix}${isLast ? '└─ ' : '├─ '}${tombstone}${node.name} @${node.machineId}${nested}${components}`);
     const childPrefix = `${prefix}${isLast ? '   ' : '│  '}`;
     node.children.forEach((child, index) => visit(child, childPrefix, index === node.children.length - 1));
   };

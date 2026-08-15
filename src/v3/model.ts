@@ -41,6 +41,7 @@ export interface V3StructureNode {
   components: V3StructureComponent[];
   children: V3StructureNode[];
   nestedSourceGuid?: string;
+  tombstone?: boolean;
 }
 
 export interface V3Document {

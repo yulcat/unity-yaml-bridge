@@ -112,6 +112,8 @@ function parseStructure(lines: string[]): V3StructureNode {
 
 function parseStructureLine(line: string): V3StructureNode {
   let text = line.replace(/[├└│─]/g, '').trim();
+  const tombstone = text.startsWith('- ');
+  if (tombstone) text = text.slice(2).trim();
   let components: V3StructureComponent[] = [];
   const componentMatch = text.match(/\s+\[([^\]]*)\]$/);
   if (componentMatch) {
@@ -138,6 +140,7 @@ function parseStructureLine(line: string): V3StructureNode {
     components,
     children: [],
     nestedSourceGuid,
+    tombstone,
   };
 }
 

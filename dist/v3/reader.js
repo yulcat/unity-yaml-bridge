@@ -207,6 +207,7 @@ function parseIdentity(lines) {
         result.set(machineId, {
             machineId,
             kind,
+            origin: fields.get('origin') === 'inherited' ? 'inherited' : undefined,
             fileId: fields.get('fileID'),
             typeId,
             typeName,

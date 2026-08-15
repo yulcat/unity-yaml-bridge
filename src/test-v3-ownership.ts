@@ -79,8 +79,27 @@ console.log('\n=== v3 ownership cold-boundary edits ===');
 }
 
 {
-  const v3Text = writeV3(parseUnityYaml(sample('variants', 'Ellen_Variant.prefab')));
+  const variant = parseUnityYaml(sample('variants', 'Ellen_Variant.prefab'));
+  const source = parseUnityYaml(sample('prefabs', 'Amount.prefab'));
+  const sourcePath = path.join(__dirname, '..', 'samples', 'prefabs', 'Amount.prefab');
+  const sourceGuid = variant.variantSource!.guid!;
+  const nameOverride = variant.prefabInstances[0].modifications
+    .find(modification => modification.propertyPath === 'm_Name')!;
+  nameOverride.target.fileID = source.hierarchy!.fileId;
+  nameOverride.target.guid = sourceGuid;
+  const v3Text = writeV3(variant, {
+    sourceResolver: { resolveFilePath: guid => guid === sourceGuid ? sourcePath : undefined },
+  });
   const document = readV3(v3Text);
+  const inheritedRoot = document.variantRoots?.[0];
+  const inheritedIdentity = inheritedRoot && document.identity.get(inheritedRoot.machineId);
+  const coldRebuilt = compileV3(document);
+  assert(inheritedRoot?.name === 'Ellen' && inheritedIdentity?.origin === 'inherited' &&
+         inheritedIdentity?.sourceGuid === sourceGuid &&
+         inheritedIdentity?.sourceFileId === source.hierarchy!.fileId &&
+         coldRebuilt.documents.length === variant.documents.length,
+    'source-backed variant exposes and cold-compiles its inherited effective tree');
+
   assert(document.kind === 'variant' && !!document.variantRootId &&
          v3Text.includes('(variant @p1 source:a5674d01884853d4e8f2386a171e14d9)'),
     'variant source and root PrefabInstance are explicit in v3 STRUCTURE');

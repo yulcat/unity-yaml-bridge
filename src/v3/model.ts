@@ -11,6 +11,7 @@ export type V3EntityKind =
 export interface V3IdentityRecord {
   machineId: string;
   kind: V3EntityKind;
+  origin?: 'inherited';
   fileId?: string;
   typeId: number;
   typeName: string;

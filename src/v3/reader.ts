@@ -202,6 +202,7 @@ function parseIdentity(lines: string[]): Map<string, V3IdentityRecord> {
     result.set(machineId, {
       machineId,
       kind,
+      origin: fields.get('origin') === 'inherited' ? 'inherited' : undefined,
       fileId: fields.get('fileID'),
       typeId,
       typeName,

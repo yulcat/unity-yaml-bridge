@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.writeV3 = writeV3;
 const crypto_1 = require("crypto");
 const fs_1 = require("fs");
+const unity_yaml_parser_1 = require("../unity-yaml-parser");
 const value_1 = require("./value");
 const references_1 = require("./references");
 const STRUCTURAL_FIELDS = new Set([
@@ -317,6 +318,10 @@ function writeVariantV3(file, options) {
             : [file.hierarchy]
         : [];
     const variantRoots = variantHierarchyRoots.map((node, index) => buildVariantNode(node, undefined, index));
+    const inheritedRoots = buildInheritedVariantRoots(file, rootInstance.sourcePrefab.guid, options, identities);
+    if (inheritedRoots.length > 0 && variantRoots.length > 0) {
+        throw new Error('Inherited effective-tree expansion with variant-added roots is not implemented.');
+    }
     const inferredOwners = inferNestedOwnership(file, byId, identities, documentIds);
     for (const document of file.documents) {
         if (documentIds.has(document.fileId))
@@ -335,7 +340,7 @@ function writeVariantV3(file, options) {
         `# ubridge v3 | variant | profile:${options.profile || 'unity-generic-v1'}${options.assetGuid ? ` | asset-guid:${options.assetGuid}` : ''}`,
         '--- STRUCTURE',
         `(variant @${rootId} source:${rootInstance.sourcePrefab.guid})`,
-        ...writeVariantRoots(variantRoots),
+        ...writeVariantRoots(inheritedRoots.length > 0 ? inheritedRoots : variantRoots),
         '--- DETAILS',
     ];
     for (const document of file.documents) {
@@ -374,6 +379,79 @@ function identityFor(byId, fileId, machineId, kind) {
             : undefined,
     };
 }
+function buildInheritedVariantRoots(variant, sourceGuid, options, identities) {
+    const sourcePath = options.sourceResolver?.resolveFilePath(sourceGuid);
+    if (!sourcePath)
+        return [];
+    const source = (0, unity_yaml_parser_1.parseUnityYaml)((0, fs_1.readFileSync)(sourcePath, 'utf-8'));
+    if (source.type !== 'prefab' || !source.hierarchy) {
+        throw new Error(`Variant source ${sourceGuid} does not resolve to a prefab hierarchy.`);
+    }
+    const sourceById = new Map(source.documents.map(document => [document.fileId, document]));
+    let gameObjectIndex = 0;
+    let transformIndex = 0;
+    let componentIndex = 0;
+    const nameOverrides = new Map(variant.prefabInstances.flatMap(instance => instance.modifications.filter(modification => modification.propertyPath === 'm_Name' && modification.target.guid === sourceGuid).map(modification => [String(modification.target.fileID), modification.value])));
+    const build = (node, parentTransformMachineId, siblingIndex = 0) => {
+        if (node.nestedPrefab) {
+            throw new Error(`Inherited effective-tree expansion does not yet support nested PrefabInstance ${node.name}.`);
+        }
+        const gameObjectDocument = sourceById.get(node.fileId);
+        const transformDocument = sourceById.get(node.transform.fileId);
+        if (!gameObjectDocument || !transformDocument) {
+            throw new Error(`Inherited source node ${node.name} has incomplete source identity.`);
+        }
+        const goId = `ig${++gameObjectIndex}`;
+        const transformId = `it${++transformIndex}`;
+        identities.set(goId, {
+            machineId: goId,
+            kind: 'gameObject',
+            origin: 'inherited',
+            typeId: gameObjectDocument.typeId,
+            typeName: gameObjectDocument.typeName,
+            sourceGuid,
+            sourceFileId: node.fileId,
+        });
+        identities.set(transformId, {
+            machineId: transformId,
+            kind: 'transform',
+            origin: 'inherited',
+            typeId: transformDocument.typeId,
+            typeName: transformDocument.typeName,
+            ownerId: goId,
+            baselineParentId: parentTransformMachineId,
+            baselineOrder: siblingIndex,
+            sourceGuid,
+            sourceFileId: node.transform.fileId,
+        });
+        const components = node.components.map(component => {
+            const sourceDocument = sourceById.get(component.fileId);
+            if (!sourceDocument)
+                throw new Error(`Inherited component ${component.fileId} is missing from its source.`);
+            const componentId = `ic${++componentIndex}`;
+            identities.set(componentId, {
+                machineId: componentId,
+                kind: 'component',
+                origin: 'inherited',
+                typeId: sourceDocument.typeId,
+                typeName: sourceDocument.typeName,
+                displayName: component.typeName,
+                ownerId: goId,
+                scriptGuid: component.scriptGuid,
+                sourceGuid,
+                sourceFileId: component.fileId,
+            });
+            return { typeName: component.typeName, machineId: componentId };
+        });
+        return {
+            name: nameOverrides.get(node.fileId) ?? node.name,
+            machineId: goId,
+            components,
+            children: node.children.map((child, index) => build(child, transformId, index)),
+        };
+    };
+    return [build(source.hierarchy)];
+}
 function applySourceFingerprints(identities, options) {
     if (!options.sourceResolver)
         return;
@@ -408,12 +486,12 @@ function writeStructure(root) {
     return lines;
 }
 function writeIdentity(identity) {
-    const fields = [
-        identity.kind,
-        `fileID:${identity.fileId}`,
-        `type:${identity.typeId}`,
-        `typeName:${identity.typeName}`,
-    ];
+    const fields = [identity.kind];
+    if (identity.origin)
+        fields.push(`origin:${identity.origin}`);
+    if (identity.fileId)
+        fields.push(`fileID:${identity.fileId}`);
+    fields.push(`type:${identity.typeId}`, `typeName:${identity.typeName}`);
     if (identity.ownerId)
         fields.push(`owner:${identity.ownerId}`);
     if (identity.prefabOwnerId)

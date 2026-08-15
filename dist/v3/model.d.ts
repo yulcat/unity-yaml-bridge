@@ -3,6 +3,7 @@ export type V3EntityKind = 'gameObject' | 'transform' | 'component' | 'prefabIns
 export interface V3IdentityRecord {
     machineId: string;
     kind: V3EntityKind;
+    origin?: 'inherited';
     fileId?: string;
     typeId: number;
     typeName: string;

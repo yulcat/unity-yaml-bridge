@@ -240,6 +240,19 @@ function compileVariant(document) {
         }
         const goIdentity = requireIdentity(document, node.machineId, 'gameObject');
         const transformIdentity = findOwnedTransform(document, node.machineId);
+        if (goIdentity.origin === 'inherited') {
+            if (transformIdentity.origin !== 'inherited' || node.components.some(component => requireIdentity(document, component.machineId, 'component').origin !== 'inherited')) {
+                throw new Error(`Inherited STRUCTURE node ${node.machineId} has mixed local ownership.`);
+            }
+            node.children.forEach((child, index) => {
+                const childIdentity = requireIdentity(document, child.machineId, 'gameObject');
+                if (childIdentity.origin !== 'inherited') {
+                    throw new Error(`Adding local children beneath inherited ${node.machineId} is not implemented.`);
+                }
+                buildNode(child, '0', index, transformIdentity.machineId);
+            });
+            return;
+        }
         if (!parentTransformMachineId && !goIdentity.fileId) {
             throw new Error(`New variant root ${node.machineId} requires an inherited source-parent identity.`);
         }

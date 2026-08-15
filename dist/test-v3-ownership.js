@@ -99,8 +99,25 @@ console.log('\n=== v3 ownership cold-boundary edits ===');
     expectThrow(() => (0, compiler_1.compileV3)(document, { sourceResolver: { resolveFilePath: () => undefined } }), 'cannot resolve GUID', 'project validation rejects an unavailable source GUID');
 }
 {
-    const v3Text = (0, writer_1.writeV3)((0, unity_yaml_parser_1.parseUnityYaml)(sample('variants', 'Ellen_Variant.prefab')));
+    const variant = (0, unity_yaml_parser_1.parseUnityYaml)(sample('variants', 'Ellen_Variant.prefab'));
+    const source = (0, unity_yaml_parser_1.parseUnityYaml)(sample('prefabs', 'Amount.prefab'));
+    const sourcePath = path.join(__dirname, '..', 'samples', 'prefabs', 'Amount.prefab');
+    const sourceGuid = variant.variantSource.guid;
+    const nameOverride = variant.prefabInstances[0].modifications
+        .find(modification => modification.propertyPath === 'm_Name');
+    nameOverride.target.fileID = source.hierarchy.fileId;
+    nameOverride.target.guid = sourceGuid;
+    const v3Text = (0, writer_1.writeV3)(variant, {
+        sourceResolver: { resolveFilePath: guid => guid === sourceGuid ? sourcePath : undefined },
+    });
     const document = (0, reader_1.readV3)(v3Text);
+    const inheritedRoot = document.variantRoots?.[0];
+    const inheritedIdentity = inheritedRoot && document.identity.get(inheritedRoot.machineId);
+    const coldRebuilt = (0, compiler_1.compileV3)(document);
+    assert(inheritedRoot?.name === 'Ellen' && inheritedIdentity?.origin === 'inherited' &&
+        inheritedIdentity?.sourceGuid === sourceGuid &&
+        inheritedIdentity?.sourceFileId === source.hierarchy.fileId &&
+        coldRebuilt.documents.length === variant.documents.length, 'source-backed variant exposes and cold-compiles its inherited effective tree');
     assert(document.kind === 'variant' && !!document.variantRootId &&
         v3Text.includes('(variant @p1 source:a5674d01884853d4e8f2386a171e14d9)'), 'variant source and root PrefabInstance are explicit in v3 STRUCTURE');
     const details = document.details.get(document.variantRootId);

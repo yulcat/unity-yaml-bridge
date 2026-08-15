@@ -285,6 +285,8 @@ function compileVariant(document: V3Document): UnityFile {
   const usedInheritedStubIds = new Set<string>();
   const desiredInheritedNestedInstances = new Set<string>();
   const desiredInheritedNestedInternals = new Set<string>();
+  const effectiveDirectInheritedGameObjects = new Set<string>();
+  const explicitRemovedDirectInheritedGameObjects = new Set<string>();
   const inheritedNestedOverrides: Array<{
     machineId: string;
     ownerId: string;
@@ -473,6 +475,7 @@ function compileVariant(document: V3Document): UnityFile {
         guid: identity.sourceGuid,
         type: 3,
       });
+      if (!identity.prefabOwnerId) explicitRemovedDirectInheritedGameObjects.add(identity.machineId);
       return;
     }
     if (node.nestedSourceGuid && node.prefabInstanceId) {
@@ -521,6 +524,7 @@ function compileVariant(document: V3Document): UnityFile {
     const goIdentity = requireIdentity(document, node.machineId, 'gameObject');
     const transformIdentity = findOwnedTransform(document, node.machineId);
     if (goIdentity.origin === 'inherited') {
+      if (!goIdentity.prefabOwnerId) effectiveDirectInheritedGameObjects.add(goIdentity.machineId);
       const directComponentStructureChanged = node.components.some((component, index) => {
         const identity = requireIdentity(document, component.machineId, 'component');
         return identity.origin === 'inherited' &&
@@ -748,6 +752,27 @@ function compileVariant(document: V3Document): UnityFile {
   };
 
   (document.variantRoots ?? []).forEach((root, index) => buildNode(root, '0', index));
+  for (const identity of document.identity.values()) {
+    if (identity.kind !== 'gameObject' || identity.origin !== 'inherited' || identity.prefabOwnerId ||
+        effectiveDirectInheritedGameObjects.has(identity.machineId) ||
+        explicitRemovedDirectInheritedGameObjects.has(identity.machineId)) continue;
+    const transform = findOwnedTransform(document, identity.machineId);
+    const parentTransform = transform.baselineParentId
+      ? document.identity.get(transform.baselineParentId)
+      : undefined;
+    const isMissingRoot = !transform.baselineParentId;
+    const isMissingChildOfEffectiveParent = parentTransform?.kind === 'transform' &&
+      !!parentTransform.ownerId && effectiveDirectInheritedGameObjects.has(parentTransform.ownerId);
+    if (!isMissingRoot && !isMissingChildOfEffectiveParent) continue;
+    if (!identity.sourceGuid || !identity.sourceFileId) {
+      throw new Error(`Removed inherited GameObject ${identity.machineId} has no source identity.`);
+    }
+    removedGameObjects.push({
+      fileID: identity.sourceFileId,
+      guid: identity.sourceGuid,
+      type: 3,
+    });
+  }
   for (const identity of document.identity.values()) {
     if (identity.kind === 'prefabInstance' && identity.origin === 'inherited' &&
         !desiredInheritedNestedInstances.has(identity.machineId)) {

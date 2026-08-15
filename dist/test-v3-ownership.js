@@ -774,6 +774,28 @@ console.log('\n=== v3 ownership cold-boundary edits ===');
     expectThrow(() => (0, compiler_1.compileV3)(directInherited), 'Structural editing of direct inherited', 'direct inherited semantic DETAILS fail closed instead of compiling as a no-op');
 }
 {
+    const document = (0, reader_1.readV3)(sourceBackedVariantText());
+    const root = document.variantRoots[0];
+    const removedChild = root.children.shift();
+    const removedIdentity = document.identity.get(removedChild.machineId);
+    const rebuilt = (0, unity_yaml_parser_1.parseUnityYaml)((0, unity_yaml_writer_1.writeUnityYaml)((0, compiler_1.compileV3)(document)));
+    const removed = rebuilt.prefabInstances[0].removedGameObjects;
+    assert(removed.length === 1 &&
+        String(removed[0].fileID) === removedIdentity.sourceFileId &&
+        removed[0].guid === removedIdentity.sourceGuid, 'omitting a direct inherited child compiles to m_RemovedGameObjects');
+}
+{
+    const document = (0, reader_1.readV3)(sourceBackedVariantText());
+    const removedRoot = document.variantRoots[0];
+    const removedIdentity = document.identity.get(removedRoot.machineId);
+    document.variantRoots = [];
+    const rebuilt = (0, unity_yaml_parser_1.parseUnityYaml)((0, unity_yaml_writer_1.writeUnityYaml)((0, compiler_1.compileV3)(document)));
+    const removed = rebuilt.prefabInstances[0].removedGameObjects;
+    assert(removed.length === 1 &&
+        String(removed[0].fileID) === removedIdentity.sourceFileId &&
+        removed[0].guid === removedIdentity.sourceGuid, 'omitting the direct inherited root compiles one explicit root removal');
+}
+{
     const sourceGuid = '33333333333333333333333333333333';
     const sourcePath = path.join(__dirname, '..', 'samples', 'prefabs', 'Button.prefab');
     const source = (0, unity_yaml_parser_1.parseUnityYaml)(sample('prefabs', 'Button.prefab'));

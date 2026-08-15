@@ -584,6 +584,7 @@ function buildInheritedVariantRoots(variant, sourceGuid, options, identities, do
                 typeId: sourceDocument.typeId,
                 typeName: sourceDocument.typeName,
                 displayName: node.name,
+                prefabOwnerId: rootId,
                 baselineParentId: parentTransformMachineId,
                 baselineOrder: siblingIndex,
                 sourceGuid,

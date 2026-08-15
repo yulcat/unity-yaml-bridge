@@ -514,6 +514,7 @@ console.log('\n=== v3 ownership cold-boundary edits ===');
         nestedRootIdentity.sourceFileId === nestedRoot.fileId &&
         nestedRootIdentity.prefabOwnerId === inheritedNestedMetadata.prefabInstanceId &&
         nestedInstanceIdentity?.kind === 'prefabInstance' &&
+        nestedInstanceIdentity.prefabOwnerId === document.variantRootId &&
         nestedInstanceIdentity.sourceGuid === sourceGuid &&
         nestedInstanceIdentity.sourceFileId === inheritedNestedSource.instanceId &&
         nestedV3Text.includes(`@${inheritedNested.machineId} {prefab:@${inheritedNestedMetadata.prefabInstanceId} ` +
@@ -535,9 +536,38 @@ console.log('\n=== v3 ownership cold-boundary edits ===');
     assert(rebuilt.documents.length === variant.documents.length &&
         rebuilt.prefabInstances.length === variant.prefabInstances.length, 'expanded inherited nested internals cold-compile without emitting nested source documents');
     expectThrow(() => (0, reader_1.readV3)(nestedV3Text.replace(`prefab:@${inheritedNestedMetadata.prefabInstanceId}`, `prefab:@${document.variantRootId}`)), 'is not directly owned by', 'nested source-root metadata rejects a mismatched PrefabInstance owner');
-    internalChild.name = 'UnsupportedInternalRename';
-    expectThrow(() => (0, compiler_1.compileV3)(document), 'Structural editing of inherited nested PrefabInstance', 'renaming an inherited nested internal fails closed instead of compiling as a no-op');
+    internalChild.name = 'NestedInternalRenamed';
+    const renamed = (0, unity_yaml_parser_1.parseUnityYaml)((0, unity_yaml_writer_1.writeUnityYaml)((0, compiler_1.compileV3)(document)));
+    const renameDelta = renamed.prefabInstances[0].modifications.find(modification => modification.propertyPath === 'm_Name' &&
+        String(modification.target.fileID) === internalGameObject?.sourceFileId &&
+        modification.target.guid === internalGameObject?.sourceGuid);
+    assert(renameDelta?.value === 'NestedInternalRenamed' &&
+        renamed.documents.length === variant.documents.length, 'renaming an inherited nested internal emits a source-targeted delta on the owning variant PrefabInstance');
     internalChild.name = nestedChild.name;
+    inheritedNested.name = 'NestedSourceRootRenamed';
+    const rootRenamed = (0, unity_yaml_parser_1.parseUnityYaml)((0, unity_yaml_writer_1.writeUnityYaml)((0, compiler_1.compileV3)(document)));
+    const rootRenameDelta = rootRenamed.prefabInstances[0].modifications.find(modification => modification.propertyPath === 'm_Name' &&
+        String(modification.target.fileID) === nestedRootIdentity?.sourceFileId &&
+        modification.target.guid === nestedRootIdentity?.sourceGuid);
+    assert(rootRenameDelta?.value === 'NestedSourceRootRenamed', 'renaming an inherited nested source root emits a delta for the nested source GameObject');
+    inheritedNested.name = nestedRootIdentity.displayName;
+    document.details.set(internalComponent.machineId, { m_Enabled: 0 });
+    const propertyEdited = (0, unity_yaml_parser_1.parseUnityYaml)((0, unity_yaml_writer_1.writeUnityYaml)((0, compiler_1.compileV3)(document)));
+    const propertyDelta = propertyEdited.prefabInstances[0].modifications.find(modification => modification.propertyPath === 'm_Enabled' &&
+        String(modification.target.fileID) === internalComponent?.sourceFileId &&
+        modification.target.guid === internalComponent?.sourceGuid);
+    assert(propertyDelta?.value === '0' &&
+        propertyEdited.documents.length === variant.documents.length, 'DETAILS on an inherited nested component emits a source-targeted property delta on the owning variant PrefabInstance');
+    document.details.delete(internalComponent.machineId);
+    const duplicateTarget = nestedRootComponents[0];
+    const originalDuplicateFileId = duplicateTarget.sourceFileId;
+    duplicateTarget.sourceFileId = internalComponent.sourceFileId;
+    document.details.set(duplicateTarget.machineId, { m_Enabled: 1 });
+    document.details.set(internalComponent.machineId, { m_Enabled: 0 });
+    expectThrow(() => (0, compiler_1.compileV3)(document), 'ambiguous owner/source path', 'duplicate inherited nested override targets fail closed instead of overwriting one another');
+    duplicateTarget.sourceFileId = originalDuplicateFileId;
+    document.details.delete(duplicateTarget.machineId);
+    document.details.delete(internalComponent.machineId);
     inheritedNested.children = [];
     expectThrow(() => (0, compiler_1.compileV3)(document), 'is missing from variant STRUCTURE', 'removing an inherited nested internal fails closed instead of compiling as a no-op');
     inheritedNested.children = [internalChild, internalChild];
@@ -588,8 +618,19 @@ console.log('\n=== v3 ownership cold-boundary edits ===');
         const ambiguousOwnershipText = text.replace(`prefabOwner:${outerPrefab.machineId} | displayName:${innerPrefab.displayName}`, `prefabOwner:${document.variantRootId} | displayName:${innerPrefab.displayName}`);
         assert(ambiguousOwnershipText !== text, 'nested-in-nested ownership ambiguity fixture changes the direct owner');
         expectThrow(() => (0, reader_1.readV3)(ambiguousOwnershipText), 'is not directly owned by', 'nested-in-nested PrefabInstance metadata rejects an ambiguous direct owner');
-        innerBoundary.name = 'UnsupportedDeepRename';
-        expectThrow(() => (0, compiler_1.compileV3)(document), 'Structural editing of inherited nested PrefabInstance', 'structural edits to recursively expanded nested internals fail closed');
+        innerBoundary.name = 'DeepNestedRenamed';
+        const deepComponent = document.identity.get(innerBoundary.components[0].machineId);
+        document.details.set(deepComponent.machineId, { m_Enabled: 0 });
+        const deeplyEdited = (0, unity_yaml_parser_1.parseUnityYaml)((0, unity_yaml_writer_1.writeUnityYaml)((0, compiler_1.compileV3)(document)));
+        const deepRenameDelta = deeplyEdited.prefabInstances[0].modifications.find(modification => modification.propertyPath === 'm_Name' &&
+            String(modification.target.fileID) === innerRoot.sourceFileId &&
+            modification.target.guid === innerRoot.sourceGuid);
+        const deepPropertyDelta = deeplyEdited.prefabInstances[0].modifications.find(modification => modification.propertyPath === 'm_Enabled' &&
+            String(modification.target.fileID) === deepComponent.sourceFileId &&
+            modification.target.guid === deepComponent.sourceGuid);
+        assert(deepRenameDelta?.value === 'DeepNestedRenamed' &&
+            deepPropertyDelta?.value === '0' &&
+            deeplyEdited.documents.length === variant.documents.length, 'rename and DETAILS overrides follow the PrefabInstance owner chain at arbitrary nested depth');
     }
     finally {
         fs.rmSync(directory, { recursive: true, force: true });

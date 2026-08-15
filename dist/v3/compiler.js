@@ -11,6 +11,11 @@ const COMMON_LOCAL_ENVELOPE = {
     m_PrefabInstance: { fileID: 0 },
     m_PrefabAsset: { fileID: 0 },
 };
+const INHERITED_OVERRIDE_STRUCTURAL_FIELDS = new Set([
+    'm_CorrespondingSourceObject', 'm_PrefabInstance', 'm_PrefabAsset',
+    'm_GameObject', 'm_Father', 'm_Children', 'm_RootOrder', 'm_Component',
+    'm_Name', 'm_Script',
+]);
 function compileV3(document, options = {}) {
     if (document.version !== 3)
         throw new Error('compileV3 accepts v3 documents only.');
@@ -232,7 +237,54 @@ function compileVariant(document) {
     const usedInheritedStubIds = new Set();
     const desiredInheritedNestedInstances = new Set();
     const desiredInheritedNestedInternals = new Set();
+    const inheritedNestedOverrides = [];
     const hasInheritedStructure = [...document.identity.values()].some(identity => identity.origin === 'inherited');
+    const queueInheritedNestedOverride = (identity, propertyPath, value) => {
+        if (!identity.prefabOwnerId || !identity.sourceGuid || !identity.sourceFileId) {
+            throw new Error(`Inherited nested identity ${identity.machineId} has incomplete override ownership.`);
+        }
+        const visited = new Set();
+        let ownerId = identity.prefabOwnerId;
+        while (ownerId !== document.variantRootId) {
+            if (visited.has(ownerId)) {
+                throw new Error(`Inherited nested identity ${identity.machineId} has a cyclic PrefabInstance owner path.`);
+            }
+            visited.add(ownerId);
+            const owner = requireIdentity(document, ownerId, 'prefabInstance');
+            if (owner.origin !== 'inherited' || !owner.prefabOwnerId) {
+                throw new Error(`Inherited nested identity ${identity.machineId} has no direct emitted PrefabInstance owner.`);
+            }
+            ownerId = owner.prefabOwnerId;
+        }
+        const duplicate = inheritedNestedOverrides.find(override => override.ownerId === ownerId && override.propertyPath === propertyPath &&
+            String(override.target.fileID) === identity.sourceFileId &&
+            String(override.target.guid) === identity.sourceGuid &&
+            override.machineId !== identity.machineId);
+        if (duplicate) {
+            throw new Error(`Inherited nested overrides ${duplicate.machineId} and ${identity.machineId} have an ambiguous owner/source path.`);
+        }
+        inheritedNestedOverrides.push({
+            machineId: identity.machineId,
+            ownerId,
+            target: { fileID: identity.sourceFileId, guid: identity.sourceGuid, type: 3 },
+            propertyPath,
+            value,
+        });
+    };
+    const queueInheritedNestedDetails = (identity) => {
+        const details = document.details.get(identity.machineId);
+        if (!details)
+            return;
+        for (const [propertyPath, value] of Object.entries(details)) {
+            if (INHERITED_OVERRIDE_STRUCTURAL_FIELDS.has(propertyPath)) {
+                throw new Error(`Inherited nested DETAILS ${identity.machineId}.${propertyPath} is structural and not supported.`);
+            }
+            if (typeof value !== 'string' && typeof value !== 'number') {
+                throw new Error(`Inherited nested DETAILS ${identity.machineId}.${propertyPath} requires a string or number value.`);
+            }
+            queueInheritedNestedOverride(identity, propertyPath, String(value));
+        }
+    };
     const validateInheritedNestedInternal = (node, prefabOwnerId, nestedSourceGuid, parentTransformMachineId, siblingIndex, sourceRoot = false) => {
         if (node.tombstone) {
             throw new Error(`Structural editing of inherited nested PrefabInstance ${prefabOwnerId} internals is not implemented.`);
@@ -242,7 +294,6 @@ function compileVariant(document) {
                 const nestedPrefab = requireIdentity(document, node.prefabInstanceId, 'prefabInstance');
                 if (nestedPrefab.origin !== 'inherited' || nestedPrefab.prefabOwnerId !== prefabOwnerId ||
                     nestedPrefab.sourceGuid !== nestedSourceGuid || !nestedPrefab.sourceFileId ||
-                    nestedPrefab.displayName !== node.name ||
                     nestedPrefab.baselineParentId !== parentTransformMachineId ||
                     nestedPrefab.baselineOrder !== siblingIndex) {
                     throw new Error(`Structural editing of inherited nested PrefabInstance ${node.prefabInstanceId} internals is not implemented.`);
@@ -270,12 +321,16 @@ function compileVariant(document) {
         const transform = findOwnedTransform(document, node.machineId);
         if (gameObject.origin !== 'inherited' || gameObject.prefabOwnerId !== prefabOwnerId ||
             gameObject.sourceGuid !== nestedSourceGuid || !gameObject.sourceFileId ||
-            gameObject.displayName !== node.name || transform.origin !== 'inherited' ||
+            transform.origin !== 'inherited' ||
             transform.prefabOwnerId !== prefabOwnerId || transform.sourceGuid !== nestedSourceGuid ||
             !transform.sourceFileId || transform.baselineParentId !== parentTransformMachineId ||
             transform.baselineOrder !== siblingIndex) {
             throw new Error(`Structural editing of inherited nested PrefabInstance ${prefabOwnerId} internals is not implemented.`);
         }
+        if (gameObject.displayName !== node.name) {
+            queueInheritedNestedOverride(gameObject, 'm_Name', node.name);
+        }
+        queueInheritedNestedDetails(gameObject);
         desiredInheritedNestedInternals.add(gameObject.machineId);
         desiredInheritedNestedInternals.add(transform.machineId);
         const baselineComponents = [...document.identity.values()]
@@ -294,6 +349,7 @@ function compileVariant(document) {
                 throw new Error(`Structural editing of inherited nested PrefabInstance ${prefabOwnerId} internals is not implemented.`);
             }
             desiredInheritedNestedInternals.add(identity.machineId);
+            queueInheritedNestedDetails(identity);
         });
         node.children.forEach((child, index) => validateInheritedNestedInternal(child, prefabOwnerId, nestedSourceGuid, transform.machineId, index));
     };
@@ -604,6 +660,13 @@ function compileVariant(document) {
             modification.m_RemovedComponents = removedComponents;
             modification.m_AddedGameObjects = addedGameObjects;
             modification.m_AddedComponents = addedComponents;
+            for (const override of inheritedNestedOverrides) {
+                if (override.ownerId !== identity.machineId)
+                    continue;
+                if (!Array.isArray(modification.m_Modifications))
+                    modification.m_Modifications = [];
+                upsertModification(modification.m_Modifications, override.target, override.propertyPath, override.value);
+            }
         }
         if (identity.kind === 'prefabInstance' && nestedPlans.has(identity.machineId)) {
             properties = applyNestedInstancePlan(document, identity, nestedPlans.get(identity.machineId), properties);

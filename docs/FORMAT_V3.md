@@ -93,11 +93,22 @@ nested-in-nested sources: every resolved boundary exposes that source's root
 GameObject with its own metadata, retains that boundary's source GUID/fileIDs,
 and binds its root and internals directly through `prefabOwner` to the boundary
 PrefabInstance. A nested PrefabInstance identity is in turn directly owned by
-the containing boundary, preserving the ownership chain without adding duplicate
-same-name source-root levels. Nested source cycles and ambiguous direct-owner
-metadata fail closed. Renaming,
-reparenting, reordering, removing, adding, or duplicating expanded internals
-fails closed; untouched cold compilation emits only the leaf variant's own
+the containing boundary; the outermost inherited boundary is directly owned by
+the leaf variant's emitted root PrefabInstance. This preserves an unambiguous
+ownership chain without adding duplicate same-name source-root levels. Nested
+source cycles and ambiguous direct-owner metadata fail closed. Expanded nested
+source-root/internal GameObjects can now be renamed, and string/number DETAILS on
+their GameObjects/components can be added as property overrides, at any resolved
+nested depth. The compiler walks `prefabOwner` to the emitted leaf-variant
+PrefabInstance, then upserts an `m_Modification.m_Modifications` entry whose
+`target` reuses the edited identity's nested-source GUID/fileID, whose
+`propertyPath` is `m_Name` or the DETAILS key, and whose string/number value is
+stringified into `value`. It never emits the nested source GameObject/component or an
+inherited PrefabInstance source document. Missing/cyclic owner chains and
+ambiguous duplicate owner/source/property targets fail closed. Boolean, null,
+object/array DETAILS and structural DETAILS fields remain unsupported. Reparenting,
+reordering, removing, adding, or duplicating expanded internals still fails
+closed; untouched cold compilation emits only the leaf variant's own
 documents. Variant-of-variant sources are expanded through an unambiguous
 source chain; intermediate name overrides and inherited GameObject/component
 removals become effective state while emitted identities remain owned by the
@@ -131,7 +142,8 @@ fileIDs, while untouched leaf compilation emits only the leaf PrefabInstance and
 not replay intermediate addition deltas. Added-root parent stubs and added-component
 targets must resolve to exactly one direct PrefabInstance owner; ambiguous, indirect,
 missing, or duplicate ownership fails closed. Recursively expanded inherited nested
-internals remain read-only: all structural edits at any nested depth fail closed. Without
+internals support the rename/string-or-number-DETAILS override slice above; their
+reparent/reorder/add/remove/duplicate structural edits remain fail-closed. Without
 a source resolver, nested and variant baseline ownership documents remain standalone,
 and existing PrefabInstance delta values can be edited in DETAILS. Local objects not yet
 exposed in the effective STRUCTURE are kept as explicit `owned` identity/details records

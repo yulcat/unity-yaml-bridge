@@ -645,7 +645,20 @@ console.log('\n=== v3 ownership cold-boundary edits ===');
     document.details.delete(duplicateTarget.machineId);
     document.details.delete(internalComponent.machineId);
     inheritedNested.children = [];
-    expectThrow(() => (0, compiler_1.compileV3)(document), 'is missing from variant STRUCTURE', 'removing an inherited nested internal fails closed instead of compiling as a no-op');
+    const removedInternal = (0, unity_yaml_parser_1.parseUnityYaml)((0, unity_yaml_writer_1.writeUnityYaml)((0, compiler_1.compileV3)(document)));
+    const removedInternalDelta = removedInternal.prefabInstances[0].removedGameObjects;
+    assert(removedInternalDelta.length === 1 &&
+        String(removedInternalDelta[0].fileID) === internalGameObject?.sourceFileId &&
+        removedInternalDelta[0].guid === internalGameObject?.sourceGuid, 'removing an inherited nested internal emits its nested-source GameObject delta');
+    inheritedNested.children = [internalChild];
+    internalChild.tombstone = true;
+    internalChild.children = [];
+    const tombstonedInternal = (0, unity_yaml_parser_1.parseUnityYaml)((0, unity_yaml_writer_1.writeUnityYaml)((0, compiler_1.compileV3)(document)));
+    const tombstonedInternalDelta = tombstonedInternal.prefabInstances[0].removedGameObjects;
+    assert(tombstonedInternalDelta.length === 1 &&
+        String(tombstonedInternalDelta[0].fileID) === internalGameObject?.sourceFileId &&
+        tombstonedInternalDelta[0].guid === internalGameObject?.sourceGuid, 'an explicit inherited nested internal tombstone emits its nested-source GameObject delta');
+    delete internalChild.tombstone;
     inheritedNested.children = [internalChild, internalChild];
     expectThrow(() => (0, compiler_1.compileV3)(document), 'Structural editing of inherited nested PrefabInstance', 'ambiguous duplicate addition of an inherited nested internal fails closed');
 }
@@ -707,6 +720,85 @@ console.log('\n=== v3 ownership cold-boundary edits ===');
         assert(deepRenameDelta?.value === 'DeepNestedRenamed' &&
             deepPropertyDelta?.value === '0' &&
             deeplyEdited.documents.length === variant.documents.length, 'rename and DETAILS overrides follow the PrefabInstance owner chain at arbitrary nested depth');
+        innerBoundary.name = innerRoot.displayName;
+        document.details.delete(deepComponent.machineId);
+        const removedDeepComponent = innerBoundary.components.pop();
+        const removedDeepComponentIdentity = document.identity.get(removedDeepComponent.machineId);
+        const componentRemoved = (0, unity_yaml_parser_1.parseUnityYaml)((0, unity_yaml_writer_1.writeUnityYaml)((0, compiler_1.compileV3)(document)));
+        const deepRemovedComponents = componentRemoved.prefabInstances[0].removedComponents;
+        assert(deepRemovedComponents.length === 1 &&
+            String(deepRemovedComponents[0].fileID) === removedDeepComponentIdentity.sourceFileId &&
+            deepRemovedComponents[0].guid === removedDeepComponentIdentity.sourceGuid &&
+            document.identity.has(removedDeepComponent.machineId) &&
+            componentRemoved.documents.length === variant.documents.length, 'removing a recursively expanded inherited nested component emits one leaf-owned source delta and preserves identity');
+        innerBoundary.components.push(removedDeepComponent);
+        const outerComponentIndex = outerBoundary.components.findIndex(component => component.machineId !== removedDeepComponent.machineId);
+        const ambiguousOuterComponent = outerBoundary.components[outerComponentIndex];
+        const ambiguousOuterComponentIdentity = document.identity.get(ambiguousOuterComponent.machineId);
+        const originalOuterComponentSource = {
+            guid: ambiguousOuterComponentIdentity.sourceGuid,
+            fileId: ambiguousOuterComponentIdentity.sourceFileId,
+        };
+        ambiguousOuterComponentIdentity.sourceGuid = removedDeepComponentIdentity.sourceGuid;
+        ambiguousOuterComponentIdentity.sourceFileId = removedDeepComponentIdentity.sourceFileId;
+        outerBoundary.components.splice(outerComponentIndex, 1);
+        innerBoundary.components.pop();
+        expectThrow(() => (0, compiler_1.compileV3)(document), 'ambiguous owner/source path', 'duplicate recursively expanded inherited nested component removal targets fail closed');
+        outerBoundary.components.splice(outerComponentIndex, 0, ambiguousOuterComponent);
+        innerBoundary.components.push(removedDeepComponent);
+        ambiguousOuterComponentIdentity.sourceGuid = originalOuterComponentSource.guid;
+        ambiguousOuterComponentIdentity.sourceFileId = originalOuterComponentSource.fileId;
+        outerBoundary.components.splice(outerComponentIndex, 1);
+        const originalOuterPrefabOwner = outerPrefab.prefabOwnerId;
+        outerPrefab.prefabOwnerId = 'missingPrefabOwner';
+        expectThrow(() => (0, compiler_1.compileV3)(document), 'is not a prefabInstance identity', 'recursively expanded inherited nested removal rejects a missing PrefabInstance owner chain');
+        outerPrefab.prefabOwnerId = outerPrefab.machineId;
+        expectThrow(() => (0, compiler_1.compileV3)(document), 'cyclic PrefabInstance owner path', 'recursively expanded inherited nested removal rejects a cyclic PrefabInstance owner chain');
+        outerPrefab.prefabOwnerId = originalOuterPrefabOwner;
+        outerBoundary.components.splice(outerComponentIndex, 0, ambiguousOuterComponent);
+        const removedDeepChild = innerBoundary.children.shift();
+        const removedDeepIdentity = document.identity.get(removedDeepChild.machineId);
+        const removedDeepDescendantIds = new Set();
+        const collectRemovedIdentity = (node) => {
+            removedDeepDescendantIds.add(node.machineId);
+            node.components.forEach(component => removedDeepDescendantIds.add(component.machineId));
+            const transform = [...document.identity.values()].find(identity => identity.kind === 'transform' && identity.ownerId === node.machineId);
+            if (transform)
+                removedDeepDescendantIds.add(transform.machineId);
+            node.children.forEach(collectRemovedIdentity);
+        };
+        collectRemovedIdentity(removedDeepChild);
+        const removedDeepTransformIdentity = [...document.identity.values()].find(identity => identity.kind === 'transform' && identity.ownerId === removedDeepChild.machineId);
+        document.identity.set('ambiguousRemovedNestedGo', {
+            ...removedDeepIdentity,
+            machineId: 'ambiguousRemovedNestedGo',
+        });
+        document.identity.set('ambiguousRemovedNestedTransform', {
+            ...removedDeepTransformIdentity,
+            machineId: 'ambiguousRemovedNestedTransform',
+            ownerId: 'ambiguousRemovedNestedGo',
+        });
+        expectThrow(() => (0, compiler_1.compileV3)(document), 'ambiguous owner/source path', 'duplicate recursively expanded inherited nested GameObject removal targets fail closed');
+        document.identity.delete('ambiguousRemovedNestedGo');
+        document.identity.delete('ambiguousRemovedNestedTransform');
+        const deeplyRemoved = (0, unity_yaml_parser_1.parseUnityYaml)((0, unity_yaml_writer_1.writeUnityYaml)((0, compiler_1.compileV3)(document)));
+        const deepRemovedDeltas = deeplyRemoved.prefabInstances[0].removedGameObjects;
+        assert(deepRemovedDeltas.length === 1 &&
+            String(deepRemovedDeltas[0].fileID) === removedDeepIdentity.sourceFileId &&
+            deepRemovedDeltas[0].guid === removedDeepIdentity.sourceGuid &&
+            [...removedDeepDescendantIds].every(machineId => document.identity.has(machineId)) &&
+            deeplyRemoved.documents.length === variant.documents.length, 'removing a recursively expanded inherited nested subtree emits one leaf-owned source delta and preserves identities');
+        innerBoundary.children.unshift(removedDeepChild);
+        const innerBoundaryIndex = outerBoundary.children.indexOf(innerBoundary);
+        outerBoundary.children.splice(innerBoundaryIndex, 1);
+        const sourceRootRemoved = (0, unity_yaml_parser_1.parseUnityYaml)((0, unity_yaml_writer_1.writeUnityYaml)((0, compiler_1.compileV3)(document)));
+        const sourceRootRemovalDeltas = sourceRootRemoved.prefabInstances[0].removedGameObjects;
+        assert(sourceRootRemovalDeltas.length === 1 &&
+            String(sourceRootRemovalDeltas[0].fileID) === innerRoot.sourceFileId &&
+            sourceRootRemovalDeltas[0].guid === innerRoot.sourceGuid &&
+            document.identity.has(innerPrefab.machineId) &&
+            document.identity.has(innerRoot.machineId) &&
+            sourceRootRemoved.documents.length === variant.documents.length, 'removing a recursively expanded inherited nested source root emits one leaf-owned source delta');
     }
     finally {
         fs.rmSync(directory, { recursive: true, force: true });

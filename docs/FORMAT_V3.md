@@ -107,8 +107,15 @@ stringified into `value`. It never emits the nested source GameObject/component 
 inherited PrefabInstance source document. Missing/cyclic owner chains and
 ambiguous duplicate owner/source/property targets fail closed. Boolean, null,
 object/array DETAILS and structural DETAILS fields remain unsupported. Reparenting,
-reordering, removing, adding, or duplicating expanded internals still fails
-closed; untouched cold compilation emits only the leaf variant's own
+reordering, adding, or duplicating expanded internals still fails closed. Removing an
+expanded inherited nested source-root/internal GameObject from effective STRUCTURE, or
+marking it with an explicit tombstone, emits one `m_RemovedGameObjects` entry on the
+leaf variant PrefabInstance using that GameObject's nested-source GUID/fileID. Removing
+an inherited nested component from its node similarly emits `m_RemovedComponents`.
+Both operations follow the recursive `prefabOwner` chain to the emitted leaf owner,
+preserve removed identity records, suppress redundant descendant removals, and never
+emit nested source documents. Missing, cyclic, or duplicate owner/source removal paths
+fail closed. Untouched cold compilation emits only the leaf variant's own
 documents. Variant-of-variant sources are expanded through an unambiguous
 source chain; intermediate name overrides and inherited GameObject/component
 removals become effective state while emitted identities remain owned by the
@@ -142,8 +149,9 @@ fileIDs, while untouched leaf compilation emits only the leaf PrefabInstance and
 not replay intermediate addition deltas. Added-root parent stubs and added-component
 targets must resolve to exactly one direct PrefabInstance owner; ambiguous, indirect,
 missing, or duplicate ownership fails closed. Recursively expanded inherited nested
-internals support the rename/string-or-number-DETAILS override slice above; their
-reparent/reorder/add/remove/duplicate structural edits remain fail-closed. Without
+internals support the rename/string-or-number-DETAILS override and GameObject/component
+removal slices above; their reparent/reorder/add/duplicate structural edits remain
+fail-closed. Without
 a source resolver, nested and variant baseline ownership documents remain standalone,
 and existing PrefabInstance delta values can be edited in DETAILS. Local objects not yet
 exposed in the effective STRUCTURE are kept as explicit `owned` identity/details records

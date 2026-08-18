@@ -192,8 +192,44 @@ console.log('\n=== v3 ownership cold-boundary edits ===');
 
   const details: any = document.details.get(document.variantRootId!);
   const modifications: any[] = details.m_Modification.m_Modifications;
+  modifications.push({
+    target: { fileID: 999999, guid: sourceGuid, type: 3 },
+    propertyPath: 'm_CustomScalar', value: '123', objectReference: { fileID: 0 },
+  });
+  expectThrow(
+    () => compileV3(document),
+    'does not resolve to an inherited source identity',
+    'dangling direct-source raw scalar modifications fail closed'
+  );
+  modifications.pop();
   const name = modifications.find(modification => modification.propertyPath === 'm_Name');
   assert(name?.value === 'Ellen', 'variant name override is present in standalone DETAILS');
+  const externalReference = {
+    fileID: 21300000, guid: 'abcdefabcdefabcdefabcdefabcdefab', type: 3,
+  };
+  modifications.push(
+    {
+      target: { ...name.target }, propertyPath: 'm_CustomScalar',
+      value: '123', objectReference: { fileID: 0 },
+    },
+    {
+      target: { ...name.target }, propertyPath: 'm_CustomReference',
+      value: '', objectReference: externalReference,
+    }
+  );
+  const validRawRebuilt = parseUnityYaml(writeUnityYaml(compileV3(document)));
+  const validRawScalar = validRawRebuilt.prefabInstances[0].modifications.find(modification =>
+    modification.propertyPath === 'm_CustomScalar'
+  );
+  const validRawReference = validRawRebuilt.prefabInstances[0].modifications.find(modification =>
+    modification.propertyPath === 'm_CustomReference'
+  );
+  assert(validRawScalar?.value === '123' &&
+         String(validRawScalar.objectReference.fileID) === '0' &&
+         validRawReference?.value === '' &&
+         JSON.stringify(validRawReference.objectReference) === JSON.stringify(externalReference),
+    'valid direct-source raw scalar and object-reference modifications compile unchanged');
+  modifications.splice(-2);
   name.value = 'Ellen_v3_edited';
 
   // Only the parsed v3 document enters compileV3.
@@ -750,8 +786,8 @@ console.log('\n=== v3 ownership cold-boundary edits ===');
   const duplicateTarget = nestedRootComponents[0];
   const originalDuplicateFileId = duplicateTarget.sourceFileId;
   duplicateTarget.sourceFileId = internalComponent!.sourceFileId;
-  document.details.set(duplicateTarget.machineId, { m_Enabled: 1 });
-  document.details.set(internalComponent!.machineId, { m_Enabled: 0 });
+  document.details.set(duplicateTarget.machineId, { m_Enabled: true });
+  document.details.set(internalComponent!.machineId, { m_Enabled: false });
   expectThrow(
     () => compileV3(document),
     'ambiguous owner/source path',
@@ -844,8 +880,761 @@ console.log('\n=== v3 ownership cold-boundary edits ===');
       'is not directly owned by',
       'nested-in-nested PrefabInstance metadata rejects an ambiguous direct owner'
     );
-    innerBoundary.name = 'DeepNestedRenamed';
     const deepComponent = document.identity.get(innerBoundary.components[0].machineId)!;
+    const colorComponent = innerBoundary.components
+      .map(component => document.identity.get(component.machineId)!)
+      .find(identity => identity.sourceFileId === '4831563456679647078')!;
+    document.details.set(colorComponent.machineId, {
+      m_RaycastPadding: { x: 1, w: 4 },
+      m_Color: { b: 0.25, a: 0.5 },
+    });
+    const objectEdited = parseUnityYaml(writeUnityYaml(compileV3(document)));
+    const objectDeltas = objectEdited.prefabInstances[0].modifications.filter(modification =>
+      String(modification.target.fileID) === colorComponent.sourceFileId &&
+      modification.target.guid === colorComponent.sourceGuid
+    );
+    assert(JSON.stringify(objectDeltas.map(modification => [
+      modification.propertyPath, modification.value, String(modification.objectReference.fileID),
+    ])) === JSON.stringify([
+      ['m_Color.a', '0.5', '0'],
+      ['m_Color.b', '0.25', '0'],
+      ['m_RaycastPadding.w', '4', '0'],
+      ['m_RaycastPadding.x', '1', '0'],
+    ]), 'primitive Color and Vector DETAILS objects flatten into deterministic scalar leaf modifications at arbitrary inherited depth');
+    const exportedObject = readV3(writeV3(objectEdited, {
+      sourceResolver: {
+        resolveFilePath: guid => guid === outerGuid ? outerPath :
+          guid === middleGuid ? middlePath : guid === innerGuid ? innerPath : undefined,
+      },
+    }));
+    const exportedColorComponent = [...exportedObject.identity.values()].find(identity =>
+      identity.kind === 'component' && identity.sourceGuid === colorComponent.sourceGuid &&
+      identity.sourceFileId === colorComponent.sourceFileId
+    )!;
+    const exportedColorDetails = exportedObject.details.get(exportedColorComponent.machineId)!;
+    assert(JSON.stringify(exportedColorDetails.m_Color) === JSON.stringify({ a: 0.5, b: 0.25 }) &&
+           JSON.stringify(exportedColorDetails.m_RaycastPadding) === JSON.stringify({ w: 4, x: 1 }),
+      'existing scalar leaf modifications export as partial Color and Vector objects without baseline leaves');
+    const coldObject = parseUnityYaml(writeUnityYaml(compileV3(exportedObject)));
+    const coldObjectPaths = coldObject.prefabInstances[0].modifications
+      .filter(modification => String(modification.target.fileID) === colorComponent.sourceFileId &&
+        modification.target.guid === colorComponent.sourceGuid)
+      .map(modification => modification.propertyPath);
+    assert(JSON.stringify(coldObjectPaths) === JSON.stringify([
+      'm_Color.a', 'm_Color.b', 'm_RaycastPadding.w', 'm_RaycastPadding.x',
+    ]),
+      'partial object export cold-roundtrips the exact leaf override set');
+    const unprovenFlat = parseUnityYaml(writeUnityYaml(objectEdited));
+    unprovenFlat.prefabInstances[0].modifications.push({
+      target: { fileID: colorComponent.sourceFileId!, guid: colorComponent.sourceGuid!, type: 3 },
+      propertyPath: 'm_Unproven.x', value: '7', objectReference: { fileID: '0' },
+    });
+    const exportedFlat = readV3(writeV3(unprovenFlat, {
+      sourceResolver: {
+        resolveFilePath: guid => guid === outerGuid ? outerPath :
+          guid === middleGuid ? middlePath : guid === innerGuid ? innerPath : undefined,
+      },
+    }));
+    const exportedFlatIdentity = [...exportedFlat.identity.values()].find(identity =>
+      identity.kind === 'component' && identity.sourceGuid === colorComponent.sourceGuid &&
+      identity.sourceFileId === colorComponent.sourceFileId
+    )!;
+    assert(exportedFlat.details.get(exportedFlatIdentity.machineId)?.['m_Unproven.x'] === 7,
+      'an unproven scalar leaf modification remains a deterministic flat property path');
+    const coldFlat = parseUnityYaml(writeUnityYaml(compileV3(exportedFlat)));
+    assert(coldFlat.prefabInstances[0].modifications.some(modification =>
+      modification.propertyPath === 'm_Unproven.x' && modification.value === '7' &&
+      String(modification.target.fileID) === colorComponent.sourceFileId &&
+      modification.target.guid === colorComponent.sourceGuid
+    ), 'an unproven flat property path survives export and cold compilation');
+    for (const unsafeSegment of ['__proto__', 'constructor', 'prototype']) {
+      for (const propertyPath of [unsafeSegment, `m_Custom.${unsafeSegment}`]) {
+        const unsafeExport = parseUnityYaml(writeUnityYaml(objectEdited));
+        unsafeExport.prefabInstances[0].modifications.push({
+          target: {
+            fileID: colorComponent.sourceFileId!, guid: colorComponent.sourceGuid!, type: 3,
+          },
+          propertyPath, value: '7', objectReference: { fileID: '0' },
+        });
+        expectThrow(
+          () => writeV3(unsafeExport, {
+            sourceResolver: {
+              resolveFilePath: guid => guid === outerGuid ? outerPath :
+                guid === middleGuid ? middlePath : guid === innerGuid ? innerPath : undefined,
+            },
+          }),
+          'unsafe property path segment',
+          `export rejects ${unsafeSegment} in ${propertyPath === unsafeSegment ? 'root' : 'descendant'} property paths`
+        );
+      }
+    }
+    const structuralDescendantExport = parseUnityYaml(writeUnityYaml(objectEdited));
+    structuralDescendantExport.prefabInstances[0].modifications.push({
+      target: { fileID: colorComponent.sourceFileId!, guid: colorComponent.sourceGuid!, type: 3 },
+      propertyPath: 'm_GameObject.fileID', value: '7', objectReference: { fileID: '0' },
+    });
+    expectThrow(
+      () => writeV3(structuralDescendantExport, {
+        sourceResolver: {
+          resolveFilePath: guid => guid === outerGuid ? outerPath :
+            guid === middleGuid ? middlePath : guid === innerGuid ? innerPath : undefined,
+        },
+      }),
+      'structural and not supported',
+      'export rejects structural descendant property paths before producing a cold-invalid document'
+    );
+    const overlappingExport = parseUnityYaml(writeUnityYaml(objectEdited));
+    overlappingExport.prefabInstances[0].modifications.push({
+      target: { fileID: colorComponent.sourceFileId!, guid: colorComponent.sourceGuid!, type: 3 },
+      propertyPath: 'm_Color', value: '',
+      objectReference: {
+        fileID: '21300000', guid: 'abcdefabcdefabcdefabcdefabcdefab', type: 3,
+      },
+    });
+    expectThrow(
+      () => writeV3(overlappingExport, {
+        sourceResolver: {
+          resolveFilePath: guid => guid === outerGuid ? outerPath :
+            guid === middleGuid ? middlePath : guid === innerGuid ? innerPath : undefined,
+        },
+      }),
+      'overlaps another projected property path',
+      'export rejects overlapping object-reference and scalar leaf property paths'
+    );
+    exportedObject.details.set(exportedColorComponent.machineId, {
+      m_Color: { a: 0.125, nested: { enabled: true } },
+    });
+    const replacedObject = parseUnityYaml(writeUnityYaml(compileV3(exportedObject)));
+    const replacedObjectDeltas = replacedObject.prefabInstances[0].modifications.filter(modification =>
+      String(modification.target.fileID) === colorComponent.sourceFileId &&
+      modification.target.guid === colorComponent.sourceGuid
+    );
+    assert(JSON.stringify(replacedObjectDeltas.map(modification => [
+      modification.propertyPath, modification.value,
+    ])) === JSON.stringify([
+      ['m_Color.a', '0.125'],
+      ['m_Color.nested.enabled', '1'],
+    ]), 'editing a partial object replaces its exact scalar and boolean leaf modifications');
+    exportedObject.details.delete(exportedColorComponent.machineId);
+    const removedObject = parseUnityYaml(writeUnityYaml(compileV3(exportedObject)));
+    assert(!removedObject.prefabInstances[0].modifications.some(modification =>
+      String(modification.target.fileID) === colorComponent.sourceFileId &&
+      modification.target.guid === colorComponent.sourceGuid &&
+      modification.propertyPath.startsWith('m_Color.')
+    ), 'removing a partial object removes all corresponding leaf modifications');
+    document.details.delete(colorComponent.machineId);
+    document.details.set(deepComponent.machineId, { m_Enabled: true });
+    const booleanEdited = parseUnityYaml(writeUnityYaml(compileV3(document)));
+    const booleanDelta = booleanEdited.prefabInstances[0].modifications.find(modification =>
+      modification.propertyPath === 'm_Enabled' &&
+      String(modification.target.fileID) === deepComponent.sourceFileId &&
+      modification.target.guid === deepComponent.sourceGuid
+    );
+    assert(booleanDelta?.value === '1' &&
+           String(booleanDelta.objectReference.fileID) === '0' &&
+           booleanEdited.documents.length === variant.documents.length,
+      'boolean DETAILS override compiles canonically at arbitrary inherited nested depth');
+
+    const exportedBoolean = readV3(writeV3(booleanEdited, {
+      sourceResolver: {
+        resolveFilePath: guid => guid === outerGuid ? outerPath :
+          guid === middleGuid ? middlePath : guid === innerGuid ? innerPath : undefined,
+      },
+    }));
+    const exportedBooleanOuter = exportedBoolean.variantRoots![0].children.find(
+      node => node.nestedSourceGuid === middleGuid
+    )!;
+    const exportedBooleanInner = exportedBooleanOuter.children.find(
+      node => node.nestedSourceGuid === innerGuid
+    )!;
+    const exportedBooleanComponent = exportedBooleanInner.components.find(component =>
+      exportedBoolean.identity.get(component.machineId)?.sourceFileId === deepComponent.sourceFileId
+    )!;
+    const exportedBooleanValue = exportedBoolean.details.get(
+      exportedBooleanComponent.machineId
+    )?.m_Enabled;
+    const coldBoolean = parseUnityYaml(writeUnityYaml(compileV3(exportedBoolean)));
+    const coldBooleanDelta = coldBoolean.prefabInstances[0].modifications.find(modification =>
+      modification.propertyPath === 'm_Enabled' &&
+      String(modification.target.fileID) === deepComponent.sourceFileId &&
+      modification.target.guid === deepComponent.sourceGuid
+    );
+    assert(exportedBooleanValue === 1 && typeof exportedBooleanValue === 'number' &&
+           coldBooleanDelta?.value === '1' &&
+           String(coldBooleanDelta.objectReference.fileID) === '0',
+      'existing Unity boolean scalar exports canonically as numeric 1 and cold-roundtrips');
+
+    exportedBoolean.details.set(exportedBooleanComponent.machineId, { m_Enabled: false });
+    const falseBoolean = parseUnityYaml(writeUnityYaml(compileV3(exportedBoolean)));
+    const falseBooleanDelta = falseBoolean.prefabInstances[0].modifications.find(modification =>
+      modification.propertyPath === 'm_Enabled' &&
+      String(modification.target.fileID) === deepComponent.sourceFileId &&
+      modification.target.guid === deepComponent.sourceGuid
+    );
+    assert(falseBooleanDelta?.value === '0' &&
+           String(falseBooleanDelta.objectReference.fileID) === '0',
+      'editing a projected numeric boolean override to false emits canonical Unity scalar 0');
+    exportedBoolean.details.delete(exportedBooleanComponent.machineId);
+    const removedBoolean = parseUnityYaml(writeUnityYaml(compileV3(exportedBoolean)));
+    assert(!removedBoolean.prefabInstances[0].modifications.some(modification =>
+      modification.propertyPath === 'm_Enabled' &&
+      String(modification.target.fileID) === deepComponent.sourceFileId &&
+      modification.target.guid === deepComponent.sourceGuid
+    ), 'removing a projected boolean override removes its leaf modification');
+
+    document.details.set(innerRoot.machineId, { m_IsActive: false });
+    const gameObjectBoolean = parseUnityYaml(writeUnityYaml(compileV3(document)));
+    const gameObjectBooleanDelta = gameObjectBoolean.prefabInstances[0].modifications.find(modification =>
+      modification.propertyPath === 'm_IsActive' &&
+      String(modification.target.fileID) === innerRoot.sourceFileId &&
+      modification.target.guid === innerRoot.sourceGuid
+    );
+    assert(gameObjectBooleanDelta?.value === '0' &&
+           String(gameObjectBooleanDelta.objectReference.fileID) === '0',
+      'false boolean DETAILS on an inherited nested GameObject emits canonical Unity scalar 0');
+
+    document.details.set(innerRoot.machineId, { m_Icon: null });
+    const nullEdited = parseUnityYaml(writeUnityYaml(compileV3(document)));
+    const nullDelta = nullEdited.prefabInstances[0].modifications.find(modification =>
+      modification.propertyPath === 'm_Icon' &&
+      String(modification.target.fileID) === innerRoot.sourceFileId &&
+      modification.target.guid === innerRoot.sourceGuid
+    );
+    assert(nullDelta?.value === '' &&
+           String(nullDelta.objectReference.fileID) === '0',
+      'null DETAILS override compiles as an explicit null object reference at arbitrary nested depth');
+    const nullExportOptions = {
+      sourceResolver: {
+        resolveFilePath: (guid: string) => guid === outerGuid ? outerPath :
+          guid === middleGuid ? middlePath : guid === innerGuid ? innerPath : undefined,
+      },
+    };
+    const exportedNullText = writeV3(nullEdited, nullExportOptions);
+    const exportedNull = readV3(exportedNullText);
+    const exportedNullIdentity = [...exportedNull.identity.values()].find(identity =>
+      identity.kind === 'gameObject' && identity.sourceGuid === innerRoot.sourceGuid &&
+      identity.sourceFileId === innerRoot.sourceFileId
+    )!;
+    assert(exportedNull.details.get(exportedNullIdentity.machineId)?.m_Icon === null,
+      'existing null reference override exports as JSON null when the source baseline is a reference');
+    const stringZeroNull = parseUnityYaml(writeUnityYaml(nullEdited));
+    const stringZeroNullDelta = stringZeroNull.prefabInstances[0].modifications.find(modification =>
+      modification.propertyPath === 'm_Icon' &&
+      String(modification.target.fileID) === innerRoot.sourceFileId &&
+      modification.target.guid === innerRoot.sourceGuid
+    )!;
+    stringZeroNullDelta.objectReference = { fileID: '0' };
+    assert(writeV3(stringZeroNull, nullExportOptions) === exportedNullText,
+      'canonical numeric and string zero object references normalize deterministically');
+    document.details.set(innerRoot.machineId, { m_CustomEmpty: '' });
+    const emptyScalarEdited = parseUnityYaml(writeUnityYaml(compileV3(document)));
+    const exportedEmptyScalar = readV3(writeV3(emptyScalarEdited, {
+      sourceResolver: {
+        resolveFilePath: guid => guid === outerGuid ? outerPath :
+          guid === middleGuid ? middlePath : guid === innerGuid ? innerPath : undefined,
+      },
+    }));
+    const exportedEmptyScalarIdentity = [...exportedEmptyScalar.identity.values()].find(identity =>
+      identity.kind === 'gameObject' && identity.sourceGuid === innerRoot.sourceGuid &&
+      identity.sourceFileId === innerRoot.sourceFileId
+    )!;
+    assert(exportedEmptyScalar.details.get(exportedEmptyScalarIdentity.machineId)?.m_CustomEmpty === '',
+      'empty scalar override remains an empty string when the source baseline is not a reference');
+
+    const fontComponent = [...document.identity.values()].find(identity =>
+      identity.kind === 'component' && identity.sourceGuid === innerGuid &&
+      identity.sourceFileId === '6714972992410759118'
+    )!;
+    const dottedNullEdited = parseUnityYaml(writeUnityYaml(variant));
+    dottedNullEdited.prefabInstances[0].modifications.push(
+      {
+        target: { fileID: fontComponent.sourceFileId!, guid: fontComponent.sourceGuid!, type: 3 },
+        propertyPath: 'm_FontData.m_Font', value: '', objectReference: { fileID: '0' },
+      },
+      {
+        target: { fileID: fontComponent.sourceFileId!, guid: fontComponent.sourceGuid!, type: 3 },
+        propertyPath: 'm_FontData.m_FontSize', value: '', objectReference: { fileID: '0' },
+      }
+    );
+    const exportedDottedNull = readV3(writeV3(dottedNullEdited, nullExportOptions));
+    const exportedFontIdentity = [...exportedDottedNull.identity.values()].find(identity =>
+      identity.kind === 'component' && identity.sourceGuid === fontComponent.sourceGuid &&
+      identity.sourceFileId === fontComponent.sourceFileId
+    )!;
+    const exportedFontDetails = exportedDottedNull.details.get(exportedFontIdentity.machineId)!;
+    const exportedFontData: any = exportedFontDetails.m_FontData;
+    const coldDottedNull = parseUnityYaml(writeUnityYaml(compileV3(exportedDottedNull)));
+    const coldDottedNullDeltas = coldDottedNull.prefabInstances[0].modifications.filter(modification =>
+      String(modification.target.fileID) === fontComponent.sourceFileId &&
+      modification.target.guid === fontComponent.sourceGuid
+    );
+    assert(exportedFontDetails['m_FontData.m_Font'] === null &&
+           exportedFontData?.m_FontSize === '' &&
+           coldDottedNullDeltas.some(modification =>
+             modification.propertyPath === 'm_FontData.m_Font' && modification.value === '' &&
+             String(modification.objectReference.fileID) === '0') &&
+           coldDottedNullDeltas.some(modification =>
+             modification.propertyPath === 'm_FontData.m_FontSize' && modification.value === '' &&
+             String(modification.objectReference.fileID) === '0'),
+      'dotted null references use the resolved baseline leaf while dotted empty scalars remain scalar');
+
+    const rawRootDetails: any = document.details.get(document.variantRootId!)!;
+    const rawNestedModifications: any[] = rawRootDetails.m_Modification.m_Modifications;
+    for (const [propertyPath, expected] of [
+      ['m_GameObject.fileID', 'is structural and not supported'],
+      ['m_Custom.__proto__', 'unsafe property path segment'],
+    ]) {
+      rawNestedModifications.push({
+        target: { fileID: 999999, guid: innerGuid, type: 3 },
+        propertyPath, value: '123', objectReference: { fileID: 0 },
+      });
+      expectThrow(
+        () => compileV3(document), expected,
+        `dangling inherited nested raw modifications validate ${propertyPath.startsWith('m_GameObject') ? 'structural' : 'unsafe'} paths before target resolution`
+      );
+      rawNestedModifications.pop();
+    }
+    rawNestedModifications.push({
+      target: { fileID: 999999, guid: innerGuid, type: 3 },
+      propertyPath: 'm_CustomScalar', value: '123', objectReference: { fileID: 0 },
+    });
+    expectThrow(
+      () => compileV3(document),
+      'does not resolve to an inherited source identity',
+      'dangling inherited nested raw scalar modifications fail closed'
+    );
+    rawNestedModifications.pop();
+    const malformedRawReferences: Array<[string, unknown, boolean]> = [
+      ['null', null, false],
+      ['absent', undefined, true],
+      ['array', [], false],
+    ];
+    for (const [label, objectReference, omit] of malformedRawReferences) {
+      const rawModification: any = {
+        target: { fileID: fontComponent.sourceFileId!, guid: fontComponent.sourceGuid!, type: 3 },
+        propertyPath: 'm_CustomMalformedReference', value: '123', objectReference,
+      };
+      if (omit) delete rawModification.objectReference;
+      rawNestedModifications.push(rawModification);
+      expectThrow(
+        () => compileV3(document),
+        'Invalid v3 object reference',
+        `raw inherited nested modification rejects ${label} objectReference before projection`
+      );
+      rawNestedModifications.pop();
+    }
+    for (const propertyPath of ['m_GameObject', 'm_GameObject.fileID']) {
+      rawNestedModifications.push({
+        target: { fileID: fontComponent.sourceFileId!, guid: fontComponent.sourceGuid!, type: 3 },
+        propertyPath, value: '', objectReference: { fileID: 0 },
+      });
+      expectThrow(
+        () => compileV3(document),
+        'is structural and not supported',
+        `raw inherited nested modification rejects structural ${propertyPath === 'm_GameObject' ? 'roots' : 'descendants'}`
+      );
+      rawNestedModifications.pop();
+    }
+    for (const [propertyPath, expected] of [
+      ['m_Custom..leaf', 'invalid property path segment'],
+      ['m_Custom.__proto__', 'unsafe property path segment'],
+    ]) {
+      rawNestedModifications.push({
+        target: { fileID: fontComponent.sourceFileId!, guid: fontComponent.sourceGuid!, type: 3 },
+        propertyPath, value: '1', objectReference: { fileID: 0 },
+      });
+      expectThrow(
+        () => compileV3(document), expected,
+        `raw inherited nested modification rejects ${propertyPath.includes('__proto__') ? 'prototype-sensitive' : 'invalid'} paths`
+      );
+      rawNestedModifications.pop();
+    }
+    rawNestedModifications.push(
+      {
+        target: { fileID: fontComponent.sourceFileId!, guid: fontComponent.sourceGuid!, type: 3 },
+        propertyPath: 'm_Custom', value: '1', objectReference: { fileID: 0 },
+      },
+      {
+        target: { fileID: fontComponent.sourceFileId!, guid: fontComponent.sourceGuid!, type: 3 },
+        propertyPath: 'm_Custom.leaf', value: '2', objectReference: { fileID: 0 },
+      }
+    );
+    expectThrow(
+      () => compileV3(document),
+      'overlaps another property path',
+      'raw inherited nested modifications reject segment-prefix conflicts'
+    );
+    rawNestedModifications.splice(-2);
+
+    const externalReference = {
+      fileID: 21300000,
+      guid: 'abcdefabcdefabcdefabcdefabcdefab',
+      type: 3,
+    };
+    document.details.set(innerRoot.machineId, { m_Icon: externalReference });
+    const externalEdited = parseUnityYaml(writeUnityYaml(compileV3(document)));
+    const externalDelta = externalEdited.prefabInstances[0].modifications.find(modification =>
+      modification.propertyPath === 'm_Icon' &&
+      String(modification.target.fileID) === innerRoot.sourceFileId &&
+      modification.target.guid === innerRoot.sourceGuid
+    );
+    assert(externalDelta?.value === '' &&
+           String(externalDelta.objectReference.fileID) === '21300000' &&
+           externalDelta.objectReference.guid === externalReference.guid &&
+           externalDelta.objectReference.type === 3,
+      'explicit external DETAILS reference compiles unchanged at arbitrary nested depth');
+    const exportedExternal = readV3(writeV3(externalEdited, {
+      sourceResolver: {
+        resolveFilePath: guid => guid === outerGuid ? outerPath :
+          guid === middleGuid ? middlePath : guid === innerGuid ? innerPath : undefined,
+      },
+    }));
+    const exportedExternalIdentity = [...exportedExternal.identity.values()].find(identity =>
+      identity.kind === 'gameObject' && identity.sourceGuid === innerRoot.sourceGuid &&
+      identity.sourceFileId === innerRoot.sourceFileId
+    )!;
+    assert(JSON.stringify(exportedExternal.details.get(exportedExternalIdentity.machineId)?.m_Icon) ===
+           JSON.stringify({ fileID: '21300000', guid: externalReference.guid, type: 3 }),
+      'existing external reference override exports explicitly without guessing an identity');
+    const malformedExternalReferences: Array<[string, Record<string, unknown>]> = [
+      ['zero fileID carrying external GUID and type', {
+        fileID: '0', guid: externalReference.guid, type: 3,
+      }],
+      ['zero fileID carrying an extra key', { fileID: 0, extra: true }],
+      ['missing fileID', { guid: externalReference.guid, type: 3 }],
+      ['missing type', { fileID: '21300000', guid: externalReference.guid }],
+      ['invalid type', { fileID: '21300000', guid: externalReference.guid, type: 2 }],
+      ['invalid GUID', { fileID: '21300000', guid: 'not-a-guid', type: 3 }],
+      ['noncanonical fileID', { fileID: '01', guid: externalReference.guid, type: 3 }],
+      ['extra keys', { fileID: '21300000', guid: externalReference.guid, type: 3, extra: true }],
+    ];
+    for (const [label, objectReference] of malformedExternalReferences) {
+      const malformedExport = parseUnityYaml(writeUnityYaml(externalEdited));
+      const modification = malformedExport.prefabInstances[0].modifications.find(candidate =>
+        candidate.propertyPath === 'm_Icon' &&
+        String(candidate.target.fileID) === innerRoot.sourceFileId &&
+        candidate.target.guid === innerRoot.sourceGuid
+      )!;
+      modification.objectReference = objectReference as any;
+      expectThrow(
+        () => writeV3(malformedExport, {
+          sourceResolver: {
+            resolveFilePath: guid => guid === outerGuid ? outerPath :
+              guid === middleGuid ? middlePath : guid === innerGuid ? innerPath : undefined,
+          },
+        }),
+        'Invalid v3 external object reference',
+        `export rejects an external object reference with ${label}`
+      );
+    }
+    const malformedNullReferences: Array<[string, unknown]> = [
+      ['a noncanonical zero fileID', { fileID: '00' }],
+      ['an undefined fileID', { fileID: undefined }],
+      ['a null objectReference', null],
+      ['an array objectReference', []],
+      ['an absent objectReference', undefined],
+    ];
+    for (const [label, objectReference] of malformedNullReferences) {
+      const malformedExport = parseUnityYaml(writeUnityYaml(nullEdited));
+      const modification = malformedExport.prefabInstances[0].modifications.find(candidate =>
+        candidate.propertyPath === 'm_Icon' &&
+        String(candidate.target.fileID) === innerRoot.sourceFileId &&
+        candidate.target.guid === innerRoot.sourceGuid
+      )!;
+      modification.objectReference = objectReference as any;
+      expectThrow(
+        () => writeV3(malformedExport, nullExportOptions),
+        'Invalid v3 object reference',
+        `export rejects null-shaped modification with ${label}`
+      );
+    }
+    const absentNameReference = parseUnityYaml(writeUnityYaml(nullEdited));
+    absentNameReference.prefabInstances[0].modifications.push({
+      target: { fileID: innerRoot.sourceFileId!, guid: innerRoot.sourceGuid!, type: 3 },
+      propertyPath: 'm_Name', value: 'MalformedName', objectReference: undefined as any,
+    });
+    expectThrow(
+      () => writeV3(absentNameReference, nullExportOptions),
+      'Invalid v3 object reference',
+      'export validates required objectReference shape before branching on m_Name semantics'
+    );
+    document.details.set(innerRoot.machineId, {
+      m_Icon: { ...externalReference, fileID: '21300000' },
+    });
+    const stringFileIdExternal = parseUnityYaml(writeUnityYaml(compileV3(document)));
+    const stringFileIdDelta = stringFileIdExternal.prefabInstances[0].modifications.find(modification =>
+      modification.propertyPath === 'm_Icon' &&
+      String(modification.target.fileID) === innerRoot.sourceFileId &&
+      modification.target.guid === innerRoot.sourceGuid
+    );
+    assert(String(stringFileIdDelta?.objectReference.fileID) === '21300000',
+      'explicit external reference accepts a canonical string fileID');
+
+    document.details.set(innerRoot.machineId, { m_Icon: { $ref: deepComponent.machineId } });
+    const inheritedReferenceEdited = parseUnityYaml(writeUnityYaml(compileV3(document)));
+    const inheritedReferenceDelta = inheritedReferenceEdited.prefabInstances[0].modifications.find(modification =>
+      modification.propertyPath === 'm_Icon' &&
+      String(modification.target.fileID) === innerRoot.sourceFileId &&
+      modification.target.guid === innerRoot.sourceGuid
+    );
+    assert(inheritedReferenceDelta?.value === '' &&
+           String(inheritedReferenceDelta.objectReference.fileID) === deepComponent.sourceFileId &&
+           inheritedReferenceDelta.objectReference.guid === deepComponent.sourceGuid &&
+           inheritedReferenceDelta.objectReference.type === 3,
+      'stable reference to an inherited identity uses its exact source GUID and fileID');
+    const exportedInheritedReference = readV3(writeV3(inheritedReferenceEdited, {
+      sourceResolver: {
+        resolveFilePath: guid => guid === outerGuid ? outerPath :
+          guid === middleGuid ? middlePath : guid === innerGuid ? innerPath : undefined,
+      },
+    }));
+    const exportedInheritedOwner = [...exportedInheritedReference.identity.values()].find(identity =>
+      identity.kind === 'gameObject' && identity.sourceGuid === innerRoot.sourceGuid &&
+      identity.sourceFileId === innerRoot.sourceFileId
+    )!;
+    const exportedInheritedTarget = [...exportedInheritedReference.identity.values()].find(identity =>
+      identity.kind === 'component' && identity.sourceGuid === deepComponent.sourceGuid &&
+      identity.sourceFileId === deepComponent.sourceFileId
+    )!;
+    assert(JSON.stringify(exportedInheritedReference.details.get(exportedInheritedOwner.machineId)?.m_Icon) ===
+           JSON.stringify({ $ref: exportedInheritedTarget.machineId }),
+      'existing inherited object reference exports as one unambiguous stable machine reference');
+    const coldInheritedReference = parseUnityYaml(writeUnityYaml(compileV3(exportedInheritedReference)));
+    const coldInheritedDelta = coldInheritedReference.prefabInstances[0].modifications.find(modification =>
+      modification.propertyPath === 'm_Icon' &&
+      String(modification.target.fileID) === exportedInheritedOwner.sourceFileId &&
+      modification.target.guid === exportedInheritedOwner.sourceGuid
+    );
+    assert(String(coldInheritedDelta?.objectReference.fileID) === exportedInheritedTarget.sourceFileId &&
+           coldInheritedDelta?.objectReference.guid === exportedInheritedTarget.sourceGuid,
+      'exported inherited stable reference cold-roundtrips without nested source documents');
+    exportedInheritedReference.details.set(exportedInheritedOwner.machineId, {
+      m_Icon: { fileID: 21300000, guid: externalReference.guid, type: 3 },
+    });
+    const replacedInheritedReference = parseUnityYaml(
+      writeUnityYaml(compileV3(exportedInheritedReference))
+    );
+    const replacedInheritedDelta = replacedInheritedReference.prefabInstances[0].modifications.find(
+      modification => modification.propertyPath === 'm_Icon' &&
+        String(modification.target.fileID) === exportedInheritedOwner.sourceFileId &&
+        modification.target.guid === exportedInheritedOwner.sourceGuid
+    );
+    assert(replacedInheritedDelta?.objectReference.guid === externalReference.guid,
+      'exported inherited reference can be replaced by an explicit external reference');
+    exportedInheritedReference.details.delete(exportedInheritedOwner.machineId);
+    const removedInheritedReference = parseUnityYaml(
+      writeUnityYaml(compileV3(exportedInheritedReference))
+    );
+    assert(!removedInheritedReference.prefabInstances[0].modifications.some(modification =>
+      modification.propertyPath === 'm_Icon' &&
+      String(modification.target.fileID) === exportedInheritedOwner.sourceFileId &&
+      modification.target.guid === exportedInheritedOwner.sourceGuid
+    ), 'removing exported reference DETAILS removes the leaf modification');
+
+    document.details.set(innerRoot.machineId, { m_Icon: { $ref: document.variantRootId } });
+    const localReferenceEdited = parseUnityYaml(writeUnityYaml(compileV3(document)));
+    const localReferenceDelta = localReferenceEdited.prefabInstances[0].modifications.find(modification =>
+      modification.propertyPath === 'm_Icon' &&
+      String(modification.target.fileID) === innerRoot.sourceFileId &&
+      modification.target.guid === innerRoot.sourceGuid
+    );
+    assert(localReferenceDelta?.value === '' &&
+           String(localReferenceDelta.objectReference.fileID) ===
+             document.identity.get(document.variantRootId!)!.fileId &&
+           !localReferenceDelta.objectReference.guid,
+      'stable reference to an emitted local identity uses its allocated local fileID');
+    const exportedLocalReference = readV3(writeV3(localReferenceEdited, {
+      sourceResolver: {
+        resolveFilePath: guid => guid === outerGuid ? outerPath :
+          guid === middleGuid ? middlePath : guid === innerGuid ? innerPath : undefined,
+      },
+    }));
+    const exportedLocalOwner = [...exportedLocalReference.identity.values()].find(identity =>
+      identity.kind === 'gameObject' && identity.sourceGuid === innerRoot.sourceGuid &&
+      identity.sourceFileId === innerRoot.sourceFileId
+    )!;
+    assert(JSON.stringify(exportedLocalReference.details.get(exportedLocalOwner.machineId)?.m_Icon) ===
+           JSON.stringify({ $ref: exportedLocalReference.variantRootId }),
+      'existing local object reference exports as its unique stable machine identity');
+
+    document.details.set(innerRoot.machineId, {
+      m_Icon: { fileID: 21300000, guid: externalReference.guid, type: 3, extra: true },
+    });
+    expectThrow(
+      () => compileV3(document),
+      'Invalid v3 object reference',
+      'external reference override rejects extra keys'
+    );
+    document.details.set(innerRoot.machineId, {
+      m_Icon: { $ref: deepComponent.machineId, extra: true },
+    });
+    expectThrow(
+      () => compileV3(document),
+      'Invalid v3 machine reference',
+      'stable reference override rejects extra keys'
+    );
+    document.details.set(innerRoot.machineId, { m_Custom: { guid: 'label', type: 3 } });
+    const ordinaryGuidTypeObject = parseUnityYaml(writeUnityYaml(compileV3(document)));
+    const ordinaryGuidTypeDeltas = ordinaryGuidTypeObject.prefabInstances[0].modifications.filter(modification =>
+      String(modification.target.fileID) === innerRoot.sourceFileId &&
+      modification.target.guid === innerRoot.sourceGuid &&
+      modification.propertyPath.startsWith('m_Custom.')
+    );
+    assert(JSON.stringify(ordinaryGuidTypeDeltas.map(modification => [
+      modification.propertyPath, modification.value,
+    ])) === JSON.stringify([
+      ['m_Custom.guid', 'label'], ['m_Custom.type', '3'],
+    ]), 'ordinary primitive object keys named guid and type are not misclassified as references');
+    document.details.set(innerRoot.machineId, { m_Icon: [] });
+    expectThrow(
+      () => compileV3(document),
+      'requires a nonempty primitive object',
+      'primitive object override rejects arrays'
+    );
+    document.details.set(innerRoot.machineId, { m_Custom: {} });
+    expectThrow(
+      () => compileV3(document),
+      'requires a nonempty primitive object',
+      'primitive object override rejects empty objects'
+    );
+    document.details.set(innerRoot.machineId, { m_Custom: { nested: null } });
+    expectThrow(
+      () => compileV3(document),
+      'requires a primitive leaf',
+      'primitive object override rejects null leaves'
+    );
+    document.details.set(innerRoot.machineId, { m_Custom: { nested: [1] } });
+    expectThrow(
+      () => compileV3(document),
+      'requires a primitive leaf',
+      'primitive object override rejects nested arrays'
+    );
+    document.details.set(innerRoot.machineId, { m_Custom: { nested: { fileID: 1 } } });
+    expectThrow(
+      () => compileV3(document),
+      'reference shape',
+      'primitive object override rejects nested fileID reference shapes'
+    );
+    document.details.set(innerRoot.machineId, { m_Custom: { nested: { $ref: deepComponent.machineId } } });
+    expectThrow(
+      () => compileV3(document),
+      'reference shape',
+      'primitive object override rejects nested stable reference shapes'
+    );
+    document.details.set(innerRoot.machineId, { m_Custom: { nested: Number.POSITIVE_INFINITY } });
+    expectThrow(
+      () => compileV3(document),
+      'requires a finite number',
+      'primitive object override rejects nonfinite number leaves'
+    );
+    document.details.set(innerRoot.machineId, { m_Custom: { 'bad.key': 1 } });
+    expectThrow(
+      () => compileV3(document),
+      'unsafe object key',
+      'primitive object override rejects path-delimiter keys'
+    );
+    document.details.set(innerRoot.machineId, { m_Custom: { '': 1 } });
+    expectThrow(
+      () => compileV3(document),
+      'unsafe object key',
+      'primitive object override rejects empty nested keys'
+    );
+    document.details.set(innerRoot.machineId, { '': 1 });
+    expectThrow(
+      () => compileV3(document),
+      'empty property path',
+      'nested DETAILS rejects an empty root property path'
+    );
+    class NonPlainOverride { leaf = 1; }
+    document.details.set(innerRoot.machineId, { m_Custom: new NonPlainOverride() });
+    expectThrow(
+      () => compileV3(document),
+      'plain JSON object',
+      'primitive object override rejects non-plain object instances'
+    );
+    document.details.set(innerRoot.machineId, { m_Custom: { constructor: 1 } });
+    expectThrow(
+      () => compileV3(document),
+      'unsafe object key',
+      'primitive object override rejects unsafe prototype keys'
+    );
+    for (const unsafeSegment of ['__proto__', 'constructor', 'prototype']) {
+      for (const propertyPath of [unsafeSegment, `m_Custom.${unsafeSegment}`]) {
+        document.details.set(innerRoot.machineId, Object.fromEntries([[propertyPath, 1]]));
+        expectThrow(
+          () => compileV3(document),
+          'unsafe property path segment',
+          `nested DETAILS rejects ${unsafeSegment} in ${propertyPath === unsafeSegment ? 'root' : 'descendant'} property paths`
+        );
+      }
+    }
+    document.details.set(innerRoot.machineId, { m_GameObject: { local: 1 } });
+    expectThrow(
+      () => compileV3(document),
+      'is structural and not supported',
+      'primitive object override rejects a structural property root'
+    );
+    document.details.set(innerRoot.machineId, { 'm_GameObject.fileID': 1 });
+    expectThrow(
+      () => compileV3(document),
+      'is structural and not supported',
+      'primitive object override rejects structural descendant paths'
+    );
+    document.details.set(innerRoot.machineId, {
+      m_Color: { r: 1 },
+      'm_Color.r': 0.5,
+    });
+    expectThrow(
+      () => compileV3(document),
+      'ambiguous owner/source path',
+      'primitive object override rejects overlapping object and flat property paths'
+    );
+    for (const entries of [
+      [['m_Color', { r: 1 }], ['m_Color.r.x', 0.5]],
+      [['m_Color.r.x', 0.5], ['m_Color', { r: 1 }]],
+    ] as Array<Array<[string, unknown]>>) {
+      document.details.set(innerRoot.machineId, Object.fromEntries(entries));
+      expectThrow(
+        () => compileV3(document),
+        'overlaps another property path',
+        `primitive object override rejects segment-prefix overlap in ${entries[0][0] === 'm_Color' ? 'object-first' : 'flat-first'} insertion order`
+      );
+    }
+    document.details.set(innerRoot.machineId, { m_Icon: { $ref: 'missingIdentity' } });
+    expectThrow(
+      () => compileV3(document),
+      'not an effective identity',
+      'nested override rejects dangling stable references'
+    );
+    document.details.set(innerRoot.machineId, { m_Icon: { $ref: deepComponent.machineId } });
+    const deepComponentEntry = innerBoundary.components.find(component =>
+      component.machineId === deepComponent.machineId
+    )!;
+    innerBoundary.components = innerBoundary.components.filter(component =>
+      component.machineId !== deepComponent.machineId
+    );
+    expectThrow(
+      () => compileV3(document),
+      'not an effective identity',
+      'nested override rejects references to omitted inherited targets'
+    );
+    innerBoundary.components.unshift(deepComponentEntry);
+    const ambiguousReferenceTarget = document.identity.get(innerBoundary.components[1].machineId)!;
+    const originalAmbiguousSourceGuid = ambiguousReferenceTarget.sourceGuid;
+    const originalAmbiguousSourceFileId = ambiguousReferenceTarget.sourceFileId;
+    ambiguousReferenceTarget.sourceGuid = deepComponent.sourceGuid;
+    ambiguousReferenceTarget.sourceFileId = deepComponent.sourceFileId;
+    expectThrow(
+      () => compileV3(document),
+      'Ambiguous inherited v3 reference',
+      'nested override rejects ambiguous inherited stable references'
+    );
+    ambiguousReferenceTarget.sourceGuid = originalAmbiguousSourceGuid;
+    ambiguousReferenceTarget.sourceFileId = originalAmbiguousSourceFileId;
+    document.details.delete(innerRoot.machineId);
+    document.details.delete(deepComponent.machineId);
+
+    innerBoundary.name = 'DeepNestedRenamed';
     document.details.set(deepComponent.machineId, { m_Enabled: 0 });
     const deeplyEdited = parseUnityYaml(writeUnityYaml(compileV3(document)));
     const deepRenameDelta = deeplyEdited.prefabInstances[0].modifications.find(modification =>
@@ -1191,6 +1980,27 @@ console.log('\n=== v3 ownership cold-boundary edits ===');
            [...removedDeepDescendantIds].every(machineId => document.identity.has(machineId)) &&
            deeplyRemoved.documents.length === variant.documents.length,
       'removing a recursively expanded inherited nested subtree emits one leaf-owned source delta and preserves identities');
+
+    const referenceToRemoved = parseUnityYaml(writeUnityYaml(deeplyRemoved));
+    referenceToRemoved.prefabInstances[0].modifications.push({
+      target: { fileID: innerRoot.sourceFileId!, guid: innerRoot.sourceGuid!, type: 3 },
+      propertyPath: 'm_Icon', value: '',
+      objectReference: {
+        fileID: removedDeepIdentity.sourceFileId!,
+        guid: removedDeepIdentity.sourceGuid!,
+        type: 3,
+      },
+    });
+    expectThrow(
+      () => writeV3(referenceToRemoved, {
+        sourceResolver: {
+          resolveFilePath: guid => guid === outerGuid ? outerPath :
+            guid === middleGuid ? middlePath : guid === innerGuid ? innerPath : undefined,
+        },
+      }),
+      'not an effective identity',
+      'export rejects a reference to a removed inherited identity instead of emitting a dangling stable reference'
+    );
 
     const exportedDeepRemoval = readV3(writeV3(deeplyRemoved, {
       sourceResolver: {

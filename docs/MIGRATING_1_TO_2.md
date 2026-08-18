@@ -1,7 +1,8 @@
 # Migrating from uBridge 1.x to 2.0
 
-uBridge 2.0 makes standalone v3 the default CLI parse format while preserving
-the existing v1/v2 patch workflow explicitly.
+uBridge 2.0 makes the stable standalone v3 prefab/prefab-variant contract the
+default CLI parse format while preserving the existing v1/v2 patch workflow
+explicitly.
 
 ## Runtime requirement
 

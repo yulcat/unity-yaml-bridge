@@ -1,7 +1,9 @@
-# `.ubridge` v3 standalone format (experimental)
+# `.ubridge` v3 standalone format (stable prefab/variant contract)
 
 v3 is a desired-state prefab document. Unlike v1/v2, compiling it does not
-read or merge an original Unity YAML file.
+read or merge an original Unity YAML file. Its documented prefab and
+prefab-variant contract is stable. Explicitly deferred operations remain
+unsupported and fail closed; stability does not expand the support boundary.
 
 ```text
 # ubridge v3 | prefab | profile:unity-generic-v1

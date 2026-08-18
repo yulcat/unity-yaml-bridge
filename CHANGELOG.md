@@ -26,7 +26,7 @@ All notable changes to this project are documented here. This project follows
 ### Known limitations
 
 - v3 is scoped to prefab and prefab-variant workflows. Scenes and other assets are deferred.
-- Inherited reparent/reorder operations, PrefabInstance boundary edits, and arrays/managed references are deferred.
+- Inherited reparent/reorder operations, PrefabInstance boundary edits, and arrays/managed references are deferred, remain unsupported, and fail closed where applicable.
 - Release validation does not claim Unity Editor validation or npm publication.
 
 ## [1.1.1]

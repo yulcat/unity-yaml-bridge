@@ -99,9 +99,25 @@ function die(msg) {
 }
 function writeFileAtomic(outputPath, content) {
     const resolved = path.resolve(outputPath);
+    let existingMode;
+    try {
+        const destination = fs.lstatSync(resolved);
+        if (destination.isFile())
+            existingMode = destination.mode & 0o777;
+    }
+    catch (error) {
+        if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT'))
+            throw error;
+    }
     const tempPath = path.join(path.dirname(resolved), `.${path.basename(resolved)}.${process.pid}.${(0, crypto_1.randomBytes)(6).toString('hex')}.tmp`);
     try {
-        fs.writeFileSync(tempPath, content, { encoding: 'utf8', flag: 'wx' });
+        fs.writeFileSync(tempPath, content, {
+            encoding: 'utf8',
+            flag: 'wx',
+            ...(existingMode === undefined ? {} : { mode: existingMode }),
+        });
+        if (existingMode !== undefined)
+            fs.chmodSync(tempPath, existingMode);
         fs.renameSync(tempPath, resolved);
     }
     catch (error) {
@@ -140,6 +156,22 @@ function parseArgs(argv) {
         }
     }
     return { command, args, flags };
+}
+function validateCommandArgs(command, args, flags) {
+    const allowedFlags = {
+        parse: new Set(['--project', '--format', '--verbose', '-o']),
+        compile: new Set(['--project', '-o']),
+        write: new Set(['--yaml', '--project', '-o']),
+    };
+    const allowed = allowedFlags[command];
+    if (!allowed)
+        return;
+    if (args.length > 1)
+        die(`${command} accepts exactly one file argument`);
+    for (const flag of flags.keys()) {
+        if (!allowed.has(flag))
+            die(`${command} does not accept ${flag}`);
+    }
 }
 function cmdParse(args, flags) {
     if (args.length === 0)
@@ -261,11 +293,14 @@ function main() {
         return;
     }
     if (argv[0] === '--version' || argv[0] === '-v') {
+        if (argv.length > 1)
+            die(`${argv[0]} does not accept operands`);
         const packageJson = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf-8'));
         console.log(packageJson.version);
         return;
     }
     const { command, args, flags } = parseArgs(argv);
+    validateCommandArgs(command, args, flags);
     switch (command) {
         case 'parse':
             cmdParse(args, flags);

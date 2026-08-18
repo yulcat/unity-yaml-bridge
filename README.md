@@ -5,8 +5,8 @@
 
 uBridge 2.0 provides two deliberate workflows:
 
-- **v3 (default):** a standalone desired-state format that compiles supported
-  prefabs and prefab variants without the original YAML file.
+- **v3 (default):** the stable standalone desired-state contract for supported
+  prefabs and prefab variants, compiled without the original YAML file.
 - **v1/v2 (explicit):** the established patch workflow, where `write` merges an
   edited compact document into the original Unity YAML.
 
@@ -156,8 +156,11 @@ it does not claim Unity Editor validation.
 
 Expected CLI failures emit a concise `Error: ...` line and exit with status 1.
 When `-o` is used, uBridge writes a temporary sibling and renames it over the
-target only after parsing/compilation/serialization succeeds. A failed command
-therefore does not partially overwrite an existing output.
+target only after parsing/compilation/serialization succeeds. Existing regular
+file permissions are preserved; a symlink destination is replaced rather than
+followed. New files use the process's normal umask. A failed command therefore
+does not partially overwrite an existing output and cleans up its temporary
+sibling.
 
 ## Migration
 

@@ -68,12 +68,24 @@ function die(msg: string): never {
 
 function writeFileAtomic(outputPath: string, content: string): void {
   const resolved = path.resolve(outputPath);
+  let existingMode: number | undefined;
+  try {
+    const destination = fs.lstatSync(resolved);
+    if (destination.isFile()) existingMode = destination.mode & 0o777;
+  } catch (error) {
+    if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
+  }
   const tempPath = path.join(
     path.dirname(resolved),
     `.${path.basename(resolved)}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`
   );
   try {
-    fs.writeFileSync(tempPath, content, { encoding: 'utf8', flag: 'wx' });
+    fs.writeFileSync(tempPath, content, {
+      encoding: 'utf8',
+      flag: 'wx',
+      ...(existingMode === undefined ? {} : { mode: existingMode }),
+    });
+    if (existingMode !== undefined) fs.chmodSync(tempPath, existingMode);
     fs.renameSync(tempPath, resolved);
   } catch (error) {
     try {
@@ -109,6 +121,20 @@ function parseArgs(argv: string[]): { command: string; args: string[]; flags: Ma
   }
 
   return { command, args, flags };
+}
+
+function validateCommandArgs(command: string, args: string[], flags: Map<string, string>): void {
+  const allowedFlags: Record<string, ReadonlySet<string>> = {
+    parse: new Set(['--project', '--format', '--verbose', '-o']),
+    compile: new Set(['--project', '-o']),
+    write: new Set(['--yaml', '--project', '-o']),
+  };
+  const allowed = allowedFlags[command];
+  if (!allowed) return;
+  if (args.length > 1) die(`${command} accepts exactly one file argument`);
+  for (const flag of flags.keys()) {
+    if (!allowed.has(flag)) die(`${command} does not accept ${flag}`);
+  }
 }
 
 function cmdParse(args: string[], flags: Map<string, string>): void {
@@ -235,6 +261,7 @@ function main(): void {
   }
 
   if (argv[0] === '--version' || argv[0] === '-v') {
+    if (argv.length > 1) die(`${argv[0]} does not accept operands`);
     const packageJson = JSON.parse(
       fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf-8')
     );
@@ -243,6 +270,7 @@ function main(): void {
   }
 
   const { command, args, flags } = parseArgs(argv);
+  validateCommandArgs(command, args, flags);
 
   switch (command) {
     case 'parse':

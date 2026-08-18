@@ -39,6 +39,33 @@ try {
   assert(help.status === 0 && /ubridge compile <file\.ubridge> \[options\][\s\S]*?Options:\n      --project <path>/.test(help.stdout),
     'help documents compile --project', help.stdout);
 
+  for (const versionFlag of ['--version', '-v']) {
+    const versionWithOperand = runCli([versionFlag, 'extra-operand'], tempDir);
+    assert(versionWithOperand.status === 1 && versionWithOperand.stderr.includes(`${versionFlag} does not accept operands`),
+      `${versionFlag} rejects operands`,
+      `status=${versionWithOperand.status}\nstdout=${versionWithOperand.stdout}\nstderr=${versionWithOperand.stderr}`);
+  }
+
+  for (const [commandArgs, expectedError] of [
+    [['parse', prefab, '--yaml', prefab], 'parse does not accept --yaml'],
+    [['compile', 'input.ubridge', '--format', 'v2'], 'compile does not accept --format'],
+    [['compile', 'input.ubridge', '--verbose'], 'compile does not accept --verbose'],
+    [['write', 'input.ubridge', '--yaml', prefab, '--format', 'v2'], 'write does not accept --format'],
+    [['write', 'input.ubridge', '--yaml', prefab, '--verbose'], 'write does not accept --verbose'],
+  ] as Array<[string[], string]>) {
+    const result = runCli(commandArgs, tempDir);
+    assert(result.status === 1 && result.stderr.includes(expectedError),
+      `rejects inapplicable flag: ${expectedError}`,
+      `status=${result.status}\nstderr=${result.stderr}`);
+  }
+
+  for (const command of ['parse', 'compile', 'write']) {
+    const result = runCli([command, prefab, 'extra-operand'], tempDir);
+    assert(result.status === 1 && result.stderr.includes(`${command} accepts exactly one file argument`),
+      `${command} rejects extra positional arguments`,
+      `status=${result.status}\nstderr=${result.stderr}`);
+  }
+
   const malformedV3 = path.join(tempDir, 'malformed.ubridge');
   const protectedOutput = path.join(tempDir, 'protected.prefab');
   fs.writeFileSync(malformedV3, '# ubridge v3 | prefab\n--- STRUCTURE\nBroken @missing\n');
@@ -50,6 +77,50 @@ try {
     'expected CLI errors are concise and omit Node stacks', malformedCompile.stderr);
   assert(fs.readFileSync(protectedOutput, 'utf8') === 'keep this output intact\n',
     'failed compile preserves an existing output file');
+
+  if (process.platform !== 'win32') {
+    const privateOutput = path.join(tempDir, 'private.ubridge');
+    fs.writeFileSync(privateOutput, 'private old output\n', { mode: 0o600 });
+    fs.chmodSync(privateOutput, 0o600);
+    const privateParse = runCli(['parse', prefab, '-o', privateOutput], tempDir);
+    assert(privateParse.status === 0,
+      'atomic replacement of private output succeeds', privateParse.stderr);
+    assert((fs.statSync(privateOutput).mode & 0o777) === 0o600,
+      'atomic replacement preserves an existing regular file mode',
+      `mode=${(fs.statSync(privateOutput).mode & 0o777).toString(8)}`);
+
+    const umaskOutput = path.join(tempDir, 'new-private.ubridge');
+    const previousUmask = process.umask(0o077);
+    let umaskParse;
+    try {
+      umaskParse = runCli(['parse', prefab, '-o', umaskOutput], tempDir);
+    } finally {
+      process.umask(previousUmask);
+    }
+    assert(umaskParse.status === 0 && (fs.statSync(umaskOutput).mode & 0o777) === 0o600,
+      'new atomic output honors the process umask',
+      `status=${umaskParse.status}\nmode=${(fs.statSync(umaskOutput).mode & 0o777).toString(8)}\nstderr=${umaskParse.stderr}`);
+
+    const symlinkReferent = path.join(tempDir, 'symlink-referent.ubridge');
+    const symlinkOutput = path.join(tempDir, 'symlink-output.ubridge');
+    fs.writeFileSync(symlinkReferent, 'keep referent intact\n', { mode: 0o600 });
+    fs.symlinkSync(symlinkReferent, symlinkOutput);
+    const symlinkParse = runCli(['parse', prefab, '-o', symlinkOutput], tempDir);
+    assert(symlinkParse.status === 0 && !fs.lstatSync(symlinkOutput).isSymbolicLink(),
+      'atomic output replaces a symlink itself', symlinkParse.stderr);
+    assert(fs.readFileSync(symlinkReferent, 'utf8') === 'keep referent intact\n',
+      'atomic output does not follow or overwrite a symlink referent');
+  }
+
+  const renameFailureTarget = path.join(tempDir, 'non-empty-output-directory');
+  fs.mkdirSync(renameFailureTarget);
+  fs.writeFileSync(path.join(renameFailureTarget, 'sentinel'), 'keep\n');
+  const renameFailure = runCli(['parse', prefab, '-o', renameFailureTarget], tempDir);
+  const leakedTemps = fs.readdirSync(tempDir)
+    .filter((entry) => entry.startsWith(`.${path.basename(renameFailureTarget)}.`) && entry.endsWith('.tmp'));
+  assert(renameFailure.status === 1 && leakedTemps.length === 0,
+    'failed atomic rename cleans up its temporary sibling',
+    `status=${renameFailure.status}\nleaked=${leakedTemps.join(',')}\nstderr=${renameFailure.stderr}`);
 
   const readOnlyDir = path.join(tempDir, 'read-only-output-dir');
   const atomicOutput = path.join(readOnlyDir, 'existing.ubridge');

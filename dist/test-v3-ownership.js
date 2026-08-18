@@ -638,8 +638,8 @@ console.log('\n=== v3 ownership cold-boundary edits ===');
     const duplicateTarget = nestedRootComponents[0];
     const originalDuplicateFileId = duplicateTarget.sourceFileId;
     duplicateTarget.sourceFileId = internalComponent.sourceFileId;
-    document.details.set(duplicateTarget.machineId, { m_Enabled: 1 });
-    document.details.set(internalComponent.machineId, { m_Enabled: 0 });
+    document.details.set(duplicateTarget.machineId, { m_Enabled: true });
+    document.details.set(internalComponent.machineId, { m_Enabled: false });
     expectThrow(() => (0, compiler_1.compileV3)(document), 'ambiguous owner/source path', 'duplicate inherited nested override targets fail closed instead of overwriting one another');
     duplicateTarget.sourceFileId = originalDuplicateFileId;
     document.details.delete(duplicateTarget.machineId);
@@ -707,8 +707,54 @@ console.log('\n=== v3 ownership cold-boundary edits ===');
         const ambiguousOwnershipText = text.replace(`prefabOwner:${outerPrefab.machineId} | displayName:${innerPrefab.displayName}`, `prefabOwner:${document.variantRootId} | displayName:${innerPrefab.displayName}`);
         assert(ambiguousOwnershipText !== text, 'nested-in-nested ownership ambiguity fixture changes the direct owner');
         expectThrow(() => (0, reader_1.readV3)(ambiguousOwnershipText), 'is not directly owned by', 'nested-in-nested PrefabInstance metadata rejects an ambiguous direct owner');
-        innerBoundary.name = 'DeepNestedRenamed';
         const deepComponent = document.identity.get(innerBoundary.components[0].machineId);
+        document.details.set(deepComponent.machineId, { m_Enabled: true });
+        const booleanEdited = (0, unity_yaml_parser_1.parseUnityYaml)((0, unity_yaml_writer_1.writeUnityYaml)((0, compiler_1.compileV3)(document)));
+        const booleanDelta = booleanEdited.prefabInstances[0].modifications.find(modification => modification.propertyPath === 'm_Enabled' &&
+            String(modification.target.fileID) === deepComponent.sourceFileId &&
+            modification.target.guid === deepComponent.sourceGuid);
+        assert(booleanDelta?.value === '1' &&
+            String(booleanDelta.objectReference.fileID) === '0' &&
+            booleanEdited.documents.length === variant.documents.length, 'boolean DETAILS override compiles canonically at arbitrary inherited nested depth');
+        const exportedBoolean = (0, reader_1.readV3)((0, writer_1.writeV3)(booleanEdited, {
+            sourceResolver: {
+                resolveFilePath: guid => guid === outerGuid ? outerPath :
+                    guid === middleGuid ? middlePath : guid === innerGuid ? innerPath : undefined,
+            },
+        }));
+        const exportedBooleanOuter = exportedBoolean.variantRoots[0].children.find(node => node.nestedSourceGuid === middleGuid);
+        const exportedBooleanInner = exportedBooleanOuter.children.find(node => node.nestedSourceGuid === innerGuid);
+        const exportedBooleanComponent = exportedBooleanInner.components.find(component => exportedBoolean.identity.get(component.machineId)?.sourceFileId === deepComponent.sourceFileId);
+        const exportedBooleanValue = exportedBoolean.details.get(exportedBooleanComponent.machineId)?.m_Enabled;
+        const coldBoolean = (0, unity_yaml_parser_1.parseUnityYaml)((0, unity_yaml_writer_1.writeUnityYaml)((0, compiler_1.compileV3)(exportedBoolean)));
+        const coldBooleanDelta = coldBoolean.prefabInstances[0].modifications.find(modification => modification.propertyPath === 'm_Enabled' &&
+            String(modification.target.fileID) === deepComponent.sourceFileId &&
+            modification.target.guid === deepComponent.sourceGuid);
+        assert(exportedBooleanValue === 1 && typeof exportedBooleanValue === 'number' &&
+            coldBooleanDelta?.value === '1' &&
+            String(coldBooleanDelta.objectReference.fileID) === '0', 'existing Unity boolean scalar exports canonically as numeric 1 and cold-roundtrips');
+        exportedBoolean.details.set(exportedBooleanComponent.machineId, { m_Enabled: false });
+        const falseBoolean = (0, unity_yaml_parser_1.parseUnityYaml)((0, unity_yaml_writer_1.writeUnityYaml)((0, compiler_1.compileV3)(exportedBoolean)));
+        const falseBooleanDelta = falseBoolean.prefabInstances[0].modifications.find(modification => modification.propertyPath === 'm_Enabled' &&
+            String(modification.target.fileID) === deepComponent.sourceFileId &&
+            modification.target.guid === deepComponent.sourceGuid);
+        assert(falseBooleanDelta?.value === '0' &&
+            String(falseBooleanDelta.objectReference.fileID) === '0', 'editing a projected numeric boolean override to false emits canonical Unity scalar 0');
+        exportedBoolean.details.delete(exportedBooleanComponent.machineId);
+        const removedBoolean = (0, unity_yaml_parser_1.parseUnityYaml)((0, unity_yaml_writer_1.writeUnityYaml)((0, compiler_1.compileV3)(exportedBoolean)));
+        assert(!removedBoolean.prefabInstances[0].modifications.some(modification => modification.propertyPath === 'm_Enabled' &&
+            String(modification.target.fileID) === deepComponent.sourceFileId &&
+            modification.target.guid === deepComponent.sourceGuid), 'removing a projected boolean override removes its leaf modification');
+        document.details.set(innerRoot.machineId, { m_IsActive: false });
+        const gameObjectBoolean = (0, unity_yaml_parser_1.parseUnityYaml)((0, unity_yaml_writer_1.writeUnityYaml)((0, compiler_1.compileV3)(document)));
+        const gameObjectBooleanDelta = gameObjectBoolean.prefabInstances[0].modifications.find(modification => modification.propertyPath === 'm_IsActive' &&
+            String(modification.target.fileID) === innerRoot.sourceFileId &&
+            modification.target.guid === innerRoot.sourceGuid);
+        assert(gameObjectBooleanDelta?.value === '0' &&
+            String(gameObjectBooleanDelta.objectReference.fileID) === '0', 'false boolean DETAILS on an inherited nested GameObject emits canonical Unity scalar 0');
+        document.details.delete(innerRoot.machineId);
+        document.details.delete(deepComponent.machineId);
+        innerBoundary.name = 'DeepNestedRenamed';
         document.details.set(deepComponent.machineId, { m_Enabled: 0 });
         const deeplyEdited = (0, unity_yaml_parser_1.parseUnityYaml)((0, unity_yaml_writer_1.writeUnityYaml)((0, compiler_1.compileV3)(document)));
         const deepRenameDelta = deeplyEdited.prefabInstances[0].modifications.find(modification => modification.propertyPath === 'm_Name' &&

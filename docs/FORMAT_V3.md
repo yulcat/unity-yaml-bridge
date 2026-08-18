@@ -97,16 +97,25 @@ the containing boundary; the outermost inherited boundary is directly owned by
 the leaf variant's emitted root PrefabInstance. This preserves an unambiguous
 ownership chain without adding duplicate same-name source-root levels. Nested
 source cycles and ambiguous direct-owner metadata fail closed. Expanded nested
-source-root/internal GameObjects can now be renamed, and string/number DETAILS on
+source-root/internal GameObjects can now be renamed, and string/number/boolean DETAILS on
 their GameObjects/components can be added as property overrides, at any resolved
 nested depth. The compiler walks `prefabOwner` to the emitted leaf-variant
 PrefabInstance, then upserts an `m_Modification.m_Modifications` entry whose
 `target` reuses the edited identity's nested-source GUID/fileID, whose
-`propertyPath` is `m_Name` or the DETAILS key, and whose string/number value is
-stringified into `value`. It never emits the nested source GameObject/component or an
-inherited PrefabInstance source document. Missing/cyclic owner chains and
-ambiguous duplicate owner/source/property targets fail closed. Boolean, null,
-object/array DETAILS and structural DETAILS fields remain unsupported. Reparenting,
+`propertyPath` is `m_Name` or the DETAILS key, and whose value is encoded into
+Unity's string-valued `value` field. Strings and numbers are stringified as-is;
+JSON booleans are normalized canonically to Unity scalar strings `"1"` for
+`true` and `"0"` for `false`. Every scalar override uses
+`objectReference: {fileID: 0}`. Unity YAML carries no property schema in these
+modification entries, so export cannot prove that a raw `0` or `1` was a
+boolean: canonical v3 export projects it as the JSON number `0` or `1`, not as
+`false` or `true`. A user may replace that projected number with a JSON boolean;
+compilation still emits canonical `0`/`1`. The exporter does not infer boolean
+schema from property names or scalar spelling.
+It never emits the nested source GameObject/component or an inherited
+PrefabInstance source document. Missing/cyclic owner chains and ambiguous
+duplicate owner/source/property targets fail closed. Null, object/array, and
+object-reference DETAILS remain unsupported. Reparenting,
 reordering, adding, or duplicating expanded internals still fails closed. Removing an
 expanded inherited nested source-root/internal GameObject from effective STRUCTURE, or
 marking it with an explicit tombstone, emits one `m_RemovedGameObjects` entry on the

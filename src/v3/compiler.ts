@@ -400,12 +400,16 @@ function compileVariant(document: V3Document): UnityFile {
           `Inherited nested DETAILS ${identity.machineId}.${propertyPath} is structural and not supported.`
         );
       }
-      if (typeof value !== 'string' && typeof value !== 'number') {
+      if (typeof value !== 'string' && typeof value !== 'number' && typeof value !== 'boolean') {
         throw new Error(
-          `Inherited nested DETAILS ${identity.machineId}.${propertyPath} requires a string or number value.`
+          `Inherited nested DETAILS ${identity.machineId}.${propertyPath} requires a string, number, or boolean value.`
         );
       }
-      queueInheritedNestedOverride(identity, propertyPath, String(value));
+      queueInheritedNestedOverride(
+        identity,
+        propertyPath,
+        typeof value === 'boolean' ? (value ? '1' : '0') : String(value)
+      );
     }
   };
 

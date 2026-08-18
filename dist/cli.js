@@ -44,6 +44,7 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", { value: true });
 const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
+const crypto_1 = require("crypto");
 const unity_yaml_parser_1 = require("./unity-yaml-parser");
 const compact_writer_1 = require("./compact-writer");
 const compact_reader_1 = require("./compact-reader");
@@ -65,7 +66,7 @@ Usage:
 
     Options:
       --project <path>   Unity project root for GUID/script resolution
-      --format <v1|v2|v3>  Compact format version (default: v2)
+      --format <v1|v2|v3>  Compact format version (default: v3)
       --verbose          Include all fields (disable boilerplate filtering)
       -o <file>          Output file (default: stdout)
 
@@ -73,6 +74,7 @@ Usage:
     Compile a standalone v3 .ubridge document without an original YAML file.
 
     Options:
+      --project <path>   Unity project root for GUID/script resolution
       -o <file>          Output file (default: stdout)
 
   ubridge write <file.ubridge> --yaml <original.prefab> [options]
@@ -94,6 +96,23 @@ Examples:
 function die(msg) {
     console.error(`Error: ${msg}`);
     process.exit(1);
+}
+function writeFileAtomic(outputPath, content) {
+    const resolved = path.resolve(outputPath);
+    const tempPath = path.join(path.dirname(resolved), `.${path.basename(resolved)}.${process.pid}.${(0, crypto_1.randomBytes)(6).toString('hex')}.tmp`);
+    try {
+        fs.writeFileSync(tempPath, content, { encoding: 'utf8', flag: 'wx' });
+        fs.renameSync(tempPath, resolved);
+    }
+    catch (error) {
+        try {
+            fs.unlinkSync(tempPath);
+        }
+        catch {
+            // The temporary file may not have been created.
+        }
+        throw error;
+    }
 }
 function parseArgs(argv) {
     const command = argv[0] || '';
@@ -142,8 +161,8 @@ function cmdParse(args, flags) {
     if (flags.has('--verbose')) {
         options.verbose = true;
     }
-    const format = flags.get('--format');
-    if (format && format !== 'v1' && format !== 'v2' && format !== 'v3') {
+    const format = flags.get('--format') || 'v3';
+    if (format !== 'v1' && format !== 'v2' && format !== 'v3') {
         die('--format must be v1, v2, or v3');
     }
     // Parse and convert
@@ -160,7 +179,7 @@ function cmdParse(args, flags) {
     // Output
     const outputPath = flags.get('-o');
     if (outputPath) {
-        fs.writeFileSync(path.resolve(outputPath), compact, 'utf-8');
+        writeFileAtomic(outputPath, compact);
         console.error(`Written to ${outputPath}`);
     }
     else {
@@ -188,7 +207,7 @@ function cmdCompile(args, flags) {
     const output = (0, unity_yaml_writer_1.writeUnityYaml)((0, compiler_1.compileV3)(document, { sourceResolver: resolver }));
     const outputPath = flags.get('-o');
     if (outputPath) {
-        fs.writeFileSync(path.resolve(outputPath), output, 'utf-8');
+        writeFileAtomic(outputPath, output);
         console.error(`Written to ${outputPath}`);
     }
     else {
@@ -227,7 +246,7 @@ function cmdWrite(args, flags) {
     // Output
     const outputPath = flags.get('-o');
     if (outputPath) {
-        fs.writeFileSync(path.resolve(outputPath), output, 'utf-8');
+        writeFileAtomic(outputPath, output);
         console.error(`Written to ${outputPath}`);
     }
     else {
@@ -235,28 +254,38 @@ function cmdWrite(args, flags) {
     }
 }
 // Main
-const argv = process.argv.slice(2);
-if (argv.length === 0 || argv[0] === '--help' || argv[0] === '-h') {
-    usage();
-    process.exit(0);
+function main() {
+    const argv = process.argv.slice(2);
+    if (argv.length === 0 || argv[0] === '--help' || argv[0] === '-h') {
+        usage();
+        return;
+    }
+    if (argv[0] === '--version' || argv[0] === '-v') {
+        const packageJson = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf-8'));
+        console.log(packageJson.version);
+        return;
+    }
+    const { command, args, flags } = parseArgs(argv);
+    switch (command) {
+        case 'parse':
+            cmdParse(args, flags);
+            break;
+        case 'write':
+            cmdWrite(args, flags);
+            break;
+        case 'compile':
+            cmdCompile(args, flags);
+            break;
+        default:
+            die(`Unknown command: ${command}. Use 'parse', 'compile', or 'write'.`);
+    }
 }
-if (argv[0] === '--version' || argv[0] === '-v') {
-    const packageJson = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf-8'));
-    console.log(packageJson.version);
-    process.exit(0);
+try {
+    main();
 }
-const { command, args, flags } = parseArgs(argv);
-switch (command) {
-    case 'parse':
-        cmdParse(args, flags);
-        break;
-    case 'write':
-        cmdWrite(args, flags);
-        break;
-    case 'compile':
-        cmdCompile(args, flags);
-        break;
-    default:
-        die(`Unknown command: ${command}. Use 'parse', 'compile', or 'write'.`);
+catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`Error: ${message}`);
+    process.exitCode = 1;
 }
 //# sourceMappingURL=cli.js.map

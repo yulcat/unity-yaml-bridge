@@ -10,6 +10,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import { randomBytes } from 'crypto';
 import { parseUnityYaml } from './unity-yaml-parser';
 import { writeCompact, CompactWriterOptions } from './compact-writer';
 import { readCompact } from './compact-reader';
@@ -32,7 +33,7 @@ Usage:
 
     Options:
       --project <path>   Unity project root for GUID/script resolution
-      --format <v1|v2|v3>  Compact format version (default: v2)
+      --format <v1|v2|v3>  Compact format version (default: v3)
       --verbose          Include all fields (disable boilerplate filtering)
       -o <file>          Output file (default: stdout)
 
@@ -40,6 +41,7 @@ Usage:
     Compile a standalone v3 .ubridge document without an original YAML file.
 
     Options:
+      --project <path>   Unity project root for GUID/script resolution
       -o <file>          Output file (default: stdout)
 
   ubridge write <file.ubridge> --yaml <original.prefab> [options]
@@ -62,6 +64,37 @@ Examples:
 function die(msg: string): never {
   console.error(`Error: ${msg}`);
   process.exit(1);
+}
+
+function writeFileAtomic(outputPath: string, content: string): void {
+  const resolved = path.resolve(outputPath);
+  let existingMode: number | undefined;
+  try {
+    const destination = fs.lstatSync(resolved);
+    if (destination.isFile()) existingMode = destination.mode & 0o777;
+  } catch (error) {
+    if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
+  }
+  const tempPath = path.join(
+    path.dirname(resolved),
+    `.${path.basename(resolved)}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`
+  );
+  try {
+    fs.writeFileSync(tempPath, content, {
+      encoding: 'utf8',
+      flag: 'wx',
+      ...(existingMode === undefined ? {} : { mode: existingMode }),
+    });
+    if (existingMode !== undefined) fs.chmodSync(tempPath, existingMode);
+    fs.renameSync(tempPath, resolved);
+  } catch (error) {
+    try {
+      fs.unlinkSync(tempPath);
+    } catch {
+      // The temporary file may not have been created.
+    }
+    throw error;
+  }
 }
 
 function parseArgs(argv: string[]): { command: string; args: string[]; flags: Map<string, string> } {
@@ -90,6 +123,20 @@ function parseArgs(argv: string[]): { command: string; args: string[]; flags: Ma
   return { command, args, flags };
 }
 
+function validateCommandArgs(command: string, args: string[], flags: Map<string, string>): void {
+  const allowedFlags: Record<string, ReadonlySet<string>> = {
+    parse: new Set(['--project', '--format', '--verbose', '-o']),
+    compile: new Set(['--project', '-o']),
+    write: new Set(['--yaml', '--project', '-o']),
+  };
+  const allowed = allowedFlags[command];
+  if (!allowed) return;
+  if (args.length > 1) die(`${command} accepts exactly one file argument`);
+  for (const flag of flags.keys()) {
+    if (!allowed.has(flag)) die(`${command} does not accept ${flag}`);
+  }
+}
+
 function cmdParse(args: string[], flags: Map<string, string>): void {
   if (args.length === 0) die('parse requires a file argument');
 
@@ -111,8 +158,8 @@ function cmdParse(args: string[], flags: Map<string, string>): void {
   if (flags.has('--verbose')) {
     options.verbose = true;
   }
-  const format = flags.get('--format');
-  if (format && format !== 'v1' && format !== 'v2' && format !== 'v3') {
+  const format = flags.get('--format') || 'v3';
+  if (format !== 'v1' && format !== 'v2' && format !== 'v3') {
     die('--format must be v1, v2, or v3');
   }
 
@@ -130,7 +177,7 @@ function cmdParse(args: string[], flags: Map<string, string>): void {
   // Output
   const outputPath = flags.get('-o');
   if (outputPath) {
-    fs.writeFileSync(path.resolve(outputPath), compact, 'utf-8');
+    writeFileAtomic(outputPath, compact);
     console.error(`Written to ${outputPath}`);
   } else {
     process.stdout.write(compact);
@@ -155,7 +202,7 @@ function cmdCompile(args: string[], flags: Map<string, string>): void {
   const output = writeUnityYaml(compileV3(document, { sourceResolver: resolver }));
   const outputPath = flags.get('-o');
   if (outputPath) {
-    fs.writeFileSync(path.resolve(outputPath), output, 'utf-8');
+    writeFileAtomic(outputPath, output);
     console.error(`Written to ${outputPath}`);
   } else {
     process.stdout.write(output);
@@ -197,7 +244,7 @@ function cmdWrite(args: string[], flags: Map<string, string>): void {
   // Output
   const outputPath = flags.get('-o');
   if (outputPath) {
-    fs.writeFileSync(path.resolve(outputPath), output, 'utf-8');
+    writeFileAtomic(outputPath, output);
     console.error(`Written to ${outputPath}`);
   } else {
     process.stdout.write(output);
@@ -205,33 +252,45 @@ function cmdWrite(args: string[], flags: Map<string, string>): void {
 }
 
 // Main
-const argv = process.argv.slice(2);
+function main(): void {
+  const argv = process.argv.slice(2);
 
-if (argv.length === 0 || argv[0] === '--help' || argv[0] === '-h') {
-  usage();
-  process.exit(0);
+  if (argv.length === 0 || argv[0] === '--help' || argv[0] === '-h') {
+    usage();
+    return;
+  }
+
+  if (argv[0] === '--version' || argv[0] === '-v') {
+    if (argv.length > 1) die(`${argv[0]} does not accept operands`);
+    const packageJson = JSON.parse(
+      fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf-8')
+    );
+    console.log(packageJson.version);
+    return;
+  }
+
+  const { command, args, flags } = parseArgs(argv);
+  validateCommandArgs(command, args, flags);
+
+  switch (command) {
+    case 'parse':
+      cmdParse(args, flags);
+      break;
+    case 'write':
+      cmdWrite(args, flags);
+      break;
+    case 'compile':
+      cmdCompile(args, flags);
+      break;
+    default:
+      die(`Unknown command: ${command}. Use 'parse', 'compile', or 'write'.`);
+  }
 }
 
-if (argv[0] === '--version' || argv[0] === '-v') {
-  const packageJson = JSON.parse(
-    fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf-8')
-  );
-  console.log(packageJson.version);
-  process.exit(0);
-}
-
-const { command, args, flags } = parseArgs(argv);
-
-switch (command) {
-  case 'parse':
-    cmdParse(args, flags);
-    break;
-  case 'write':
-    cmdWrite(args, flags);
-    break;
-  case 'compile':
-    cmdCompile(args, flags);
-    break;
-  default:
-    die(`Unknown command: ${command}. Use 'parse', 'compile', or 'write'.`);
+try {
+  main();
+} catch (error) {
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(`Error: ${message}`);
+  process.exitCode = 1;
 }

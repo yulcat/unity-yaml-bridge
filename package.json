@@ -1,16 +1,25 @@
 {
   "name": "unity-yaml-bridge",
-  "version": "1.1.1",
+  "version": "2.0.0",
   "description": "Bidirectional parser between Unity YAML and AI-friendly .ubridge format",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "require": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
   "bin": {
     "ubridge": "dist/cli.js"
   },
   "scripts": {
     "build": "tsc",
     "prepublishOnly": "tsc",
-    "test": "tsc && node dist/test-roundtrip.js && node dist/test-compact-roundtrip.js && node dist/test-refs.js && node dist/test-path-refs.js && node dist/test-variant-issues.js && node dist/test-creation.js && node dist/test-nested-roundtrip.js && node dist/test-guid-resolver.js && node dist/test-issues-8-9.js && node dist/test-hardening.js && node dist/test-v2-identifiers.js && node dist/test-v3-standalone.js && node dist/test-v3-cold-roundtrip.js && node dist/test-v3-mutations.js && node dist/test-v3-ownership.js",
+    "test": "tsc && node dist/test-roundtrip.js && node dist/test-compact-roundtrip.js && node dist/test-refs.js && node dist/test-path-refs.js && node dist/test-variant-issues.js && node dist/test-creation.js && node dist/test-nested-roundtrip.js && node dist/test-guid-resolver.js && node dist/test-issues-8-9.js && node dist/test-hardening.js && node dist/test-v2-identifiers.js && node dist/test-v3-standalone.js && node dist/test-v3-cold-roundtrip.js && node dist/test-v3-mutations.js && node dist/test-v3-ownership.js && node dist/test-cli.js",
+    "test:packed": "npm run build && node scripts/test-packed.js",
     "test:roundtrip": "tsc && node dist/test-roundtrip.js",
     "test:compact": "tsc && node dist/test-compact-roundtrip.js",
     "test:refs": "tsc && node dist/test-refs.js"
@@ -29,6 +38,14 @@
     "type": "git",
     "url": "https://github.com/yulcat/unity-yaml-bridge.git"
   },
+  "homepage": "https://github.com/yulcat/unity-yaml-bridge#readme",
+  "bugs": {
+    "url": "https://github.com/yulcat/unity-yaml-bridge/issues"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "sideEffects": false,
   "type": "commonjs",
   "devDependencies": {
     "@types/node": "^25.5.0",
@@ -39,6 +56,9 @@
     "!dist/test-*",
     "!dist/debug-parse.*",
     "docs/",
-    "README.md"
+    "samples/v3/",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
   ]
 }

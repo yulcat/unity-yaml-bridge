@@ -1,4 +1,10 @@
-import { V3Document, V3IdentityRecord, V3StructureComponent, V3StructureNode } from './model';
+import {
+  V3Document,
+  V3IdentityRecord,
+  V3_STABLE_PROFILE,
+  V3StructureComponent,
+  V3StructureNode,
+} from './model';
 import { parseV3Value } from './value';
 
 const MACHINE_ID = '[A-Za-z][A-Za-z0-9_-]*';
@@ -6,9 +12,13 @@ const MACHINE_ID = '[A-Za-z][A-Za-z0-9_-]*';
 export function readV3(content: string): V3Document {
   const lines = content.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n').split('\n');
   const header = lines[0]?.trim();
-  const headerMatch = header?.match(/^# ubridge v3 \| (prefab|variant) \| profile:([^ |]+)(?: \| asset-guid:([a-f0-9]{32}))?$/i);
+  const headerMatch = header?.match(/^# ubridge v3 \| (prefab|variant) \| profile:([^ |]*)(?: \| asset-guid:([a-f0-9]{32}))?$/i);
   if (!headerMatch) {
     throw new Error('Invalid v3 header. Expected "# ubridge v3 | prefab | profile:<id>".');
+  }
+  const profile = headerMatch[2];
+  if (profile !== V3_STABLE_PROFILE) {
+    throw new Error(`Unsupported v3 profile ${JSON.stringify(profile)} in header line 1; expected ${JSON.stringify(V3_STABLE_PROFILE)}.`);
   }
   const kind = headerMatch[1] as 'prefab' | 'variant';
 
@@ -54,7 +64,7 @@ export function readV3(content: string): V3Document {
   return {
     version: 3,
     kind,
-    profile: headerMatch[2],
+    profile,
     assetGuid: headerMatch[3],
     structure,
     variantRoots,
@@ -213,6 +223,17 @@ function parseIdentity(lines: string[]): Map<string, V3IdentityRecord> {
     if (origin !== undefined && origin !== 'inherited') {
       throw new Error(`Invalid v3 identity origin for ${machineId}: ${origin}`);
     }
+    let baselineDetails: Record<string, unknown> | undefined;
+    const encodedBaseline = fields.get('baselineDetails');
+    if (encodedBaseline !== undefined) {
+      try {
+        const parsed = JSON.parse(Buffer.from(encodedBaseline, 'base64url').toString('utf8'));
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error();
+        baselineDetails = parsed as Record<string, unknown>;
+      } catch {
+        throw new Error(`Invalid v3 baselineDetails for ${machineId}.`);
+      }
+    }
     result.set(machineId, {
       machineId,
       kind,
@@ -233,6 +254,7 @@ function parseIdentity(lines: string[]): Map<string, V3IdentityRecord> {
       sourceGuid: fields.get('sourceGuid'),
       sourceFileId: fields.get('sourceFileID'),
       sourceFingerprint: fields.get('sourceFingerprint'),
+      baselineDetails,
     });
   }
   return result;

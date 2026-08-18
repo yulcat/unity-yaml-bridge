@@ -1,7 +1,9 @@
-# `.ubridge` v3 standalone format (experimental)
+# `.ubridge` v3 standalone format (stable prefab/variant contract)
 
 v3 is a desired-state prefab document. Unlike v1/v2, compiling it does not
-read or merge an original Unity YAML file.
+read or merge an original Unity YAML file. Its documented prefab and
+prefab-variant contract is stable. Explicitly deferred operations remain
+unsupported and fail closed; stability does not expand the support boundary.
 
 ```text
 # ubridge v3 | prefab | profile:unity-generic-v1
@@ -32,6 +34,29 @@ t2 = transform | fileID:500 | type:4 | typeName:Transform | owner:g2
   `m_GameObject`, and `m_Name` are synthesized by the compiler.
 - Unknown, ambiguous, or unsupported states must fail instead of falling back
   to an original YAML file.
+
+### Stable profile and evolution policy
+
+uBridge 2.0 supports exactly one v3 profile identifier:
+`unity-generic-v1`. It is case-sensitive and must appear exactly as shown in
+the header. This is the spelling emitted by the pre-release v3 writer, so v3
+documents produced by the current implementation remain accepted. Empty,
+unknown, case-changed, and near-match identifiers are rejected; readers and
+compilers do not silently normalize or substitute profiles.
+
+The profile participates in deterministic identity allocation when an asset
+GUID is unavailable. Consequently, changing or accepting an alias for it could
+change generated fileIDs. Compatible clarifications and fail-closed validation
+may evolve within this profile, but an incompatible serialization, identity,
+or compilation semantic requires a new explicitly supported profile (or a new
+format version). Implementations must continue to recognize this identifier
+with its documented v3 semantics rather than reassigning it.
+
+The package exports `V3_STABLE_PROFILE` with the literal value
+`"unity-generic-v1"`; `V3Document.profile` and `V3WriterOptions.profile` use
+that literal type. `writeV3` emits it by default and rejects any different
+runtime value. `readV3` and `compileV3` independently enforce it so constructed
+API objects cannot bypass header validation.
 
 A resolved inherited nested prefab in a source-backed variant is represented by
 its source-root GameObject, not by its PrefabInstance document and not by an
@@ -152,6 +177,29 @@ resolved source property's baseline value is an object containing `fileID`.
 Otherwise it deterministically preserves the scalar empty string. Existing
 reference overrides therefore export, cold-compile, can be replaced, and are
 removed when their DETAILS key is removed.
+
+The same rename and typed property-authoring contract is stable for direct
+inherited GameObjects and components in a source-backed variant. Effective
+STRUCTURE names and semantic DETAILS are desired state: the compiler emits leaf
+root PrefabInstance modifications targeting the identity's exact direct-source
+GUID/fileID, using the same canonical scalar, null, stable-reference, external-
+reference, and primitive-leaf partial-object contracts described above. Existing
+direct-source modifications are projected out of raw PrefabInstance DETAILS into
+the effective GameObject/component STRUCTURE and DETAILS view; unchanged values
+cold-roundtrip, edits replace the exact target/property tuple, and deleting a
+projected key (or restoring a source-baseline name) removes that modification.
+Variant-of-variant leaf edits target identities in the leaf's direct source and
+do not replay intermediate deltas or emit source documents. Intermediate typed
+GameObject/component overrides are projected as effective DETAILS. Their opaque,
+base64url-encoded `baselineDetails` IDENTITY metadata records only that direct
+source's effective overridden values, allowing cold compilation to distinguish an
+untouched inherited value from a newly authored leaf delta; agents edit DETAILS,
+not this metadata. Unknown, duplicate,
+or ambiguous targets, malformed references, arrays, unsafe/prototype-sensitive
+or structural property paths, and overlapping flat/object paths fail closed.
+Direct inherited reparenting, sibling/component reordering, and Transform
+property authoring remain structural exclusions and fail closed. Existing direct
+inherited GameObject/component addition and removal behavior is unchanged.
 
 It never emits the nested source GameObject/component or an inherited
 PrefabInstance source document. Missing/cyclic owner chains and ambiguous

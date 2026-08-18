@@ -1,7 +1,13 @@
 import { createHash } from 'crypto';
 import { readFileSync } from 'fs';
 import { UnityDocument, UnityFile } from '../types';
-import { V3CompileOptions, V3Document, V3IdentityRecord, V3StructureNode } from './model';
+import {
+  V3CompileOptions,
+  V3Document,
+  V3IdentityRecord,
+  V3_STABLE_PROFILE,
+  V3StructureNode,
+} from './model';
 import { markCanonicalFlowMappings } from './value';
 import {
   resolveV3OverrideReference,
@@ -28,7 +34,7 @@ function flattenPrimitiveOverrideObject(
   propertyPath: string,
   value: unknown,
   context: string
-): Array<{ propertyPath: string; value: string }> {
+): Array<{ propertyPath: string; value: string; canonicalValue: string | number | boolean }> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error(`Inherited nested DETAILS ${context} requires a nonempty primitive object.`);
   }
@@ -44,7 +50,11 @@ function flattenPrimitiveOverrideObject(
   if (keys.includes('$ref') || keys.includes('fileID')) {
     throw new Error(`Inherited nested DETAILS ${context} cannot contain a reference shape.`);
   }
-  const leaves: Array<{ propertyPath: string; value: string }> = [];
+  const leaves: Array<{
+    propertyPath: string;
+    value: string;
+    canonicalValue: string | number | boolean;
+  }> = [];
   for (const key of keys) {
     if (!SAFE_OBJECT_KEY.test(key) || UNSAFE_OBJECT_KEYS.has(key)) {
       throw new Error(`Inherited nested DETAILS ${context} has an unsafe object key ${JSON.stringify(key)}.`);
@@ -68,6 +78,7 @@ function flattenPrimitiveOverrideObject(
     leaves.push({
       propertyPath: childPath,
       value: typeof child === 'boolean' ? (child ? '1' : '0') : String(child),
+      canonicalValue: child,
     });
   }
   return leaves;
@@ -75,6 +86,9 @@ function flattenPrimitiveOverrideObject(
 
 export function compileV3(document: V3Document, options: V3CompileOptions = {}): UnityFile {
   if (document.version !== 3) throw new Error('compileV3 accepts v3 documents only.');
+  if (document.profile !== V3_STABLE_PROFILE) {
+    throw new Error(`Unsupported v3 profile ${JSON.stringify(document.profile)} in compileV3 document; expected ${JSON.stringify(V3_STABLE_PROFILE)}.`);
+  }
   validateSourceFingerprints(document, options);
   if (document.kind === 'variant') return compileVariant(document);
   if (!document.structure) throw new Error('v3 prefab requires STRUCTURE.');
@@ -301,12 +315,22 @@ function applyNestedInstancePlan(
   return properties;
 }
 
-function validateRawModificationObjectReference(value: unknown, context: string): void {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+function validateRawModificationObjectReference(value: unknown, context: string): string {
+  if (!isPlainRecord(value)) {
     throw new Error(`Invalid v3 object reference at ${context}.`);
   }
-  const objectReference = value as Record<string, unknown>;
+  const objectReference = value;
   const keys = Object.keys(objectReference);
+  if (keys.length === 1 && keys[0] === '$ref' &&
+      typeof objectReference.$ref === 'string' && objectReference.$ref.length > 0) {
+    return '$ref';
+  }
   if (keys.length === 1 && keys[0] === 'fileID') {
     const fileId = typeof objectReference.fileID === 'number'
       ? (Number.isSafeInteger(objectReference.fileID) ? String(objectReference.fileID) : '')
@@ -314,9 +338,139 @@ function validateRawModificationObjectReference(value: unknown, context: string)
         ? objectReference.fileID
         : '';
     if (!fileId) throw new Error(`Invalid v3 object reference at ${context}.`);
-    return;
+    return fileId;
   }
-  validateV3ExternalObjectReference(objectReference, context);
+  if (keys.length !== 3 || !keys.includes('fileID') || !keys.includes('guid') ||
+      !keys.includes('type')) {
+    throw new Error(`Invalid v3 object reference at ${context}.`);
+  }
+  const fileId = typeof objectReference.fileID === 'number'
+    ? (Number.isSafeInteger(objectReference.fileID) ? String(objectReference.fileID) : '')
+    : typeof objectReference.fileID === 'string' && /^(0|-?[1-9]\d*)$/.test(objectReference.fileID)
+      ? objectReference.fileID
+      : '';
+  if (!fileId || fileId === '0' || typeof objectReference.guid !== 'string' ||
+      !/^[0-9a-f]{32}$/.test(objectReference.guid) ||
+      (objectReference.type !== 2 && objectReference.type !== 3)) {
+    throw new Error(`Invalid v3 object reference at ${context}.`);
+  }
+  return fileId;
+}
+
+function validateRawModificationEnvelope(entry: unknown, context: string): {
+  targetGuid: string;
+  targetKey: string;
+  propertyPath: string;
+} {
+  if (!isPlainRecord(entry)) {
+    throw new Error(`Invalid raw modification envelope at ${context}.`);
+  }
+  const modification = entry;
+  const keys = Object.keys(modification).sort();
+  const value = modification.value;
+  if (typeof modification.propertyPath !== 'string' ||
+      (typeof value !== 'string' && typeof value !== 'number' && typeof value !== 'boolean') ||
+      (typeof value === 'number' && !Number.isFinite(value))) {
+    throw new Error(`Invalid raw modification envelope at ${context}.`);
+  }
+  const target = validateV3ExternalObjectReference(modification.target, `${context}.target`);
+  const targetGuid = String(target.guid);
+  const targetKey = `${targetGuid}:${String(target.fileID)}`;
+  const propertyPath = modification.propertyPath;
+  validateV3OverridePropertyPath(propertyPath, `${targetKey}.${propertyPath}`);
+  const referenceFileId = validateRawModificationObjectReference(
+    modification.objectReference,
+    `${targetKey}.${propertyPath}`
+  );
+  if (keys.join(',') !== 'objectReference,propertyPath,target,value') {
+    throw new Error(`Invalid raw modification envelope at ${context}.`);
+  }
+  if (modification.value !== '' && referenceFileId !== '0') {
+    throw new Error(
+      `Raw modification ${targetKey}.${propertyPath} mixes a nonempty scalar value with a nonzero objectReference.`
+    );
+  }
+  return { targetGuid, targetKey, propertyPath };
+}
+
+function validateAddedObjectReference(value: unknown, context: string): void {
+  if (!isPlainRecord(value)) throw new Error(`Invalid added-object reference at ${context}.`);
+  const keys = Object.keys(value);
+  if (keys.length === 1 && keys[0] === '$ref' &&
+      typeof value.$ref === 'string' && value.$ref.length > 0) return;
+  if (keys.length === 1 && keys[0] === 'fileID') {
+    const fileId = typeof value.fileID === 'number'
+      ? (Number.isSafeInteger(value.fileID) ? String(value.fileID) : '')
+      : typeof value.fileID === 'string' && /^-?[1-9]\d*$/.test(value.fileID)
+        ? value.fileID
+        : '';
+    if (fileId && fileId !== '0') return;
+  }
+  throw new Error(`Invalid added-object reference at ${context}.`);
+}
+
+function validateVariantModificationContainers(document: V3Document): void {
+  const fields = [
+    'm_Modifications', 'm_RemovedGameObjects', 'm_RemovedComponents',
+    'm_AddedGameObjects', 'm_AddedComponents',
+  ] as const;
+  for (const identity of document.identity.values()) {
+    if (identity.kind !== 'prefabInstance') continue;
+    const details = document.details.get(identity.machineId);
+    if (!details || !Object.prototype.hasOwnProperty.call(details, 'm_Modification')) continue;
+    const modification = details.m_Modification;
+    if (!isPlainRecord(modification)) {
+      throw new Error(`PrefabInstance ${identity.machineId} m_Modification must be a plain object.`);
+    }
+    for (const field of fields) {
+      if (!Object.prototype.hasOwnProperty.call(modification, field)) continue;
+      const entries = modification[field];
+      if (!Array.isArray(entries)) {
+        throw new Error(`PrefabInstance ${identity.machineId} ${field} must be an array.`);
+      }
+      entries.forEach((entry, index) => {
+        const context = `${identity.machineId}.m_Modification.${field}[${index}]`;
+        if (field === 'm_Modifications') {
+          validateRawModificationEnvelope(entry, context);
+          return;
+        }
+        if (field === 'm_RemovedGameObjects' || field === 'm_RemovedComponents') {
+          validateV3ExternalObjectReference(entry, context);
+          return;
+        }
+        if (!isPlainRecord(entry) ||
+            Object.keys(entry).sort().join(',') !==
+              'addedObject,insertIndex,targetCorrespondingSourceObject' ||
+            !Number.isSafeInteger(entry.insertIndex)) {
+          throw new Error(`Invalid ${field} entry at ${context}.`);
+        }
+        validateV3ExternalObjectReference(
+          entry.targetCorrespondingSourceObject,
+          `${context}.targetCorrespondingSourceObject`
+        );
+        validateAddedObjectReference(entry.addedObject, `${context}.addedObject`);
+      });
+    }
+  }
+}
+
+function validateInheritedOwnerSourceUniqueness(document: V3Document): void {
+  const identitiesByOwnerSource = new Map<string, V3IdentityRecord>();
+  for (const identity of document.identity.values()) {
+    if (identity.origin !== 'inherited' || !identity.sourceGuid || !identity.sourceFileId) continue;
+    const effectiveOwnerId = identity.prefabOwnerId ?? document.variantRootId;
+    if (!effectiveOwnerId) continue;
+    const key = `${effectiveOwnerId}|${identity.sourceGuid}:${identity.sourceFileId}`;
+    const existing = identitiesByOwnerSource.get(key);
+    if (existing) {
+      throw new Error(
+        `Inherited identities ${existing.machineId} and ${identity.machineId} have a duplicate inherited ` +
+        `owner/source identity ${effectiveOwnerId}/${identity.sourceGuid}:${identity.sourceFileId} ` +
+        'and therefore an ambiguous owner/source path.'
+      );
+    }
+    identitiesByOwnerSource.set(key, identity);
+  }
 }
 
 function upsertModification(
@@ -347,6 +501,8 @@ function upsertModification(
 }
 
 function compileVariant(document: V3Document): UnityFile {
+  validateVariantModificationContainers(document);
+  validateInheritedOwnerSourceUniqueness(document);
   const allocated = allocateFileIds(document);
   const effectiveReferenceIds = collectEffectiveReferenceIds(document);
   const emitted = new Set<string>();
@@ -373,13 +529,26 @@ function compileVariant(document: V3Document): UnityFile {
     value: string;
     objectReference: Record<string, unknown>;
   }> = [];
+  const authoredSemanticPaths: Array<{
+    machineId: string;
+    ownerId: string;
+    targetKey: string;
+    propertyPath: string;
+  }> = [];
   const hasInheritedStructure = [...document.identity.values()].some(identity =>
     identity.origin === 'inherited'
   );
 
   const requireEmittedPrefabOwner = (identity: V3IdentityRecord, operation: string): string => {
-    if (!identity.prefabOwnerId || !identity.sourceGuid || !identity.sourceFileId) {
+    if (!identity.sourceGuid || !identity.sourceFileId) {
       throw new Error(`Inherited nested identity ${identity.machineId} has incomplete ${operation} ownership.`);
+    }
+    if (!identity.prefabOwnerId) {
+      if (identity.origin !== 'inherited' || identity.sourceGuid !== document.baseGuid ||
+          !document.variantRootId) {
+        throw new Error(`Direct inherited identity ${identity.machineId} has incomplete ${operation} ownership.`);
+      }
+      return document.variantRootId;
     }
     const visited = new Set<string>();
     let ownerId = identity.prefabOwnerId;
@@ -441,35 +610,13 @@ function compileVariant(document: V3Document): UnityFile {
     });
   };
 
-  const queueInheritedNestedOverride = (
+  const emitInheritedNestedOverride = (
     identity: V3IdentityRecord,
     propertyPath: string,
     value: string,
     objectReference: Record<string, unknown> = { fileID: 0 }
   ): void => {
     const ownerId = requireEmittedPrefabOwner(identity, 'override');
-    const duplicate = inheritedNestedOverrides.find(override =>
-      override.ownerId === ownerId && override.propertyPath === propertyPath &&
-      String(override.target.fileID) === identity.sourceFileId &&
-      String(override.target.guid) === identity.sourceGuid
-    );
-    if (duplicate) {
-      throw new Error(
-        `Inherited nested overrides ${duplicate.machineId} and ${identity.machineId} have an ambiguous owner/source path.`
-      );
-    }
-    const overlap = inheritedNestedOverrides.find(override =>
-      override.ownerId === ownerId &&
-      String(override.target.fileID) === identity.sourceFileId &&
-      String(override.target.guid) === identity.sourceGuid &&
-      pathsHaveSegmentPrefixOverlap(override.propertyPath, propertyPath)
-    );
-    if (overlap) {
-      throw new Error(
-        `Inherited nested override ${identity.machineId}.${propertyPath} overlaps another property path ` +
-        `${overlap.propertyPath}.`
-      );
-    }
     inheritedNestedOverrides.push({
       machineId: identity.machineId,
       ownerId,
@@ -480,62 +627,143 @@ function compileVariant(document: V3Document): UnityFile {
     });
   };
 
+  const registerAuthoredSemanticPath = (
+    identity: V3IdentityRecord,
+    propertyPath: string
+  ): void => {
+    const ownerId = requireEmittedPrefabOwner(identity, 'override');
+    const targetKey = `${identity.sourceGuid}:${identity.sourceFileId}`;
+    const conflict = authoredSemanticPaths.find(path =>
+      path.ownerId === ownerId && path.targetKey === targetKey &&
+      (path.propertyPath === propertyPath ||
+       pathsHaveSegmentPrefixOverlap(path.propertyPath, propertyPath))
+    );
+    if (conflict?.propertyPath === propertyPath) {
+      throw new Error(
+        `Inherited nested overrides ${conflict.machineId} and ${identity.machineId} have an ambiguous owner/source path.`
+      );
+    }
+    if (conflict) {
+      throw new Error(
+        `Inherited nested override ${identity.machineId}.${propertyPath} overlaps another property path ` +
+        `${conflict.propertyPath}.`
+      );
+    }
+    authoredSemanticPaths.push({ machineId: identity.machineId, ownerId, targetKey, propertyPath });
+  };
+
   const queueInheritedNestedDetails = (identity: V3IdentityRecord): void => {
     const details = document.details.get(identity.machineId);
     if (!details) return;
+    const baselineAt = (propertyPath: string): { found: boolean; value?: unknown } => {
+      let value: unknown = identity.baselineDetails;
+      for (const segment of propertyPath.split('.')) {
+        if (!value || typeof value !== 'object' || Array.isArray(value) ||
+            !Object.prototype.hasOwnProperty.call(value, segment)) return { found: false };
+        value = (value as Record<string, unknown>)[segment];
+      }
+      return { found: true, value };
+    };
+    const resolveReference = (value: unknown, context: string): Record<string, unknown> =>
+      resolveV3OverrideReference(
+        value,
+        machineId => {
+          const target = document.identity.get(machineId);
+          if (!target || !effectiveReferenceIds.has(machineId)) return undefined;
+          if (target.origin === 'inherited') {
+            if (!target.sourceGuid || !target.sourceFileId) return undefined;
+            const matches = [...effectiveReferenceIds].filter(candidateId => {
+              const candidate = document.identity.get(candidateId);
+              return candidate?.origin === 'inherited' &&
+                candidate.sourceGuid === target.sourceGuid &&
+                candidate.sourceFileId === target.sourceFileId;
+            });
+            if (matches.length !== 1) {
+              throw new Error(
+                `Ambiguous inherited v3 reference at ${context}: ${machineId}.`
+              );
+            }
+            return { fileID: target.sourceFileId, guid: target.sourceGuid, type: 3 };
+          }
+          const fileID = allocated.get(machineId);
+          return fileID ? { fileID } : undefined;
+        },
+        context
+      )!;
+    const referencesEqual = (
+      propertyPath: string,
+      authoredReference: Record<string, unknown>
+    ): boolean => {
+      const baseline = baselineAt(propertyPath);
+      if (!baseline.found) return false;
+      let baselineReference: Record<string, unknown>;
+      try {
+        baselineReference = resolveReference(
+          baseline.value,
+          `${identity.machineId}.${propertyPath} baseline`
+        );
+      } catch {
+        return false;
+      }
+      const authoredKeys = Object.keys(authoredReference).sort();
+      const baselineKeys = Object.keys(baselineReference).sort();
+      return authoredKeys.length === baselineKeys.length &&
+        authoredKeys.every((key, index) =>
+          key === baselineKeys[index] && Object.is(authoredReference[key], baselineReference[key])
+        );
+    };
     for (const [propertyPath, value] of Object.entries(details).sort(([left], [right]) =>
       left.localeCompare(right))) {
       if (propertyPath.length === 0) {
         throw new Error(`Inherited nested DETAILS ${identity.machineId} has an empty property path.`);
       }
       validateV3OverridePropertyPath(propertyPath, `${identity.machineId}.${propertyPath}`);
-      if (isV3OverrideStructuralPath(propertyPath)) {
+      if (isV3OverrideStructuralPath(propertyPath) &&
+          !(identity.kind === 'component' && propertyPath === 'm_Name')) {
         throw new Error(
           `Inherited nested DETAILS ${identity.machineId}.${propertyPath} is structural and not supported.`
         );
       }
       if (value === null) {
-        queueInheritedNestedOverride(identity, propertyPath, '', { fileID: 0 });
+        registerAuthoredSemanticPath(identity, propertyPath);
+        const baseline = baselineAt(propertyPath);
+        if (baseline.found && Object.is(baseline.value, null)) continue;
+        emitInheritedNestedOverride(identity, propertyPath, '', { fileID: 0 });
         continue;
       }
       if (typeof value === 'object') {
+        if (!Array.isArray(value)) {
+          const prototype = Object.getPrototypeOf(value);
+          if (prototype !== Object.prototype && prototype !== null) {
+            throw new Error(
+              `Inherited nested DETAILS ${identity.machineId}.${propertyPath} requires a plain JSON object.`
+            );
+          }
+        }
         const object = value as Record<string, unknown>;
         const keys = Object.keys(object);
         const isReferenceShape = keys.includes('$ref') || keys.includes('fileID');
         if (!isReferenceShape) {
-          for (const leaf of flattenPrimitiveOverrideObject(
+          const leaves = flattenPrimitiveOverrideObject(
             propertyPath, value, `${identity.machineId}.${propertyPath}`
-          )) {
-            queueInheritedNestedOverride(identity, leaf.propertyPath, leaf.value);
+          );
+          for (const leaf of leaves) {
+            registerAuthoredSemanticPath(identity, leaf.propertyPath);
+          }
+          for (const leaf of leaves) {
+            const baseline = baselineAt(leaf.propertyPath);
+            if (baseline.found && Object.is(baseline.value, leaf.canonicalValue)) continue;
+            emitInheritedNestedOverride(identity, leaf.propertyPath, leaf.value);
           }
           continue;
         }
-        const objectReference = resolveV3OverrideReference(
+        const objectReference = resolveReference(
           value,
-          machineId => {
-            const target = document.identity.get(machineId);
-            if (!target || !effectiveReferenceIds.has(machineId)) return undefined;
-            if (target.origin === 'inherited') {
-              if (!target.sourceGuid || !target.sourceFileId) return undefined;
-              const matches = [...effectiveReferenceIds].filter(candidateId => {
-                const candidate = document.identity.get(candidateId);
-                return candidate?.origin === 'inherited' &&
-                  candidate.sourceGuid === target.sourceGuid &&
-                  candidate.sourceFileId === target.sourceFileId;
-              });
-              if (matches.length !== 1) {
-                throw new Error(
-                  `Ambiguous inherited v3 reference at ${identity.machineId}.${propertyPath}: ${machineId}.`
-                );
-              }
-              return { fileID: target.sourceFileId, guid: target.sourceGuid, type: 3 };
-            }
-            const fileID = allocated.get(machineId);
-            return fileID ? { fileID } : undefined;
-          },
           `${identity.machineId}.${propertyPath}`
         );
-        queueInheritedNestedOverride(identity, propertyPath, '', objectReference!);
+        registerAuthoredSemanticPath(identity, propertyPath);
+        if (referencesEqual(propertyPath, objectReference)) continue;
+        emitInheritedNestedOverride(identity, propertyPath, '', objectReference);
         continue;
       }
       if (typeof value !== 'string' && typeof value !== 'number' && typeof value !== 'boolean') {
@@ -548,7 +776,10 @@ function compileVariant(document: V3Document): UnityFile {
           `Inherited nested DETAILS ${identity.machineId}.${propertyPath} requires a finite number.`
         );
       }
-      queueInheritedNestedOverride(
+      registerAuthoredSemanticPath(identity, propertyPath);
+      const baseline = baselineAt(propertyPath);
+      if (baseline.found && Object.is(baseline.value, value)) continue;
+      emitInheritedNestedOverride(
         identity,
         propertyPath,
         typeof value === 'boolean' ? (value ? '1' : '0') : String(value)
@@ -752,7 +983,8 @@ function compileVariant(document: V3Document): UnityFile {
       );
     }
     if (gameObject.displayName !== node.name) {
-      queueInheritedNestedOverride(gameObject, 'm_Name', node.name);
+      registerAuthoredSemanticPath(gameObject, 'm_Name');
+      emitInheritedNestedOverride(gameObject, 'm_Name', node.name);
     }
     queueInheritedNestedDetails(gameObject);
     desiredInheritedNestedInternals.add(gameObject.machineId);
@@ -908,24 +1140,38 @@ function compileVariant(document: V3Document): UnityFile {
     const transformIdentity = findOwnedTransform(document, node.machineId);
     if (goIdentity.origin === 'inherited') {
       if (!goIdentity.prefabOwnerId) effectiveDirectInheritedGameObjects.add(goIdentity.machineId);
-      const directComponentStructureChanged = node.components.some((component, index) => {
+      const desiredInheritedComponentIds = new Set<string>();
+      let previousInheritedOrder = -Infinity;
+      const directComponentStructureChanged = node.components.some(component => {
         const identity = requireIdentity(document, component.machineId, 'component');
-        return identity.origin === 'inherited' &&
-          (identity.ownerId !== goIdentity.machineId || identity.baselineOrder !== index ||
-           (identity.displayName || identity.typeName) !== component.typeName);
+        if (identity.origin !== 'inherited') return false;
+        const baselineOrder = identity.baselineOrder;
+        const changed = desiredInheritedComponentIds.has(identity.machineId) ||
+          identity.ownerId !== goIdentity.machineId || baselineOrder === undefined ||
+          baselineOrder <= previousInheritedOrder ||
+          (identity.displayName || identity.typeName) !== component.typeName;
+        desiredInheritedComponentIds.add(identity.machineId);
+        if (baselineOrder !== undefined) previousInheritedOrder = baselineOrder;
+        return changed;
       });
-      const directStructuralChange = goIdentity.displayName !== node.name ||
-        transformIdentity.baselineParentId !== parentTransformMachineId ||
+      const directStructuralChange = transformIdentity.baselineParentId !== parentTransformMachineId ||
         transformIdentity.baselineOrder !== siblingIndex || directComponentStructureChanged;
-      const directSemanticChange = document.details.has(goIdentity.machineId) ||
-        document.details.has(transformIdentity.machineId) || node.components.some(component => {
-          const identity = requireIdentity(document, component.machineId, 'component');
-          return identity.origin === 'inherited' && document.details.has(identity.machineId);
-        });
-      if (!goIdentity.prefabOwnerId && (directStructuralChange || directSemanticChange)) {
+      if (!goIdentity.prefabOwnerId && directStructuralChange) {
         throw new Error(
           `Structural editing of direct inherited GameObject ${goIdentity.machineId} is not implemented.`
         );
+      }
+      if (!goIdentity.prefabOwnerId && goIdentity.displayName !== node.name) {
+        registerAuthoredSemanticPath(goIdentity, 'm_Name');
+        emitInheritedNestedOverride(goIdentity, 'm_Name', node.name);
+      }
+      if (!goIdentity.prefabOwnerId) {
+        queueInheritedNestedDetails(goIdentity);
+        if (document.details.has(transformIdentity.machineId)) {
+          throw new Error(
+            `Structural editing of direct inherited Transform ${transformIdentity.machineId} is not implemented.`
+          );
+        }
       }
       const desiredComponents = new Set(node.components.map(component => component.machineId));
       for (const identity of document.identity.values()) {
@@ -945,7 +1191,10 @@ function compileVariant(document: V3Document): UnityFile {
       }
       for (const component of node.components) {
         const identity = requireIdentity(document, component.machineId, 'component');
-        if (identity.origin === 'inherited') continue;
+        if (identity.origin === 'inherited') {
+          if (!goIdentity.prefabOwnerId) queueInheritedNestedDetails(identity);
+          continue;
+        }
         if (identity.ownerId !== goIdentity.machineId ||
             !identity.prefabOwnerId || identity.prefabOwnerId !== document.variantRootId) {
           throw new Error(
@@ -1271,35 +1520,37 @@ function compileVariant(document: V3Document): UnityFile {
         }
       }
       if (document.baseGuid) inheritedSourceGuids.add(document.baseGuid);
+      const preservedRawSourcePaths = new Map<string, string[]>();
       if (Array.isArray(modification.m_Modifications)) {
         const rawSourcePaths = new Map<string, string[]>();
-        modification.m_Modifications = (modification.m_Modifications as any[]).filter(entry => {
-          const targetGuid = String(entry?.target?.guid ?? '');
-          const targetKey = `${targetGuid}:${String(entry?.target?.fileID ?? '0')}`;
-          const propertyPath = String(entry?.propertyPath ?? '');
+        modification.m_Modifications = (modification.m_Modifications as any[]).filter((entry, index) => {
+          const { targetGuid, targetKey, propertyPath } = validateRawModificationEnvelope(
+            entry,
+            `m_Modification.m_Modifications[${index}]`
+          );
+          const existingPaths = rawSourcePaths.get(targetKey) ?? [];
+          const conflict = existingPaths.find(existing =>
+            existing === propertyPath || pathsHaveSegmentPrefixOverlap(existing, propertyPath)
+          );
+          if (conflict) {
+            throw new Error(
+              `Raw modification ${targetKey}.${propertyPath} overlaps another property path ${conflict}.`
+            );
+          }
+          existingPaths.push(propertyPath);
+          rawSourcePaths.set(targetKey, existingPaths);
+          if (!inheritedSourceGuids.has(targetGuid) && isV3OverrideStructuralPath(propertyPath)) {
+            throw new Error(
+              `Raw unrelated modification ${targetKey}.${propertyPath} is structural and not supported.`
+            );
+          }
           if (inheritedSourceGuids.has(targetGuid)) {
-            validateV3OverridePropertyPath(propertyPath, `${targetKey}.${propertyPath}`);
             if (nestedSourceGuids.has(targetGuid) && propertyPath !== 'm_Name' &&
                 isV3OverrideStructuralPath(propertyPath)) {
               throw new Error(
                 `Raw inherited nested modification ${targetKey}.${propertyPath} is structural and not supported.`
               );
             }
-            validateRawModificationObjectReference(
-              entry?.objectReference,
-              `${targetKey}.${propertyPath}`
-            );
-            const existingPaths = rawSourcePaths.get(targetKey) ?? [];
-            const conflict = existingPaths.find(existing =>
-              existing === propertyPath || pathsHaveSegmentPrefixOverlap(existing, propertyPath)
-            );
-            if (conflict) {
-              throw new Error(
-                `Raw inherited modification ${targetKey}.${propertyPath} overlaps another property path ${conflict}.`
-              );
-            }
-            existingPaths.push(propertyPath);
-            rawSourcePaths.set(targetKey, existingPaths);
             const targetCount = inheritedSourceTargets.get(targetKey) ?? 0;
             if (targetCount === 0) {
               throw new Error(
@@ -1312,9 +1563,27 @@ function compileVariant(document: V3Document): UnityFile {
               );
             }
           }
-          if (!nestedTargets.has(targetKey)) return true;
+          if (!nestedTargets.has(targetKey)) {
+            const paths = preservedRawSourcePaths.get(targetKey) ?? [];
+            paths.push(propertyPath);
+            preservedRawSourcePaths.set(targetKey, paths);
+            return true;
+          }
           return false;
         });
+      }
+      for (const semanticPath of authoredSemanticPaths) {
+        if (semanticPath.ownerId !== identity.machineId) continue;
+        const rawConflict = (preservedRawSourcePaths.get(semanticPath.targetKey) ?? []).find(
+          propertyPath => propertyPath === semanticPath.propertyPath ||
+            pathsHaveSegmentPrefixOverlap(propertyPath, semanticPath.propertyPath)
+        );
+        if (rawConflict) {
+          throw new Error(
+            `Preserved raw modification ${semanticPath.targetKey}.${rawConflict} overlaps newly authored semantic ` +
+            `modification ${semanticPath.propertyPath}.`
+          );
+        }
       }
       for (const override of inheritedNestedOverrides) {
         if (override.ownerId !== identity.machineId) continue;

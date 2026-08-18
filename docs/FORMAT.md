@@ -238,7 +238,9 @@ Each line is `key = fileID` where:
 
 ### v2 snapshot selectors
 
-v2 is the default writer/CLI format. Request v1 explicitly with
+v2 remains the default for the `writeCompact` library API. In uBridge 2.0 the
+CLI defaults to standalone v3, so request the patch format explicitly with
+`ubridge parse File.prefab --format v2`. Request v1 with
 `writeCompact(file, { version: 1 })` or `--format v1` when required.
 
 v2 preserves the complete v1 body whenever every selector is unique. Within a

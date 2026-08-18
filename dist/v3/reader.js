@@ -1,14 +1,19 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.readV3 = readV3;
+const model_1 = require("./model");
 const value_1 = require("./value");
 const MACHINE_ID = '[A-Za-z][A-Za-z0-9_-]*';
 function readV3(content) {
     const lines = content.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n').split('\n');
     const header = lines[0]?.trim();
-    const headerMatch = header?.match(/^# ubridge v3 \| (prefab|variant) \| profile:([^ |]+)(?: \| asset-guid:([a-f0-9]{32}))?$/i);
+    const headerMatch = header?.match(/^# ubridge v3 \| (prefab|variant) \| profile:([^ |]*)(?: \| asset-guid:([a-f0-9]{32}))?$/i);
     if (!headerMatch) {
         throw new Error('Invalid v3 header. Expected "# ubridge v3 | prefab | profile:<id>".');
+    }
+    const profile = headerMatch[2];
+    if (profile !== model_1.V3_STABLE_PROFILE) {
+        throw new Error(`Unsupported v3 profile ${JSON.stringify(profile)} in header line 1; expected ${JSON.stringify(model_1.V3_STABLE_PROFILE)}.`);
     }
     const kind = headerMatch[1];
     const structureIndex = findUniqueSection(lines, '--- STRUCTURE');
@@ -52,7 +57,7 @@ function readV3(content) {
     return {
         version: 3,
         kind,
-        profile: headerMatch[2],
+        profile,
         assetGuid: headerMatch[3],
         structure,
         variantRoots,
@@ -216,6 +221,19 @@ function parseIdentity(lines) {
         if (origin !== undefined && origin !== 'inherited') {
             throw new Error(`Invalid v3 identity origin for ${machineId}: ${origin}`);
         }
+        let baselineDetails;
+        const encodedBaseline = fields.get('baselineDetails');
+        if (encodedBaseline !== undefined) {
+            try {
+                const parsed = JSON.parse(Buffer.from(encodedBaseline, 'base64url').toString('utf8'));
+                if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))
+                    throw new Error();
+                baselineDetails = parsed;
+            }
+            catch {
+                throw new Error(`Invalid v3 baselineDetails for ${machineId}.`);
+            }
+        }
         result.set(machineId, {
             machineId,
             kind,
@@ -236,6 +254,7 @@ function parseIdentity(lines) {
             sourceGuid: fields.get('sourceGuid'),
             sourceFileId: fields.get('sourceFileID'),
             sourceFingerprint: fields.get('sourceFingerprint'),
+            baselineDetails,
         });
     }
     return result;

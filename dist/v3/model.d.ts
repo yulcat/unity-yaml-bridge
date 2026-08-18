@@ -1,4 +1,6 @@
 import { UnityDocument } from '../types';
+export declare const V3_STABLE_PROFILE: "unity-generic-v1";
+export type V3StableProfile = typeof V3_STABLE_PROFILE;
 export type V3EntityKind = 'gameObject' | 'transform' | 'component' | 'prefabInstance' | 'stripped' | 'owned';
 export interface V3IdentityRecord {
     machineId: string;
@@ -20,6 +22,7 @@ export interface V3IdentityRecord {
     sourceGuid?: string;
     sourceFileId?: string;
     sourceFingerprint?: string;
+    baselineDetails?: Record<string, unknown>;
 }
 export interface V3StructureComponent {
     typeName: string;
@@ -37,7 +40,7 @@ export interface V3StructureNode {
 export interface V3Document {
     version: 3;
     kind: 'prefab' | 'variant';
-    profile: string;
+    profile: V3StableProfile;
     assetGuid?: string;
     structure: V3StructureNode | null;
     variantRoots?: V3StructureNode[];
@@ -47,7 +50,7 @@ export interface V3Document {
     identity: Map<string, V3IdentityRecord>;
 }
 export interface V3WriterOptions {
-    profile?: string;
+    profile?: V3StableProfile;
     assetGuid?: string;
     sourceResolver?: V3SourceResolver;
 }

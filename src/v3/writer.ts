@@ -1,8 +1,8 @@
 import { createHash } from 'crypto';
 import { readFileSync } from 'fs';
-import { GameObjectNode, UnityDocument, UnityFile } from '../types';
+import { GameObjectNode, PropertyModification, UnityDocument, UnityFile } from '../types';
 import { parseUnityYaml } from '../unity-yaml-parser';
-import { V3IdentityRecord, V3StructureNode, V3WriterOptions } from './model';
+import { V3IdentityRecord, V3_STABLE_PROFILE, V3StructureNode, V3WriterOptions } from './model';
 import { formatV3Value } from './value';
 import {
   encodeV3References,
@@ -42,6 +42,9 @@ function validateUnityModificationObjectReference(
 }
 
 export function writeV3(file: UnityFile, options: V3WriterOptions = {}): string {
+  if (options.profile !== undefined && options.profile !== V3_STABLE_PROFILE) {
+    throw new Error(`Unsupported v3 profile ${JSON.stringify(options.profile)} in writeV3 options; expected ${JSON.stringify(V3_STABLE_PROFILE)}.`);
+  }
   if (file.type === 'variant') return writeVariantV3(file, options);
   if (file.type !== 'prefab' || !file.hierarchy) throw new Error('writeV3 requires a prefab hierarchy.');
   const byId = new Map(file.documents.map(document => [document.fileId, document]));
@@ -163,7 +166,7 @@ export function writeV3(file: UnityFile, options: V3WriterOptions = {}): string 
   }
   applySourceFingerprints(identities, options);
   const lines = [
-    `# ubridge v3 | prefab | profile:${options.profile || 'unity-generic-v1'}${options.assetGuid ? ` | asset-guid:${options.assetGuid}` : ''}`,
+    `# ubridge v3 | prefab | profile:${options.profile || V3_STABLE_PROFILE}${options.assetGuid ? ` | asset-guid:${options.assetGuid}` : ''}`,
     '--- STRUCTURE',
     ...writeStructure(structure),
     '--- DETAILS',
@@ -397,9 +400,14 @@ function writeVariantV3(file: UnityFile, options: V3WriterOptions): string {
   normalizeProjectedOverrideReferences(
     projectedDetails, identities, documentIds, effectiveReferenceIds
   );
+  const directSemanticTargets = new Set([...identities.values()]
+    .filter(identity => identity.origin === 'inherited' && !identity.prefabOwnerId &&
+      identity.sourceGuid === rootInstance.sourcePrefab.guid && identity.sourceFileId &&
+      (identity.kind === 'gameObject' || identity.kind === 'component'))
+    .map(identity => `${identity.sourceGuid}:${identity.sourceFileId}`));
 
   const lines = [
-    `# ubridge v3 | variant | profile:${options.profile || 'unity-generic-v1'}${options.assetGuid ? ` | asset-guid:${options.assetGuid}` : ''}`,
+    `# ubridge v3 | variant | profile:${options.profile || V3_STABLE_PROFILE}${options.assetGuid ? ` | asset-guid:${options.assetGuid}` : ''}`,
     '--- STRUCTURE',
     `(variant @${rootId} source:${rootInstance.sourcePrefab.guid})`,
     ...writeVariantRoots(effectiveRoots),
@@ -412,7 +420,18 @@ function writeVariantV3(file: UnityFile, options: V3WriterOptions): string {
     for (const [key, value] of Object.entries(document.properties)) {
       if (identity.kind !== 'prefabInstance' && identity.kind !== 'stripped' && identity.kind !== 'owned' &&
           STRUCTURAL_FIELDS.has(key) && key !== 'm_Father' && key !== 'm_RootOrder') continue;
-      lines.push(`${key} = ${formatV3Value(encodeV3References(value, documentIds))}`);
+      const projectedValue = machineId === rootId && key === 'm_Modification' &&
+          value && typeof value === 'object'
+        ? {
+            ...(value as Record<string, unknown>),
+            m_Modifications: Array.isArray((value as any).m_Modifications)
+              ? (value as any).m_Modifications.filter((entry: any) => !directSemanticTargets.has(
+                  `${String(entry?.target?.guid ?? '')}:${String(entry?.target?.fileID ?? '0')}`
+                ))
+              : (value as any).m_Modifications,
+          }
+        : value;
+      lines.push(`${key} = ${formatV3Value(encodeV3References(projectedValue, documentIds))}`);
     }
   }
   for (const [machineId, properties] of projectedDetails) {
@@ -707,21 +726,13 @@ function buildInheritedVariantRoots(
     }
     directSourceModificationKeys.add(key);
   }
-  const nameOverrides = new Map<string, string>();
-  for (const modification of rootInstance.modifications) {
-    if (modification.propertyPath !== 'm_Name' || modification.target.guid !== sourceGuid) continue;
-    const fileId = String(modification.target.fileID ?? '0');
-    if (nameOverrides.has(fileId)) {
-      throw new Error(`Variant root ${rootInstance.fileId} has ambiguous name ownership for ${fileId}.`);
-    }
-    nameOverrides.set(fileId, modification.value);
-  }
   const nestedOverrides = new Map<string, typeof rootInstance.modifications[number]>();
   const matchedNestedOverrides = new Set<string>();
   for (const modification of rootInstance.modifications) {
     const guid = String(modification.target.guid ?? '');
     const fileId = String(modification.target.fileID ?? '0');
-    if (guid === sourceGuid) continue;
+    const directDocument = guid === sourceGuid ? sourceById.get(fileId) : undefined;
+    if (directDocument && (directDocument.typeId === 4 || directDocument.typeId === 224)) continue;
     const key = `${guid}:${fileId}:${modification.propertyPath}`;
     if (!guid || fileId === '0' || nestedOverrides.has(key)) {
       throw new Error(`Variant root ${rootInstance.fileId} has ambiguous nested override ownership for ${fileId}.`);
@@ -793,28 +804,36 @@ function buildInheritedVariantRoots(
     };
 
     let name = sourceName;
-    for (const [key, modification] of [...nestedOverrides].sort(([left], [right]) =>
-      left.localeCompare(right))) {
-      if (!key.startsWith(`${guid}:${fileId}:`)) continue;
+    const projectModification = (
+      modification: PropertyModification,
+      key?: string
+    ): void => {
       const segments = validateV3OverridePropertyPath(
         modification.propertyPath, `${machineId}.${modification.propertyPath}`
       );
-      matchedNestedOverrides.add(key);
+      if (key) matchedNestedOverrides.add(key);
       const normalizedObjectReference = validateUnityModificationObjectReference(
         modification.objectReference, `${machineId}.${modification.propertyPath}`
       );
-      if (modification.propertyPath === 'm_Name') {
-        name = modification.value;
-        continue;
+      if (modification.value !== '' && normalizedObjectReference.fileId !== '0') {
+        throw new Error(
+          `Variant modification ${machineId}.${modification.propertyPath} mixes a nonempty scalar value ` +
+          'with a nonzero objectReference.'
+        );
       }
-      if (isV3OverrideStructuralPath(modification.propertyPath)) {
+      if (modification.propertyPath === 'm_Name' && sourceName !== undefined) {
+        name = modification.value;
+        return;
+      }
+      if (isV3OverrideStructuralPath(modification.propertyPath) &&
+          !(modification.propertyPath === 'm_Name' && sourceName === undefined)) {
         throw new Error(
           `Variant nested override ${guid}:${fileId}.${modification.propertyPath} is structural and not supported.`
         );
       }
       if (normalizedObjectReference.fileId !== '0') {
         assignProjectedValue(modification.propertyPath, normalizedObjectReference.projected);
-        continue;
+        return;
       }
       let baseline: unknown = baselineProperties;
       for (const segment of segments) {
@@ -834,6 +853,19 @@ function buildInheritedVariantRoots(
           ? numeric
           : modification.value;
       assignProjectedValue(modification.propertyPath, value);
+    };
+
+    for (const modification of source.modifications.get(fileId) ?? []) {
+      projectModification(modification);
+    }
+    const baselineDetails = projectedDetails.get(machineId);
+    if (baselineDetails && Object.keys(baselineDetails).length > 0) {
+      identities.get(machineId)!.baselineDetails = JSON.parse(JSON.stringify(baselineDetails));
+    }
+    for (const [key, modification] of [...nestedOverrides].sort(([left], [right]) =>
+      left.localeCompare(right))) {
+      if (!key.startsWith(`${guid}:${fileId}:`)) continue;
+      projectModification(modification, key);
     }
     return name;
   };
@@ -1105,10 +1137,13 @@ function buildInheritedVariantRoots(
       origin: 'inherited',
       typeId: gameObjectDocument.typeId,
       typeName: gameObjectDocument.typeName,
-      displayName: nameOverrides.get(node.fileId) ?? node.name,
+      displayName: node.name,
       sourceGuid,
       sourceFileId: node.fileId,
     });
+    const effectiveName = projectNestedOverrides(
+      goId, sourceGuid, node.fileId, node.name, gameObjectDocument.properties
+    )!;
     identities.set(transformId, {
       machineId: transformId,
       kind: 'transform',
@@ -1138,6 +1173,9 @@ function buildInheritedVariantRoots(
         sourceGuid,
         sourceFileId: component.fileId,
       });
+      projectNestedOverrides(
+        componentId, sourceGuid, component.fileId, undefined, sourceDocument.properties
+      );
       if (matchRemoval(
         removedComponentIds, matchedRemovedComponentIds,
         sourceGuid, component.fileId, 'removed-component'
@@ -1149,7 +1187,7 @@ function buildInheritedVariantRoots(
     projectAddedComponents(goId, sourceGuid, node.fileId, components);
     const children = node.children.map((child, index) => build(child, transformId, index));
     return {
-      name: nameOverrides.get(node.fileId) ?? node.name,
+      name: effectiveName,
       machineId: goId,
       components,
       children: tombstone ? [] : children,
@@ -1225,6 +1263,7 @@ function collectVariantAddedComponents(
 interface EffectiveVariantSource {
   hierarchy: GameObjectNode;
   documents: Map<string, UnityDocument>;
+  modifications: Map<string, PropertyModification[]>;
 }
 
 function resolveEffectiveVariantSource(
@@ -1240,10 +1279,14 @@ function resolveEffectiveVariantSource(
   resolving.add(sourceGuid);
   try {
     const source = parseUnityYaml(readFileSync(sourcePath, 'utf-8'));
+    const sourceDocuments = uniqueDocumentsByFileId(
+      source.documents, `Variant source ${sourceGuid}`
+    );
     if (source.type === 'prefab' && source.hierarchy) {
       return {
         hierarchy: cloneHierarchy(source.hierarchy),
-        documents: new Map(source.documents.map(document => [document.fileId, document])),
+        documents: sourceDocuments,
+        modifications: new Map(),
       };
     }
     if (source.type !== 'variant') {
@@ -1260,7 +1303,8 @@ function resolveEffectiveVariantSource(
     applyVariantChainAddedComponents(effective, root, source, sourceGuid);
     applyVariantChainRemovedGameObjects(effective.hierarchy, root, sourceGuid, parentGuid);
     applyVariantChainRemovedComponents(effective.hierarchy, root, sourceGuid, parentGuid);
-    applyVariantChainNames(effective.hierarchy, root, sourceGuid, parentGuid);
+    applyVariantChainNames(effective, root, sourceGuid, parentGuid);
+    applyVariantChainDetails(effective, root, sourceGuid, parentGuid);
     return effective;
   } finally {
     resolving.delete(sourceGuid);
@@ -1501,7 +1545,7 @@ function applyVariantChainRemovedComponents(
 }
 
 function applyVariantChainNames(
-  hierarchy: GameObjectNode,
+  effective: EffectiveVariantSource,
   instance: UnityFile['prefabInstances'][number],
   variantGuid: string,
   parentGuid: string
@@ -1514,7 +1558,7 @@ function applyVariantChainNames(
     byFileId.set(node.fileId, node);
     node.children.forEach(collect);
   };
-  collect(hierarchy);
+  collect(effective.hierarchy);
   const renamed = new Set<string>();
   for (const modification of instance.modifications) {
     if (modification.propertyPath !== 'm_Name') continue;
@@ -1524,6 +1568,8 @@ function applyVariantChainNames(
         `Variant source chain ${variantGuid} has ambiguous name ownership for ${targetFileId}.`
       );
     }
+    const targetDocument = effective.documents.get(targetFileId);
+    if (targetDocument && targetDocument.typeId !== 1) continue;
     const target = byFileId.get(targetFileId);
     if (!target) {
       throw new Error(`Variant source chain ${variantGuid} name target ${targetFileId} is not in its effective tree.`);
@@ -1533,6 +1579,55 @@ function applyVariantChainNames(
     }
     target.name = modification.value;
     renamed.add(targetFileId);
+  }
+}
+
+function uniqueDocumentsByFileId(
+  documents: UnityDocument[],
+  context: string
+): Map<string, UnityDocument> {
+  const result = new Map<string, UnityDocument>();
+  for (const document of documents) {
+    if (result.has(document.fileId)) {
+      throw new Error(`${context} has duplicate source document fileID ${document.fileId}.`);
+    }
+    result.set(document.fileId, document);
+  }
+  return result;
+}
+
+function applyVariantChainDetails(
+  effective: EffectiveVariantSource,
+  instance: UnityFile['prefabInstances'][number],
+  variantGuid: string,
+  parentGuid: string
+): void {
+  for (const modification of instance.modifications) {
+    const fileId = String(modification.target.fileID ?? '0');
+    if (String(modification.target.guid ?? '') !== parentGuid || fileId === '0') continue;
+    const target = effective.documents.get(fileId);
+    if (!target) {
+      throw new Error(
+        `Variant source chain ${variantGuid} typed modification target ${parentGuid}:${fileId} ` +
+        'is not uniquely owned by its direct source.'
+      );
+    }
+    if (target.typeId === 4 || target.typeId === 224 ||
+        (target.typeId === 1 && modification.propertyPath === 'm_Name')) continue;
+    if (target.typeId === 1 || target.properties.m_GameObject) {
+      const existing = effective.modifications.get(fileId) ?? [];
+      const replacementIndex = existing.findIndex(candidate =>
+        candidate.propertyPath === modification.propertyPath
+      );
+      const projected: PropertyModification = {
+        ...modification,
+        target: { ...modification.target },
+        objectReference: { ...modification.objectReference },
+      };
+      if (replacementIndex >= 0) existing[replacementIndex] = projected;
+      else existing.push(projected);
+      effective.modifications.set(fileId, existing);
+    }
   }
 }
 
@@ -1603,6 +1698,9 @@ function writeIdentity(identity: V3IdentityRecord): string {
   if (identity.sourceGuid) fields.push(`sourceGuid:${identity.sourceGuid}`);
   if (identity.sourceFileId) fields.push(`sourceFileID:${identity.sourceFileId}`);
   if (identity.sourceFingerprint) fields.push(`sourceFingerprint:${identity.sourceFingerprint}`);
+  if (identity.baselineDetails && Object.keys(identity.baselineDetails).length > 0) {
+    fields.push(`baselineDetails:${Buffer.from(JSON.stringify(identity.baselineDetails)).toString('base64url')}`);
+  }
   return `${identity.machineId} = ${fields.join(' | ')}`;
 }
 

@@ -1,290 +1,186 @@
 # 🌉 Unity YAML Bridge
 
-> Turn Unity's 10,000-line YAML prefabs into something AI can actually read and edit.
+> Turn verbose Unity YAML prefabs into compact documents that humans and AI can
+> read and edit.
 
-Unity serializes prefabs, scenes, and assets as YAML files filled with cryptic fileIDs, boilerplate metadata, and flat hierarchies that are hostile to both humans and AI. **Unity YAML Bridge** converts them to a compact, AI-friendly `.ubridge` format.
+uBridge 2.0 provides two deliberate workflows:
 
-The released v1/v2 write path is a lossless patch workflow and still requires
-the original Unity YAML. Experimental v3 is the new standalone desired-state
-format: it compiles local regular prefabs without an original YAML input.
+- **v3 (default):** the stable standalone desired-state contract for supported
+  prefabs and prefab variants, compiled without the original YAML file.
+- **v1/v2 (explicit):** the established patch workflow, where `write` merges an
+  edited compact document into the original Unity YAML.
 
-## The Problem
+## Features
 
-A simple UI button in Unity YAML:
+- Read Unity YAML into a typed document graph.
+- Emit compact hierarchy and component details.
+- Compile deterministic standalone v3 documents.
+- Preserve the v1/v2 merge workflow for existing integrations.
+- Resolve source GUIDs and scripts from a Unity project with `--project`.
+- Fail closed on unsupported or ambiguous v3 ownership edits.
+- Replace file outputs atomically and report concise CLI errors.
+- CommonJS API with TypeScript declarations.
 
-```yaml
---- !u!1 &8027481463175804169
-GameObject:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  serializedVersion: 6
-  m_Component:
-  - component: {fileID: 8027481463175804168}
-  - component: {fileID: 8027481463175804175}
-  m_Layer: 5
-  m_Name: Button
-  # ... 250 more lines of this
-```
+## Requirements and installation
 
-**9,488 bytes.** For a button. Good luck asking Claude to "change the sprite."
+Node.js 20 or newer is required. The project is tested on Node.js 20, 22, and
+24.
 
-## The Solution
-
-The same button in `.ubridge`:
-
-```ini
-# ubridge v1 | prefab
---- STRUCTURE
-Button [ActivatePanelUI]
-├─ Background9Slice_Image [Image]
-└─ Button_Text {Button_Text}
---- DETAILS
-
-[Button:RectTransform]
-pos = (-694, 416)
-size = (187.87, 51.63)
-
-[Button:ActivatePanelUI]
-activatedText = Activated
-activateText = Activate
-disabledText = Disabled
-
-[Background9Slice_Image:Image]
-m_Sprite = {21300000, e197d4e89f9f4274dac4566fdd117ecf}
-m_Type = 1
---- REFS
-Button = 8027481463175804169
-Button:RectTransform = 8027481463175804168
-Button:ActivatePanelUI = 8027481463175804175
-Background9Slice_Image = 8027481461304769077
-Background9Slice_Image:Image = 8027481461304769067
-```
-
-**698 bytes. 92.6% smaller.** AI reads the tree, edits the details, ignores the refs. Tool handles the rest.
-
-## ✨ Features
-
-- **🌳 Structure + Details separation** — Understand hierarchy at a glance, dive into components only when needed
-- **🔄 Lossless round-trip** — 0 diff lines across 1M+ lines of real Unity YAML
-- **📦 Stateless v1/v2 edits** — REFS stores target fileIDs between CLI calls; the original YAML remains the merge baseline
-- **🧱 Experimental standalone v3** — local regular prefabs compile from the `.ubridge` document alone
-- **🔖 Optional v2 selectors** — Duplicate sibling names and same-type components get readable, order-stable `#N` aliases
-- **🆕 Auto fileID generation** — Add new GameObjects or components; the tool generates valid fileIDs automatically
-- **🎭 Prefab Variant support** — Base + delta pattern with `*` (modified), `+` (added), `-` (removed) markers
-- **🗜️ 77-96% token reduction** — Less context = cheaper, faster, more accurate AI edits
-
-## Token Efficiency
-
-Tested on 142 real prefabs from Unity's official sample projects:
-
-| File | Unity YAML | .ubridge | Reduction |
-|------|-----------|----------|-----------|
-| Button.prefab | 9,488 B | 698 B | **92.6%** |
-| _Card_Template.prefab | 25,643 B | 873 B | **96.6%** |
-| Card_Explorer_Variant.prefab | 14,081 B | 3,233 B | **77.0%** |
-| Ellen_Variant.prefab | 2,349 B | 434 B | **81.5%** |
-
-## .ubridge Format
-
-Three sections, one file:
-
-```
-# ubridge v1 | prefab
---- STRUCTURE          ← AI reads this: "what does this prefab look like?"
-Button [ActivatePanelUI]
-├─ Background [Image]
-└─ Label [TextMeshProUGUI]
---- DETAILS            ← AI edits this: "change the text to 'Buy Now'"
-[Label:TextMeshProUGUI]
-m_text = Click Me
---- REFS               ← Tool uses this: fileID restoration on write-back
-Button = 8027481463175804169
-Label:TextMeshProUGUI = 8027481463030904456
-```
-
-### Prefab Variants
-
-Variants show the inherited tree with override markers:
-
-```
-# ubridge v1 | variant | base-guid:2982fa53447c5c643865bbd0d194eab1
---- STRUCTURE
-_Card_Template [CameraFacingBillboard, CardBehaviour*]
-├─ Frame [Image]
-├─ _Header_Text [TextMeshProUGUI*]
-└─ + NewBadge [Image]
---- DETAILS
-[_Header_Text:TextMeshProUGUI]
-m_text = Explorer
-
-[+ NewBadge:Image]
-m_Sprite = {21300000, abc123...}
---- REFS
-__instance = 4987371547573211178
-_Header_Text:TextMeshProUGUI = 7213628277689136018
-```
-
-`*` = overridden, `+` = added in this variant, `-` = removed.
-
-For regular prefabs, a component marker can also be used as an edit instruction:
-
-```text
-Gauge [Image, -Slider, +UIProgressBar]
-```
-
-`-Component` removes an existing local component and can be combined with a
-`[+ Path:NewComponent]` DETAILS section for an atomic replacement. Required
-`Transform`/`RectTransform` components cannot be removed. References to a
-removed component must be cleared or replaced in the same edit.
-
-### Value Syntax
-
-| Type | Syntax | Example |
-|------|--------|---------|
-| Vector | `(x, y[, z[, w]])` | `(0.5, 0.5, 0)` |
-| Color | `(r, g, b, a)` | `(1, 0.9, 0.3, 1)` |
-| Asset ref | `{fileID, guid}` | `{21300000, e197d4e8...}` |
-| Internal ref | `{fileID}` | `{8027481463030904456}` |
-| Null | `null` | |
-
-Full spec: [docs/FORMAT.md](docs/FORMAT.md)
-
-Experimental standalone v3: [docs/FORMAT_V3.md](docs/FORMAT_V3.md)
-
-### Collision-safe v2 selectors
-
-Use `writeCompact(ast, { version: 2 })` or `ubridge parse File.prefab --format v2`.
-The body stays byte-identical to v1 when there are no selector collisions. Only
-colliding siblings or components are numbered:
-
-```text
-Inventory
-├─ Item#2 [Image]
-└─ Item#1 [Image]
---- REFS
-Inventory/Item#1 = 110
-Inventory/Item#2 = 120
-```
-
-Numbers are assigned by signed Unity fileID rather than display order. They are
-snapshot-scoped aliases, and write-back validates the exact REFS target before
-applying an edit. v2 is the default; use `version: 1` or `--format v1` for
-legacy output.
-
-### Experimental standalone v3
-
-```bash
-ubridge parse Input.prefab --format v3 -o Input.ubridge
-ubridge compile Input.ubridge -o Rebuilt.prefab
-```
-
-The v3 compiler does not accept `--yaml`. It supports standalone regular-prefab
-reconstruction plus source-backed variant and nested-prefab effective trees,
-including ownership-aware inherited additions/removals, variant chains, recursive
-nested-source expansion, and scalar property overrides. Local GameObjects and components
-can be added beneath recursively expanded inherited nested source roots/internals at any
-resolved depth; v3 emits leaf-owned Unity addition deltas and stripped proxies while
-preserving local IDs across cold roundtrips. Operations that cannot yet be mapped to an
-unambiguous Unity ownership delta fail closed instead of silently falling back to the
-original YAML. See the v3 specification for the exact current boundary.
-
-## Usage
-
-## Installation
-
-```bash
-npm i -g github:yulcat/unity-yaml-bridge
-```
-
-If the above fails (npm git-install bugs on some versions), clone manually:
+The repository is release-ready but this documentation does **not** claim that
+2.0.0 has been published to npm. To install from a checkout:
 
 ```bash
 git clone https://github.com/yulcat/unity-yaml-bridge.git
-cd unity-yaml-bridge && npm install && npm link
+cd unity-yaml-bridge
+npm ci
+npm run build
+npm link
 ```
 
-## Usage
+## CLI
 
-```typescript
-import { parseUnityYaml, writeCompact, parseCompact, writeUnityYaml } from 'unity-yaml-bridge';
-import fs from 'fs';
-
-// Unity YAML → .ubridge
-const yaml = fs.readFileSync('Button.prefab', 'utf-8');
-const ast = parseUnityYaml(yaml);
-const compact = writeCompact(ast);
-fs.writeFileSync('Button.ubridge', compact);
-
-// .ubridge → Unity YAML (after AI edits)
-const edited = fs.readFileSync('Button.ubridge', 'utf-8');
-const editedAst = parseCompact(edited);
-const yamlOut = writeUnityYaml(editedAst);
-fs.writeFileSync('Button.prefab', yamlOut);
+```text
+ubridge parse <file.prefab|.unity|.asset> [--format v1|v2|v3]
+              [--project <path>] [--verbose] [-o <file>]
+ubridge compile <file.ubridge> [--project <path>] [-o <file>]
+ubridge write <file.ubridge> --yaml <original.prefab>
+              [--project <path>] [-o <file>]
+ubridge --version
 ```
 
-## How It Works
+### Default v3 workflow
 
-```
-Unity YAML ──parse──→ AST ──write──→ .ubridge
-                                        │
-                                    AI edits
-                                        │
-Unity YAML ←─write── AST ←─parse──  .ubridge
-```
-
-The AST preserves everything Unity needs — document ordering, fileIDs, custom tags, stripped objects — while the `.ubridge` format shows only what matters for understanding and editing.
-
-## Project Structure
-
-```
-src/
-├── unity-yaml-parser.ts   # Unity YAML → AST (handles all YAML quirks)
-├── compact-writer.ts      # AST → .ubridge (tree + details + refs)
-├── compact-reader.ts      # .ubridge → AST (self-contained, no external state)
-├── compact-merger.ts      # Apply .ubridge edits back to AST + auto fileID gen
-├── unity-yaml-writer.ts   # AST → Unity YAML (byte-identical round-trip)
-├── guid-resolver.ts       # GUID → asset name resolution
-└── types.ts               # Shared type definitions
-```
-
-## Testing
+`parse` defaults to v3 in uBridge 2.0:
 
 ```bash
-# Single file round-trip
-npx tsx src/test-roundtrip.ts samples/prefabs/Button.prefab
-
-# Batch test (all 142 prefabs)
-npx tsx src/test-batch.ts
-
-# Compact format round-trip + edit scenarios
-npx tsx src/test-compact-roundtrip.ts
+ubridge parse Input.prefab -o Input.ubridge
+# edit Input.ubridge
+ubridge compile Input.ubridge -o Rebuilt.prefab
 ```
 
-## Status
+For prefab variants, nested prefab sources, or new script components, provide a
+Unity project root when GUID/script resolution is required:
 
-- ✅ Prefab parsing & round-trip (0% diff on 1M+ lines)
-- ✅ Prefab variant support
-- ✅ Variant/nested-prefab added-component properties (`m_AddedComponents`)
-- ✅ Removed GameObject/component markers in variant structure
-- ✅ Variant-of-variant base hierarchy resolution
-- ✅ Intermediate-variant GameObject/component additions and removals
-- ✅ New component creation and new PrefabInstance overrides from compact edits
-- ✅ Local component removal and atomic replacement in regular prefabs
-- ✅ REFS section (self-contained files)
-- ✅ Auto fileID generation for new elements
-- ✅ Compact edit → YAML write-back
-- ✅ Fail-closed v1 parsing and transactional merge integrity checks
-- 🔧 Variant path resolution (base prefab cross-reference)
-- 🔧 CLI tool (`ubridge parse` / `ubridge write`)
-- 📋 Scene file support
-- 📋 npm package publish
+```bash
+ubridge parse Variant.prefab --project ./MyUnityProject -o Variant.ubridge
+ubridge compile Variant.ubridge --project ./MyUnityProject -o Variant.rebuilt.prefab
+```
 
-## Acknowledgments
+A small tested example is available in [`samples/v3/`](samples/v3/):
 
-Inspired by a colleague's Unity YAML→JSON converter that pioneered the `@` reference syntax and `refs` table pattern for lossless round-trips. This project explores a different angle: tree-based structure visualization + INI-style details for maximum AI token efficiency.
+```text
+# ubridge v3 | prefab | profile:unity-generic-v1
+--- STRUCTURE
+Root @g1 [BoxCollider @c1]
+└─ Child @g2
+--- DETAILS
+...
+--- IDENTITY
+...
+```
+
+See the complete grammar and support boundary in
+[`docs/FORMAT_V3.md`](docs/FORMAT_V3.md).
+
+### Explicit v1/v2 patch workflow
+
+Use v2 when retaining the 1.x workflow (or v1 for a consumer that specifically
+requires it):
+
+```bash
+ubridge parse Input.prefab --format v2 -o Input.ubridge
+# edit Input.ubridge
+ubridge write Input.ubridge --yaml Input.prefab -o Input.modified.prefab
+```
+
+The `write` workflow is unchanged: it requires the original YAML as its merge
+baseline. See [`docs/FORMAT.md`](docs/FORMAT.md) for v1/v2 syntax.
+
+## JavaScript / TypeScript API
+
+The package is CommonJS and preserves its public root exports.
+
+### Standalone v3
+
+```typescript
+import {
+  parseUnityYaml,
+  writeV3,
+  readV3,
+  compileV3,
+  writeUnityYaml,
+} from 'unity-yaml-bridge';
+
+const ast = parseUnityYaml(prefabText);
+const documentText = writeV3(ast);
+const rebuiltAst = compileV3(readV3(documentText));
+const rebuiltPrefab = writeUnityYaml(rebuiltAst);
+```
+
+### Legacy v2 patching
+
+```typescript
+import {
+  parseUnityYaml,
+  writeCompact,
+  readCompact,
+  mergeCompactChanges,
+  writeUnityYaml,
+} from 'unity-yaml-bridge';
+
+const originalAst = parseUnityYaml(originalPrefab);
+const compact = writeCompact(originalAst, { version: 2 });
+// ...edit compact text...
+const merged = mergeCompactChanges(originalAst, readCompact(editedCompact));
+const output = writeUnityYaml(merged);
+```
+
+## Supported v3 boundary
+
+uBridge 2.0 supports the prefab and prefab-variant operations documented in the
+v3 format specification, including source-backed variant/nested-prefab
+workflows within that ownership model.
+
+The following are deferred:
+
+- inherited reparenting and sibling reordering;
+- edits that cross a `PrefabInstance` boundary;
+- arrays and managed references;
+- scenes and non-prefab assets.
+
+Unsupported or ambiguous operations are intended to fail closed. The automated
+suite exercises parser/compiler round trips and packed npm-consumer behavior;
+it does not claim Unity Editor validation.
+
+## Errors and output safety
+
+Expected CLI failures emit a concise `Error: ...` line and exit with status 1.
+When `-o` is used, uBridge writes a temporary sibling and renames it over the
+target only after parsing/compilation/serialization succeeds. Existing regular
+file permissions are preserved; a symlink destination is replaced rather than
+followed. New files use the process's normal umask. A failed command therefore
+does not partially overwrite an existing output and cleans up its temporary
+sibling.
+
+## Migration
+
+See [`docs/MIGRATING_1_TO_2.md`](docs/MIGRATING_1_TO_2.md) for the Node.js
+requirement, CLI default change, compatibility guidance, and v3 limitations.
+
+## Development and testing
+
+```bash
+npm ci
+npm test
+npm run test:packed
+npx tsc --noEmit
+```
+
+`test:packed` creates the exact npm tarball, installs it into an empty temporary
+consumer without fetching runtime dependencies, and verifies the CJS API,
+declarations, executable version, v3 default, explicit v2 behavior,
+deterministic compile output, and malformed-input safety.
 
 ## License
 
-MIT
+[MIT](LICENSE)

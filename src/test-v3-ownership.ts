@@ -1067,18 +1067,29 @@ console.log('\n=== v3 ownership cold-boundary edits ===');
     assert(nullDelta?.value === '' &&
            String(nullDelta.objectReference.fileID) === '0',
       'null DETAILS override compiles as an explicit null object reference at arbitrary nested depth');
-    const exportedNull = readV3(writeV3(nullEdited, {
+    const nullExportOptions = {
       sourceResolver: {
-        resolveFilePath: guid => guid === outerGuid ? outerPath :
+        resolveFilePath: (guid: string) => guid === outerGuid ? outerPath :
           guid === middleGuid ? middlePath : guid === innerGuid ? innerPath : undefined,
       },
-    }));
+    };
+    const exportedNullText = writeV3(nullEdited, nullExportOptions);
+    const exportedNull = readV3(exportedNullText);
     const exportedNullIdentity = [...exportedNull.identity.values()].find(identity =>
       identity.kind === 'gameObject' && identity.sourceGuid === innerRoot.sourceGuid &&
       identity.sourceFileId === innerRoot.sourceFileId
     )!;
     assert(exportedNull.details.get(exportedNullIdentity.machineId)?.m_Icon === null,
       'existing null reference override exports as JSON null when the source baseline is a reference');
+    const stringZeroNull = parseUnityYaml(writeUnityYaml(nullEdited));
+    const stringZeroNullDelta = stringZeroNull.prefabInstances[0].modifications.find(modification =>
+      modification.propertyPath === 'm_Icon' &&
+      String(modification.target.fileID) === innerRoot.sourceFileId &&
+      modification.target.guid === innerRoot.sourceGuid
+    )!;
+    stringZeroNullDelta.objectReference = { fileID: '0' };
+    assert(writeV3(stringZeroNull, nullExportOptions) === exportedNullText,
+      'canonical numeric and string zero object references normalize deterministically');
     document.details.set(innerRoot.machineId, { m_CustomEmpty: '' });
     const emptyScalarEdited = parseUnityYaml(writeUnityYaml(compileV3(document)));
     const exportedEmptyScalar = readV3(writeV3(emptyScalarEdited, {
@@ -1125,6 +1136,11 @@ console.log('\n=== v3 ownership cold-boundary edits ===');
            JSON.stringify({ fileID: '21300000', guid: externalReference.guid, type: 3 }),
       'existing external reference override exports explicitly without guessing an identity');
     const malformedExternalReferences: Array<[string, Record<string, unknown>]> = [
+      ['zero fileID carrying external GUID and type', {
+        fileID: '0', guid: externalReference.guid, type: 3,
+      }],
+      ['zero fileID carrying an extra key', { fileID: 0, extra: true }],
+      ['missing fileID', { guid: externalReference.guid, type: 3 }],
       ['missing type', { fileID: '21300000', guid: externalReference.guid }],
       ['invalid type', { fileID: '21300000', guid: externalReference.guid, type: 2 }],
       ['invalid GUID', { fileID: '21300000', guid: 'not-a-guid', type: 3 }],
@@ -1150,6 +1166,37 @@ console.log('\n=== v3 ownership cold-boundary edits ===');
         `export rejects an external object reference with ${label}`
       );
     }
+    const malformedNullReferences: Array<[string, unknown]> = [
+      ['a noncanonical zero fileID', { fileID: '00' }],
+      ['an undefined fileID', { fileID: undefined }],
+      ['a null objectReference', null],
+      ['an array objectReference', []],
+      ['an absent objectReference', undefined],
+    ];
+    for (const [label, objectReference] of malformedNullReferences) {
+      const malformedExport = parseUnityYaml(writeUnityYaml(nullEdited));
+      const modification = malformedExport.prefabInstances[0].modifications.find(candidate =>
+        candidate.propertyPath === 'm_Icon' &&
+        String(candidate.target.fileID) === innerRoot.sourceFileId &&
+        candidate.target.guid === innerRoot.sourceGuid
+      )!;
+      modification.objectReference = objectReference as any;
+      expectThrow(
+        () => writeV3(malformedExport, nullExportOptions),
+        'Invalid v3 object reference',
+        `export rejects null-shaped modification with ${label}`
+      );
+    }
+    const absentNameReference = parseUnityYaml(writeUnityYaml(nullEdited));
+    absentNameReference.prefabInstances[0].modifications.push({
+      target: { fileID: innerRoot.sourceFileId!, guid: innerRoot.sourceGuid!, type: 3 },
+      propertyPath: 'm_Name', value: 'MalformedName', objectReference: undefined as any,
+    });
+    expectThrow(
+      () => writeV3(absentNameReference, nullExportOptions),
+      'Invalid v3 object reference',
+      'export validates required objectReference shape before branching on m_Name semantics'
+    );
     document.details.set(innerRoot.machineId, {
       m_Icon: { ...externalReference, fileID: '21300000' },
     });

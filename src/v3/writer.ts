@@ -19,6 +19,28 @@ const STRUCTURAL_FIELDS = new Set([
   'm_Name', 'm_Script',
 ]);
 
+function validateUnityModificationObjectReference(
+  value: unknown,
+  context: string
+): { fileId: string; projected: Record<string, unknown> } {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`Invalid v3 object reference at ${context}.`);
+  }
+  const objectReference = value as Record<string, unknown>;
+  const keys = Object.keys(objectReference);
+  if (keys.length === 1 && keys[0] === 'fileID') {
+    const fileId = typeof objectReference.fileID === 'number'
+      ? (Number.isSafeInteger(objectReference.fileID) ? String(objectReference.fileID) : '')
+      : typeof objectReference.fileID === 'string' && /^(0|-?[1-9]\d*)$/.test(objectReference.fileID)
+        ? objectReference.fileID
+        : '';
+    if (!fileId) throw new Error(`Invalid v3 object reference at ${context}.`);
+    return { fileId, projected: { fileID: fileId } };
+  }
+  const projected = validateV3ExternalObjectReference(objectReference, context);
+  return { fileId: String(projected.fileID), projected };
+}
+
 export function writeV3(file: UnityFile, options: V3WriterOptions = {}): string {
   if (file.type === 'variant') return writeVariantV3(file, options);
   if (file.type !== 'prefab' || !file.hierarchy) throw new Error('writeV3 requires a prefab hierarchy.');
@@ -778,6 +800,9 @@ function buildInheritedVariantRoots(
         modification.propertyPath, `${machineId}.${modification.propertyPath}`
       );
       matchedNestedOverrides.add(key);
+      const normalizedObjectReference = validateUnityModificationObjectReference(
+        modification.objectReference, `${machineId}.${modification.propertyPath}`
+      );
       if (modification.propertyPath === 'm_Name') {
         name = modification.value;
         continue;
@@ -787,17 +812,8 @@ function buildInheritedVariantRoots(
           `Variant nested override ${guid}:${fileId}.${modification.propertyPath} is structural and not supported.`
         );
       }
-      const objectReferenceFileId = String(modification.objectReference?.fileID ?? '0');
-      if (objectReferenceFileId !== '0') {
-        const objectReference = modification.objectReference as unknown as Record<string, unknown>;
-        const keys = Object.keys(objectReference);
-        const projectedReference = Object.prototype.hasOwnProperty.call(objectReference, 'guid') ||
-          keys.length !== 1 || keys[0] !== 'fileID'
-          ? validateV3ExternalObjectReference(
-              objectReference, `${machineId}.${modification.propertyPath}`
-            )
-          : { fileID: objectReferenceFileId };
-        assignProjectedValue(modification.propertyPath, projectedReference);
+      if (normalizedObjectReference.fileId !== '0') {
+        assignProjectedValue(modification.propertyPath, normalizedObjectReference.projected);
         continue;
       }
       const baseline = baselineProperties?.[modification.propertyPath];

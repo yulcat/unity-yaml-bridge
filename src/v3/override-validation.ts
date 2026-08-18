@@ -12,6 +12,11 @@ const UNSAFE_OVERRIDE_PATH_SEGMENTS = new Set([
 
 export function validateV3OverridePropertyPath(propertyPath: string, context: string): string[] {
   const segments = propertyPath.split('.');
+  if (segments.some(segment => segment.length === 0)) {
+    throw new Error(
+      `Inherited nested DETAILS ${context} has an invalid property path segment.`
+    );
+  }
   const unsafeSegment = segments.find(segment => UNSAFE_OVERRIDE_PATH_SEGMENTS.has(segment));
   if (unsafeSegment) {
     throw new Error(

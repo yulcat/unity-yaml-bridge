@@ -902,6 +902,60 @@ console.log('\n=== v3 ownership cold-boundary edits ===');
         const exportedEmptyScalarIdentity = [...exportedEmptyScalar.identity.values()].find(identity => identity.kind === 'gameObject' && identity.sourceGuid === innerRoot.sourceGuid &&
             identity.sourceFileId === innerRoot.sourceFileId);
         assert(exportedEmptyScalar.details.get(exportedEmptyScalarIdentity.machineId)?.m_CustomEmpty === '', 'empty scalar override remains an empty string when the source baseline is not a reference');
+        const fontComponent = [...document.identity.values()].find(identity => identity.kind === 'component' && identity.sourceGuid === innerGuid &&
+            identity.sourceFileId === '6714972992410759118');
+        const dottedNullEdited = (0, unity_yaml_parser_1.parseUnityYaml)((0, unity_yaml_writer_1.writeUnityYaml)(variant));
+        dottedNullEdited.prefabInstances[0].modifications.push({
+            target: { fileID: fontComponent.sourceFileId, guid: fontComponent.sourceGuid, type: 3 },
+            propertyPath: 'm_FontData.m_Font', value: '', objectReference: { fileID: '0' },
+        }, {
+            target: { fileID: fontComponent.sourceFileId, guid: fontComponent.sourceGuid, type: 3 },
+            propertyPath: 'm_FontData.m_FontSize', value: '', objectReference: { fileID: '0' },
+        });
+        const exportedDottedNull = (0, reader_1.readV3)((0, writer_1.writeV3)(dottedNullEdited, nullExportOptions));
+        const exportedFontIdentity = [...exportedDottedNull.identity.values()].find(identity => identity.kind === 'component' && identity.sourceGuid === fontComponent.sourceGuid &&
+            identity.sourceFileId === fontComponent.sourceFileId);
+        const exportedFontDetails = exportedDottedNull.details.get(exportedFontIdentity.machineId);
+        const exportedFontData = exportedFontDetails.m_FontData;
+        const coldDottedNull = (0, unity_yaml_parser_1.parseUnityYaml)((0, unity_yaml_writer_1.writeUnityYaml)((0, compiler_1.compileV3)(exportedDottedNull)));
+        const coldDottedNullDeltas = coldDottedNull.prefabInstances[0].modifications.filter(modification => String(modification.target.fileID) === fontComponent.sourceFileId &&
+            modification.target.guid === fontComponent.sourceGuid);
+        assert(exportedFontDetails['m_FontData.m_Font'] === null &&
+            exportedFontData?.m_FontSize === '' &&
+            coldDottedNullDeltas.some(modification => modification.propertyPath === 'm_FontData.m_Font' && modification.value === '' &&
+                String(modification.objectReference.fileID) === '0') &&
+            coldDottedNullDeltas.some(modification => modification.propertyPath === 'm_FontData.m_FontSize' && modification.value === '' &&
+                String(modification.objectReference.fileID) === '0'), 'dotted null references use the resolved baseline leaf while dotted empty scalars remain scalar');
+        const rawRootDetails = document.details.get(document.variantRootId);
+        const rawNestedModifications = rawRootDetails.m_Modification.m_Modifications;
+        for (const propertyPath of ['m_GameObject', 'm_GameObject.fileID']) {
+            rawNestedModifications.push({
+                target: { fileID: fontComponent.sourceFileId, guid: fontComponent.sourceGuid, type: 3 },
+                propertyPath, value: '', objectReference: { fileID: 0 },
+            });
+            expectThrow(() => (0, compiler_1.compileV3)(document), 'is structural and not supported', `raw inherited nested modification rejects structural ${propertyPath === 'm_GameObject' ? 'roots' : 'descendants'}`);
+            rawNestedModifications.pop();
+        }
+        for (const [propertyPath, expected] of [
+            ['m_Custom..leaf', 'invalid property path segment'],
+            ['m_Custom.__proto__', 'unsafe property path segment'],
+        ]) {
+            rawNestedModifications.push({
+                target: { fileID: fontComponent.sourceFileId, guid: fontComponent.sourceGuid, type: 3 },
+                propertyPath, value: '1', objectReference: { fileID: 0 },
+            });
+            expectThrow(() => (0, compiler_1.compileV3)(document), expected, `raw inherited nested modification rejects ${propertyPath.includes('__proto__') ? 'prototype-sensitive' : 'invalid'} paths`);
+            rawNestedModifications.pop();
+        }
+        rawNestedModifications.push({
+            target: { fileID: fontComponent.sourceFileId, guid: fontComponent.sourceGuid, type: 3 },
+            propertyPath: 'm_Custom', value: '1', objectReference: { fileID: 0 },
+        }, {
+            target: { fileID: fontComponent.sourceFileId, guid: fontComponent.sourceGuid, type: 3 },
+            propertyPath: 'm_Custom.leaf', value: '2', objectReference: { fileID: 0 },
+        });
+        expectThrow(() => (0, compiler_1.compileV3)(document), 'overlaps another property path', 'raw inherited nested modifications reject segment-prefix conflicts');
+        rawNestedModifications.splice(-2);
         const externalReference = {
             fileID: 21300000,
             guid: 'abcdefabcdefabcdefabcdefabcdefab',

@@ -627,7 +627,7 @@ function buildInheritedVariantRoots(rootInstance, sourceGuid, options, identitie
             const details = projectedDetails.get(machineId) ?? Object.create(null);
             const segments = (0, override_validation_1.validateV3OverridePropertyPath)(propertyPath, `${machineId}.${propertyPath}`);
             let baseline = baselineProperties;
-            let groupable = segments.length > 1;
+            let groupable = value !== null && segments.length > 1;
             for (const segment of segments.slice(0, -1)) {
                 if (!baseline || typeof baseline !== 'object' || Array.isArray(baseline) ||
                     Object.prototype.hasOwnProperty.call(baseline, 'fileID') ||
@@ -672,7 +672,7 @@ function buildInheritedVariantRoots(rootInstance, sourceGuid, options, identitie
         for (const [key, modification] of [...nestedOverrides].sort(([left], [right]) => left.localeCompare(right))) {
             if (!key.startsWith(`${guid}:${fileId}:`))
                 continue;
-            (0, override_validation_1.validateV3OverridePropertyPath)(modification.propertyPath, `${machineId}.${modification.propertyPath}`);
+            const segments = (0, override_validation_1.validateV3OverridePropertyPath)(modification.propertyPath, `${machineId}.${modification.propertyPath}`);
             matchedNestedOverrides.add(key);
             const normalizedObjectReference = validateUnityModificationObjectReference(modification.objectReference, `${machineId}.${modification.propertyPath}`);
             if (modification.propertyPath === 'm_Name') {
@@ -686,7 +686,15 @@ function buildInheritedVariantRoots(rootInstance, sourceGuid, options, identitie
                 assignProjectedValue(modification.propertyPath, normalizedObjectReference.projected);
                 continue;
             }
-            const baseline = baselineProperties?.[modification.propertyPath];
+            let baseline = baselineProperties;
+            for (const segment of segments) {
+                if (!baseline || typeof baseline !== 'object' || Array.isArray(baseline) ||
+                    !Object.prototype.hasOwnProperty.call(baseline, segment)) {
+                    baseline = undefined;
+                    break;
+                }
+                baseline = baseline[segment];
+            }
             const baselineIsReference = !!baseline && typeof baseline === 'object' &&
                 !Array.isArray(baseline) && Object.prototype.hasOwnProperty.call(baseline, 'fileID');
             const numeric = Number(modification.value);

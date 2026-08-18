@@ -742,7 +742,7 @@ function buildInheritedVariantRoots(
         propertyPath, `${machineId}.${propertyPath}`
       );
       let baseline: unknown = baselineProperties;
-      let groupable = segments.length > 1;
+      let groupable = value !== null && segments.length > 1;
       for (const segment of segments.slice(0, -1)) {
         if (!baseline || typeof baseline !== 'object' || Array.isArray(baseline) ||
             Object.prototype.hasOwnProperty.call(baseline, 'fileID') ||
@@ -796,7 +796,7 @@ function buildInheritedVariantRoots(
     for (const [key, modification] of [...nestedOverrides].sort(([left], [right]) =>
       left.localeCompare(right))) {
       if (!key.startsWith(`${guid}:${fileId}:`)) continue;
-      validateV3OverridePropertyPath(
+      const segments = validateV3OverridePropertyPath(
         modification.propertyPath, `${machineId}.${modification.propertyPath}`
       );
       matchedNestedOverrides.add(key);
@@ -816,7 +816,15 @@ function buildInheritedVariantRoots(
         assignProjectedValue(modification.propertyPath, normalizedObjectReference.projected);
         continue;
       }
-      const baseline = baselineProperties?.[modification.propertyPath];
+      let baseline: unknown = baselineProperties;
+      for (const segment of segments) {
+        if (!baseline || typeof baseline !== 'object' || Array.isArray(baseline) ||
+            !Object.prototype.hasOwnProperty.call(baseline, segment)) {
+          baseline = undefined;
+          break;
+        }
+        baseline = (baseline as Record<string, unknown>)[segment];
+      }
       const baselineIsReference = !!baseline && typeof baseline === 'object' &&
         !Array.isArray(baseline) && Object.prototype.hasOwnProperty.call(baseline, 'fileID');
       const numeric = Number(modification.value);

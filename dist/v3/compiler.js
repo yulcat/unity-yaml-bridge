@@ -1063,11 +1063,26 @@ function compileVariant(document) {
                 candidate.sourceGuid && candidate.sourceFileId)
                 .map(candidate => `${candidate.sourceGuid}:${candidate.sourceFileId}`));
             if (Array.isArray(modification.m_Modifications)) {
+                const rawNestedPaths = new Map();
                 modification.m_Modifications = modification.m_Modifications.filter(entry => {
                     const targetKey = `${String(entry?.target?.guid ?? '')}:${String(entry?.target?.fileID ?? '0')}`;
+                    if (!nestedTargets.has(targetKey))
+                        return true;
                     const propertyPath = String(entry?.propertyPath ?? '');
-                    return !nestedTargets.has(targetKey) ||
-                        propertyPath !== 'm_Name' && override_validation_1.V3_OVERRIDE_STRUCTURAL_FIELDS.has(propertyPath);
+                    (0, override_validation_1.validateV3OverridePropertyPath)(propertyPath, `${targetKey}.${propertyPath}`);
+                    const existingPaths = rawNestedPaths.get(targetKey) ?? [];
+                    const conflict = existingPaths.find(existing => existing === propertyPath || (0, override_validation_1.pathsHaveSegmentPrefixOverlap)(existing, propertyPath));
+                    if (conflict) {
+                        throw new Error(`Raw inherited nested modification ${targetKey}.${propertyPath} overlaps another property path ${conflict}.`);
+                    }
+                    existingPaths.push(propertyPath);
+                    rawNestedPaths.set(targetKey, existingPaths);
+                    if (propertyPath === 'm_Name')
+                        return false;
+                    if ((0, override_validation_1.isV3OverrideStructuralPath)(propertyPath)) {
+                        throw new Error(`Raw inherited nested modification ${targetKey}.${propertyPath} is structural and not supported.`);
+                    }
+                    return false;
                 });
             }
             for (const override of inheritedNestedOverrides) {

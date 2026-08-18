@@ -7,9 +7,11 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const compact_reader_1 = require("./compact-reader");
 const compact_writer_1 = require("./compact-writer");
-const compact_merger_1 = require("./compact-merger");
 const unity_yaml_parser_1 = require("./unity-yaml-parser");
-const unity_yaml_writer_1 = require("./unity-yaml-writer");
+const compiler_1 = require("./v3/compiler");
+const reader_1 = require("./v3/reader");
+const writer_1 = require("./v3/writer");
+const test_v3_utils_1 = require("./test-v3-utils");
 let totalTests = 0;
 let passedTests = 0;
 function assert(condition, message) {
@@ -126,12 +128,11 @@ MonoBehaviour:
     m_Font: {fileID: 12800000, guid: def456, type: 3}
     m_FontSize: 40
 `;
-    const ast = (0, unity_yaml_parser_1.parseUnityYaml)(yaml);
-    // Write to compact, parse back, merge, write YAML
-    const compactStr = (0, compact_writer_1.writeCompact)(ast);
-    const compactFile = (0, compact_reader_1.readCompact)(compactStr);
-    const merged = (0, compact_merger_1.mergeCompactChanges)(ast, compactFile);
-    const output = (0, unity_yaml_writer_1.writeUnityYaml)(merged);
+    // v3 cold boundary: the compiler receives serialized v3 only.
+    const cold = (0, test_v3_utils_1.coldRoundTripV3)(yaml);
+    const merged = cold.rebuilt;
+    const output = cold.rebuiltText;
+    assert(!(0, test_v3_utils_1.describeSemanticDifference)(cold.original, merged), 'v3 cold-roundtrip preserves nested-property semantics');
     // Verify nested structure is preserved
     const monoBehaviour = merged.documents.find(d => d.typeId === 114);
     assert(monoBehaviour !== undefined, 'MonoBehaviour document found');
@@ -206,26 +207,10 @@ MonoBehaviour:
       HealthPoint: 720
       AttackPoint: 1
 `;
-    const ast = (0, unity_yaml_parser_1.parseUnityYaml)(yaml);
-    const compactStr = (0, compact_writer_1.writeCompact)(ast);
-    const compactFile = (0, compact_reader_1.readCompact)(compactStr);
-    // Edit: change HealthPoint from 720 to 999
-    for (const section of compactFile.sections) {
-        for (const prop of section.properties) {
-            if (prop.key === 'Model' && Array.isArray(prop.value)) {
-                for (const child of prop.value) {
-                    if (child.key === 'CombatProperty' && Array.isArray(child.value)) {
-                        for (const grandchild of child.value) {
-                            if (grandchild.key === 'HealthPoint') {
-                                grandchild.value = '999';
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-    const merged = (0, compact_merger_1.mergeCompactChanges)(ast, compactFile);
+    const v3Text = (0, writer_1.writeV3)((0, unity_yaml_parser_1.parseUnityYaml)(yaml));
+    const editedV3 = v3Text.replace('"HealthPoint":720', '"HealthPoint":999');
+    assert(editedV3 !== v3Text, 'v3 document exposes nested JSON property for editing');
+    const merged = (0, compiler_1.compileV3)((0, reader_1.readV3)(editedV3));
     const mono = merged.documents.find(d => d.typeId === 114);
     assert(mono?.properties.Model?.CombatProperty?.HealthPoint === 999, 'Edited HealthPoint = 999');
     assert(mono?.properties.Model?.CombatProperty?.AttackPoint === 1, 'AttackPoint unchanged = 1');
@@ -298,9 +283,10 @@ MonoBehaviour:
     // Verify array items are properly serialized
     assert(compactStr.includes('name = Sword') || compactStr.includes('name: Sword'), 'Sword item serialized correctly');
     assert(compactStr.includes('damage = 50') || compactStr.includes('damage: 50'), 'damage = 50 serialized correctly');
-    // Roundtrip
-    const compactFile = (0, compact_reader_1.readCompact)(compactStr);
-    const merged = (0, compact_merger_1.mergeCompactChanges)(ast, compactFile);
+    // v3 independent roundtrip
+    const cold = (0, test_v3_utils_1.coldRoundTripV3)(yaml);
+    const merged = cold.rebuilt;
+    assert(!(0, test_v3_utils_1.describeSemanticDifference)(cold.original, merged), 'array-of-objects survives v3 cold-roundtrip');
     const mono = merged.documents.find(d => d.typeId === 114);
     const items = mono?.properties.m_Items;
     assert(Array.isArray(items) && items.length === 2, 'm_Items has 2 items after roundtrip');

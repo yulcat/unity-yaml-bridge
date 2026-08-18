@@ -10,6 +10,10 @@ import { mergeCompactChanges } from './compact-merger';
 import { parseUnityYaml } from './unity-yaml-parser';
 import { writeUnityYaml } from './unity-yaml-writer';
 import { UnityFile, UnityDocument } from './types';
+import { compileV3 } from './v3/compiler';
+import { readV3 } from './v3/reader';
+import { writeV3 } from './v3/writer';
+import { coldRoundTripV3, describeSemanticDifference } from './test-v3-utils';
 
 let totalTests = 0;
 let passedTests = 0;
@@ -138,13 +142,12 @@ MonoBehaviour:
     m_FontSize: 40
 `;
 
-  const ast = parseUnityYaml(yaml);
-
-  // Write to compact, parse back, merge, write YAML
-  const compactStr = writeCompact(ast);
-  const compactFile = readCompact(compactStr);
-  const merged = mergeCompactChanges(ast, compactFile);
-  const output = writeUnityYaml(merged);
+  // v3 cold boundary: the compiler receives serialized v3 only.
+  const cold = coldRoundTripV3(yaml);
+  const merged = cold.rebuilt;
+  const output = cold.rebuiltText;
+  assert(!describeSemanticDifference(cold.original, merged),
+    'v3 cold-roundtrip preserves nested-property semantics');
 
   // Verify nested structure is preserved
   const monoBehaviour = merged.documents.find(d => d.typeId === 114);
@@ -226,28 +229,10 @@ MonoBehaviour:
       AttackPoint: 1
 `;
 
-  const ast = parseUnityYaml(yaml);
-  const compactStr = writeCompact(ast);
-  const compactFile = readCompact(compactStr);
-
-  // Edit: change HealthPoint from 720 to 999
-  for (const section of compactFile.sections) {
-    for (const prop of section.properties) {
-      if (prop.key === 'Model' && Array.isArray(prop.value)) {
-        for (const child of prop.value as CompactProperty[]) {
-          if (child.key === 'CombatProperty' && Array.isArray(child.value)) {
-            for (const grandchild of child.value as CompactProperty[]) {
-              if (grandchild.key === 'HealthPoint') {
-                grandchild.value = '999';
-              }
-            }
-          }
-        }
-      }
-    }
-  }
-
-  const merged = mergeCompactChanges(ast, compactFile);
+  const v3Text = writeV3(parseUnityYaml(yaml));
+  const editedV3 = v3Text.replace('"HealthPoint":720', '"HealthPoint":999');
+  assert(editedV3 !== v3Text, 'v3 document exposes nested JSON property for editing');
+  const merged = compileV3(readV3(editedV3));
   const mono = merged.documents.find(d => d.typeId === 114);
   assert(mono?.properties.Model?.CombatProperty?.HealthPoint === 999, 'Edited HealthPoint = 999');
   assert(mono?.properties.Model?.CombatProperty?.AttackPoint === 1, 'AttackPoint unchanged = 1');
@@ -330,9 +315,11 @@ MonoBehaviour:
   assert(compactStr.includes('damage = 50') || compactStr.includes('damage: 50'),
     'damage = 50 serialized correctly');
 
-  // Roundtrip
-  const compactFile = readCompact(compactStr);
-  const merged = mergeCompactChanges(ast, compactFile);
+  // v3 independent roundtrip
+  const cold = coldRoundTripV3(yaml);
+  const merged = cold.rebuilt;
+  assert(!describeSemanticDifference(cold.original, merged),
+    'array-of-objects survives v3 cold-roundtrip');
   const mono = merged.documents.find(d => d.typeId === 114);
   const items = mono?.properties.m_Items;
   assert(Array.isArray(items) && items.length === 2, 'm_Items has 2 items after roundtrip');

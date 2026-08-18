@@ -1,8 +1,12 @@
 # 🌉 Unity YAML Bridge
 
-> Turn Unity's 10,000-line YAML prefabs into something AI can actually read — and write back perfectly.
+> Turn Unity's 10,000-line YAML prefabs into something AI can actually read and edit.
 
-Unity serializes prefabs, scenes, and assets as YAML files filled with cryptic fileIDs, boilerplate metadata, and flat hierarchies that are hostile to both humans and AI. **Unity YAML Bridge** converts them to a compact, AI-friendly `.ubridge` format — and back again, losslessly.
+Unity serializes prefabs, scenes, and assets as YAML files filled with cryptic fileIDs, boilerplate metadata, and flat hierarchies that are hostile to both humans and AI. **Unity YAML Bridge** converts them to a compact, AI-friendly `.ubridge` format.
+
+The released v1/v2 write path is a lossless patch workflow and still requires
+the original Unity YAML. Experimental v3 is the new standalone desired-state
+format: it compiles local regular prefabs without an original YAML input.
 
 ## The Problem
 
@@ -64,7 +68,8 @@ Background9Slice_Image:Image = 8027481461304769067
 
 - **🌳 Structure + Details separation** — Understand hierarchy at a glance, dive into components only when needed
 - **🔄 Lossless round-trip** — 0 diff lines across 1M+ lines of real Unity YAML
-- **📦 Self-contained files** — REFS section stores all fileIDs; no in-memory state between CLI calls
+- **📦 Stateless v1/v2 edits** — REFS stores target fileIDs between CLI calls; the original YAML remains the merge baseline
+- **🧱 Experimental standalone v3** — local regular prefabs compile from the `.ubridge` document alone
 - **🔖 Optional v2 selectors** — Duplicate sibling names and same-type components get readable, order-stable `#N` aliases
 - **🆕 Auto fileID generation** — Add new GameObjects or components; the tool generates valid fileIDs automatically
 - **🎭 Prefab Variant support** — Base + delta pattern with `*` (modified), `+` (added), `-` (removed) markers
@@ -146,6 +151,8 @@ removed component must be cleared or replaced in the same edit.
 
 Full spec: [docs/FORMAT.md](docs/FORMAT.md)
 
+Experimental standalone v3: [docs/FORMAT_V3.md](docs/FORMAT_V3.md)
+
 ### Collision-safe v2 selectors
 
 Use `writeCompact(ast, { version: 2 })` or `ubridge parse File.prefab --format v2`.
@@ -165,6 +172,23 @@ Numbers are assigned by signed Unity fileID rather than display order. They are
 snapshot-scoped aliases, and write-back validates the exact REFS target before
 applying an edit. v2 is the default; use `version: 1` or `--format v1` for
 legacy output.
+
+### Experimental standalone v3
+
+```bash
+ubridge parse Input.prefab --format v3 -o Input.ubridge
+ubridge compile Input.ubridge -o Rebuilt.prefab
+```
+
+The v3 compiler does not accept `--yaml`. It supports standalone regular-prefab
+reconstruction plus source-backed variant and nested-prefab effective trees,
+including ownership-aware inherited additions/removals, variant chains, recursive
+nested-source expansion, and scalar property overrides. Local GameObjects and components
+can be added beneath recursively expanded inherited nested source roots/internals at any
+resolved depth; v3 emits leaf-owned Unity addition deltas and stripped proxies while
+preserving local IDs across cold roundtrips. Operations that cannot yet be mapped to an
+unambiguous Unity ownership delta fail closed instead of silently falling back to the
+original YAML. See the v3 specification for the exact current boundary.
 
 ## Usage
 

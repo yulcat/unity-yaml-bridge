@@ -4,6 +4,7 @@
  *
  * Usage:
  *   ubridge parse <file.prefab> [--project <path>] [--verbose]
+ *   ubridge compile <file.ubridge> [-o <output.prefab>]
  *   ubridge write <file.ubridge> --yaml <original.prefab> [--project <path>] [-o <output.prefab>]
  */
 
@@ -15,6 +16,9 @@ import { readCompact } from './compact-reader';
 import { mergeCompactChanges } from './compact-merger';
 import { writeUnityYaml } from './unity-yaml-writer';
 import { GuidResolver } from './guid-resolver';
+import { writeV3 } from './v3/writer';
+import { readV3 } from './v3/reader';
+import { compileV3 } from './v3/compiler';
 
 function usage(): void {
   console.log(`unity-yaml-bridge CLI
@@ -28,8 +32,14 @@ Usage:
 
     Options:
       --project <path>   Unity project root for GUID/script resolution
-      --format <v1|v2>  Compact format version (default: v2)
+      --format <v1|v2|v3>  Compact format version (default: v2)
       --verbose          Include all fields (disable boilerplate filtering)
+      -o <file>          Output file (default: stdout)
+
+  ubridge compile <file.ubridge> [options]
+    Compile a standalone v3 .ubridge document without an original YAML file.
+
+    Options:
       -o <file>          Output file (default: stdout)
 
   ubridge write <file.ubridge> --yaml <original.prefab> [options]
@@ -42,6 +52,8 @@ Usage:
 
 Examples:
   ubridge parse Button.prefab --project ./MyUnityProject
+  ubridge parse Button.prefab --format v3 -o Button.v3.ubridge
+  ubridge compile Button.v3.ubridge -o Button.rebuilt.prefab
   ubridge parse Card_Variant.prefab --project ./MyUnityProject -o Card_Variant.ubridge
   ubridge write Card_Variant.ubridge --yaml Card_Variant.prefab -o Card_Variant_modified.prefab
 `);
@@ -100,15 +112,20 @@ function cmdParse(args: string[], flags: Map<string, string>): void {
     options.verbose = true;
   }
   const format = flags.get('--format');
-  if (format && format !== 'v1' && format !== 'v2') {
-    die('--format must be v1 or v2');
+  if (format && format !== 'v1' && format !== 'v2' && format !== 'v3') {
+    die('--format must be v1, v2, or v3');
   }
-  options.version = format === 'v1' ? 1 : 2;
 
   // Parse and convert
   const content = fs.readFileSync(inputPath, 'utf-8');
   const ast = parseUnityYaml(content);
-  const compact = writeCompact(ast, options);
+  let compact: string;
+  if (format === 'v3') {
+    compact = writeV3(ast, { sourceResolver: options.guidResolver });
+  } else {
+    options.version = format === 'v1' ? 1 : 2;
+    compact = writeCompact(ast, options);
+  }
 
   // Output
   const outputPath = flags.get('-o');
@@ -117,6 +134,31 @@ function cmdParse(args: string[], flags: Map<string, string>): void {
     console.error(`Written to ${outputPath}`);
   } else {
     process.stdout.write(compact);
+  }
+}
+
+function cmdCompile(args: string[], flags: Map<string, string>): void {
+  if (args.length === 0) die('compile requires a v3 .ubridge file argument');
+  if (flags.has('--yaml')) die('compile does not accept --yaml; v3 is standalone');
+
+  const ubridgePath = path.resolve(args[0]);
+  if (!fs.existsSync(ubridgePath)) die(`File not found: ${ubridgePath}`);
+  const document = readV3(fs.readFileSync(ubridgePath, 'utf-8'));
+  let resolver: GuidResolver | undefined;
+  const projectPath = flags.get('--project');
+  if (projectPath) {
+    const resolved = path.resolve(projectPath);
+    if (!fs.existsSync(resolved)) die(`Project path not found: ${resolved}`);
+    resolver = new GuidResolver();
+    resolver.scanProject(resolved);
+  }
+  const output = writeUnityYaml(compileV3(document, { sourceResolver: resolver }));
+  const outputPath = flags.get('-o');
+  if (outputPath) {
+    fs.writeFileSync(path.resolve(outputPath), output, 'utf-8');
+    console.error(`Written to ${outputPath}`);
+  } else {
+    process.stdout.write(output);
   }
 }
 
@@ -187,6 +229,9 @@ switch (command) {
   case 'write':
     cmdWrite(args, flags);
     break;
+  case 'compile':
+    cmdCompile(args, flags);
+    break;
   default:
-    die(`Unknown command: ${command}. Use 'parse' or 'write'.`);
+    die(`Unknown command: ${command}. Use 'parse', 'compile', or 'write'.`);
 }

@@ -1,24 +1,19 @@
 /**
- * Round-trip test: Unity YAML → compact → back to YAML
- * Compare original vs round-tripped to measure fidelity.
+ * Round-trip test: Unity YAML → v3 text → cold standalone compile → YAML.
  */
 
 import * as fs from 'fs';
 import * as path from 'path';
 import { parseUnityYaml } from './unity-yaml-parser';
-import { writeCompact } from './compact-writer';
 import { writeUnityYaml } from './unity-yaml-writer';
-import { GuidResolver } from './guid-resolver';
+import { writeV3 } from './v3/writer';
+import { readV3 } from './v3/reader';
+import { compileV3 } from './v3/compiler';
+import { compareLocalPrefabSemantics } from './v3/semantic-normalizer';
 
 const SAMPLES_DIR = path.join(__dirname, '..', 'samples');
 
-// Initialize GUID resolver with project scripts
-const resolver = new GuidResolver();
-const projectPath = path.join(SAMPLES_DIR, 'unity-projects', 'PrefabWorkflows_UIDemo', 'PrefabWorkflows_UIDemo_Project');
-if (fs.existsSync(projectPath)) {
-  resolver.scanProject(projectPath);
-  console.log(`GUID resolver: ${resolver.size} mappings loaded`);
-}
+let failures = 0;
 
 function testFile(filePath: string, label: string): void {
   console.log(`\n${'='.repeat(60)}`);
@@ -41,51 +36,30 @@ function testFile(filePath: string, label: string): void {
     console.log(`    Children: ${countDescendants(ast.hierarchy)}`);
   }
 
-  // Step 2: AST → Compact (with GUID resolution)
-  console.log('\n[2] Writing compact format...');
-  const compact = writeCompact(ast, { guidResolver: resolver });
+  // Step 2: AST → standalone v3 text
+  console.log('\n[2] Writing v3 standalone format...');
+  const compact = writeV3(ast);
   const compactSize = Buffer.byteLength(compact, 'utf-8');
-  console.log(`    Compact size: ${compactSize} bytes`);
+  console.log(`    v3 size: ${compactSize} bytes`);
   console.log(`    Reduction: ${((1 - compactSize / originalSize) * 100).toFixed(1)}%`);
-  console.log('\n--- COMPACT OUTPUT ---');
-  console.log(compact);
-  console.log('--- END ---');
 
-  // Step 3: AST → Unity YAML (round-trip)
-  console.log('\n[3] Writing back to Unity YAML...');
-  const roundTripped = writeUnityYaml(ast);
+  // Step 3: serialized v3 only → fresh parse → compile → Unity YAML
+  console.log('\n[3] Cold-compiling v3 without original YAML...');
+  const roundTripped = writeUnityYaml(compileV3(readV3(String(compact))));
   const roundTrippedSize = Buffer.byteLength(roundTripped, 'utf-8');
   console.log(`    Round-tripped size: ${roundTrippedSize} bytes`);
 
-  // Step 4: Compare
-  console.log('\n[4] Comparing original vs round-tripped...');
-  const origLines = content.split('\n').map(l => l.trimEnd());
-  const rtLines = roundTripped.split('\n').map(l => l.trimEnd());
-
-  let diffs = 0;
-  const maxLines = Math.max(origLines.length, rtLines.length);
-  for (let i = 0; i < maxLines; i++) {
-    const orig = origLines[i] || '';
-    const rt = rtLines[i] || '';
-    if (orig !== rt) {
-      diffs++;
-      if (diffs <= 20) {
-        console.log(`    Line ${i + 1}:`);
-        console.log(`      ORIG: ${orig.substring(0, 100)}`);
-        console.log(`      RT:   ${rt.substring(0, 100)}`);
-      }
-    }
+  // Step 4: semantic comparison and deterministic output
+  console.log('\n[4] Comparing semantic graphs...');
+  const rebuilt = parseUnityYaml(roundTripped);
+  const difference = compareLocalPrefabSemantics(ast, rebuilt);
+  const deterministic = writeUnityYaml(compileV3(readV3(compact))) === roundTripped;
+  if (!difference && deterministic) {
+    console.log('    PASS: semantic equality and deterministic canonical YAML');
+  } else {
+    failures++;
+    console.log(`    FAIL: ${difference ? `${difference.path}: ${JSON.stringify(difference.expected)} != ${JSON.stringify(difference.actual)}` : 'non-deterministic output'}`);
   }
-  console.log(`    Total differing lines: ${diffs} / ${maxLines}`);
-
-  // Save outputs
-  const baseName = path.basename(filePath, path.extname(filePath));
-  const outDir = path.join(SAMPLES_DIR, 'test-output');
-  if (!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true });
-
-  fs.writeFileSync(path.join(outDir, `${baseName}.ubridge`), compact);
-  fs.writeFileSync(path.join(outDir, `${baseName}.roundtrip.yaml`), roundTripped);
-  console.log(`\n    Outputs saved to samples/test-output/`);
 }
 
 function countDescendants(node: { children: any[] }): number {
@@ -93,7 +67,7 @@ function countDescendants(node: { children: any[] }): number {
 }
 
 // Run tests
-console.log('Unity YAML Bridge — Round-trip Test Suite');
+console.log('Unity YAML Bridge — v3 Cold Round-trip Test Suite');
 console.log('=========================================');
 
 // Test 1: Simple prefab (Button)
@@ -112,3 +86,4 @@ testFile(path.join(SAMPLES_DIR, 'variants', 'Ellen_Variant.prefab'), 'Prefab Var
 testFile(path.join(SAMPLES_DIR, 'prefabs', 'RootPrefabInstance.prefab'), 'Variant with added objects (RootPrefabInstance)');
 
 console.log('\n\nAll tests complete.');
+if (failures > 0) process.exit(1);

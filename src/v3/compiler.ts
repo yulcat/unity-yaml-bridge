@@ -322,11 +322,12 @@ function compileVariant(document: V3Document): UnityFile {
   };
 
   const queueInheritedNestedGameObjectRemoval = (identity: V3IdentityRecord): void => {
-    requireEmittedPrefabOwner(identity, 'removal');
+    const ownerId = requireEmittedPrefabOwner(identity, 'removal');
     const duplicate = [...document.identity.values()].find(candidate =>
-      candidate.machineId !== identity.machineId &&
-      removedInheritedNestedGameObjects.has(candidate.machineId) &&
-      candidate.sourceGuid === identity.sourceGuid && candidate.sourceFileId === identity.sourceFileId
+      candidate.machineId !== identity.machineId && candidate.kind === 'gameObject' &&
+      candidate.origin === 'inherited' && candidate.prefabOwnerId &&
+      candidate.sourceGuid === identity.sourceGuid && candidate.sourceFileId === identity.sourceFileId &&
+      requireEmittedPrefabOwner(candidate, 'removal') === ownerId
     );
     if (duplicate) {
       throw new Error(
@@ -343,11 +344,12 @@ function compileVariant(document: V3Document): UnityFile {
   };
 
   const queueInheritedNestedComponentRemoval = (identity: V3IdentityRecord): void => {
-    requireEmittedPrefabOwner(identity, 'removal');
+    const ownerId = requireEmittedPrefabOwner(identity, 'removal');
     const duplicate = [...document.identity.values()].find(candidate =>
-      candidate.machineId !== identity.machineId &&
-      removedInheritedNestedComponents.has(candidate.machineId) &&
-      candidate.sourceGuid === identity.sourceGuid && candidate.sourceFileId === identity.sourceFileId
+      candidate.machineId !== identity.machineId && candidate.kind === 'component' &&
+      candidate.origin === 'inherited' && candidate.prefabOwnerId &&
+      candidate.sourceGuid === identity.sourceGuid && candidate.sourceFileId === identity.sourceFileId &&
+      requireEmittedPrefabOwner(candidate, 'removal') === ownerId
     );
     if (duplicate) {
       throw new Error(

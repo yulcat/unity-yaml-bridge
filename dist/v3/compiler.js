@@ -264,10 +264,11 @@ function compileVariant(document) {
         return ownerId;
     };
     const queueInheritedNestedGameObjectRemoval = (identity) => {
-        requireEmittedPrefabOwner(identity, 'removal');
-        const duplicate = [...document.identity.values()].find(candidate => candidate.machineId !== identity.machineId &&
-            removedInheritedNestedGameObjects.has(candidate.machineId) &&
-            candidate.sourceGuid === identity.sourceGuid && candidate.sourceFileId === identity.sourceFileId);
+        const ownerId = requireEmittedPrefabOwner(identity, 'removal');
+        const duplicate = [...document.identity.values()].find(candidate => candidate.machineId !== identity.machineId && candidate.kind === 'gameObject' &&
+            candidate.origin === 'inherited' && candidate.prefabOwnerId &&
+            candidate.sourceGuid === identity.sourceGuid && candidate.sourceFileId === identity.sourceFileId &&
+            requireEmittedPrefabOwner(candidate, 'removal') === ownerId);
         if (duplicate) {
             throw new Error(`Inherited nested removals ${duplicate.machineId} and ${identity.machineId} have an ambiguous owner/source path.`);
         }
@@ -281,10 +282,11 @@ function compileVariant(document) {
         });
     };
     const queueInheritedNestedComponentRemoval = (identity) => {
-        requireEmittedPrefabOwner(identity, 'removal');
-        const duplicate = [...document.identity.values()].find(candidate => candidate.machineId !== identity.machineId &&
-            removedInheritedNestedComponents.has(candidate.machineId) &&
-            candidate.sourceGuid === identity.sourceGuid && candidate.sourceFileId === identity.sourceFileId);
+        const ownerId = requireEmittedPrefabOwner(identity, 'removal');
+        const duplicate = [...document.identity.values()].find(candidate => candidate.machineId !== identity.machineId && candidate.kind === 'component' &&
+            candidate.origin === 'inherited' && candidate.prefabOwnerId &&
+            candidate.sourceGuid === identity.sourceGuid && candidate.sourceFileId === identity.sourceFileId &&
+            requireEmittedPrefabOwner(candidate, 'removal') === ownerId);
         if (duplicate) {
             throw new Error(`Inherited nested removals ${duplicate.machineId} and ${identity.machineId} have an ambiguous owner/source path.`);
         }

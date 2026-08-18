@@ -862,7 +862,39 @@ console.log('\n=== v3 ownership cold-boundary edits ===');
             deepRemovedComponents[0].guid === removedDeepComponentIdentity.sourceGuid &&
             document.identity.has(removedDeepComponent.machineId) &&
             componentRemoved.documents.length === variant.documents.length, 'removing a recursively expanded inherited nested component emits one leaf-owned source delta and preserves identity');
+        const exportedComponentRemoval = (0, reader_1.readV3)((0, writer_1.writeV3)(componentRemoved, {
+            sourceResolver: {
+                resolveFilePath: guid => guid === outerGuid ? outerPath :
+                    guid === middleGuid ? middlePath : guid === innerGuid ? innerPath : undefined,
+            },
+        }));
+        const recompiledComponentRemoval = (0, unity_yaml_parser_1.parseUnityYaml)((0, unity_yaml_writer_1.writeUnityYaml)((0, compiler_1.compileV3)(exportedComponentRemoval)));
+        const recompiledComponentRemovalDeltas = recompiledComponentRemoval.prefabInstances[0].removedComponents;
+        const exportedRemovedComponentIdentity = [...exportedComponentRemoval.identity.values()].find(identity => identity.kind === 'component' &&
+            identity.sourceGuid === removedDeepComponentIdentity.sourceGuid &&
+            identity.sourceFileId === removedDeepComponentIdentity.sourceFileId);
+        const exportedEffectiveComponentIds = new Set();
+        const collectEffectiveComponentIds = (node) => {
+            node.components.forEach(component => exportedEffectiveComponentIds.add(component.machineId));
+            node.children.forEach(collectEffectiveComponentIds);
+        };
+        exportedComponentRemoval.variantRoots.forEach(collectEffectiveComponentIds);
+        assert(recompiledComponentRemovalDeltas.length === 1 &&
+            String(recompiledComponentRemovalDeltas[0].fileID) ===
+                removedDeepComponentIdentity.sourceFileId &&
+            recompiledComponentRemovalDeltas[0].guid === removedDeepComponentIdentity.sourceGuid &&
+            !!exportedRemovedComponentIdentity &&
+            !exportedEffectiveComponentIds.has(exportedRemovedComponentIdentity.machineId) &&
+            recompiledComponentRemoval.documents.length === variant.documents.length &&
+            !recompiledComponentRemoval.documents.some(item => item.fileId === removedDeepComponentIdentity.sourceFileId), 'an existing deep nested component removal exports and cold-roundtrips without source documents');
         innerBoundary.components.push(removedDeepComponent);
+        document.identity.set('singleSidedDuplicateNestedComponent', {
+            ...removedDeepComponentIdentity,
+            machineId: 'singleSidedDuplicateNestedComponent',
+            baselineOrder: (removedDeepComponentIdentity.baselineOrder ?? 0) + 1,
+        });
+        expectThrow(() => (0, compiler_1.compileV3)(document), 'ambiguous owner/source path', 'single-sided duplicate nested component removal target fails closed');
+        document.identity.delete('singleSidedDuplicateNestedComponent');
         const outerComponentIndex = outerBoundary.components.findIndex(component => component.machineId !== removedDeepComponent.machineId);
         const ambiguousOuterComponent = outerBoundary.components[outerComponentIndex];
         const ambiguousOuterComponentIdentity = document.identity.get(ambiguousOuterComponent.machineId);
@@ -919,7 +951,52 @@ console.log('\n=== v3 ownership cold-boundary edits ===');
             deepRemovedDeltas[0].guid === removedDeepIdentity.sourceGuid &&
             [...removedDeepDescendantIds].every(machineId => document.identity.has(machineId)) &&
             deeplyRemoved.documents.length === variant.documents.length, 'removing a recursively expanded inherited nested subtree emits one leaf-owned source delta and preserves identities');
+        const exportedDeepRemoval = (0, reader_1.readV3)((0, writer_1.writeV3)(deeplyRemoved, {
+            sourceResolver: {
+                resolveFilePath: guid => guid === outerGuid ? outerPath :
+                    guid === middleGuid ? middlePath : guid === innerGuid ? innerPath : undefined,
+            },
+        }));
+        const recompiledDeepRemoval = (0, unity_yaml_parser_1.parseUnityYaml)((0, unity_yaml_writer_1.writeUnityYaml)((0, compiler_1.compileV3)(exportedDeepRemoval)));
+        const recompiledDeepRemovalDeltas = recompiledDeepRemoval.prefabInstances[0].removedGameObjects;
+        const exportedRemovedIdentity = [...exportedDeepRemoval.identity.values()].find(identity => identity.kind === 'gameObject' && identity.sourceGuid === removedDeepIdentity.sourceGuid &&
+            identity.sourceFileId === removedDeepIdentity.sourceFileId);
+        const exportedNodes = new Map();
+        const collectExportedNodes = (node) => {
+            exportedNodes.set(node.machineId, node);
+            node.children.forEach(collectExportedNodes);
+        };
+        exportedDeepRemoval.variantRoots.forEach(collectExportedNodes);
+        const exportedRemovalNode = exportedRemovedIdentity &&
+            exportedNodes.get(exportedRemovedIdentity.machineId);
+        assert(recompiledDeepRemovalDeltas.length === 1 &&
+            String(recompiledDeepRemovalDeltas[0].fileID) === removedDeepIdentity.sourceFileId &&
+            recompiledDeepRemovalDeltas[0].guid === removedDeepIdentity.sourceGuid &&
+            exportedRemovalNode?.tombstone === true && exportedRemovalNode.children.length === 0 &&
+            recompiledDeepRemoval.documents.length === variant.documents.length &&
+            !recompiledDeepRemoval.documents.some(item => item.fileId === removedDeepIdentity.sourceFileId ||
+                item.fileId === removedDeepTransformIdentity.sourceFileId), 'an existing deep nested GameObject removal exports and cold-roundtrips without source documents');
         innerBoundary.children.unshift(removedDeepChild);
+        document.identity.set('singleSidedDuplicateNestedGo', {
+            ...removedDeepIdentity,
+            machineId: 'singleSidedDuplicateNestedGo',
+        });
+        document.identity.set('singleSidedDuplicateNestedTransform', {
+            ...removedDeepTransformIdentity,
+            machineId: 'singleSidedDuplicateNestedTransform',
+            ownerId: 'singleSidedDuplicateNestedGo',
+        });
+        innerBoundary.children.push({
+            name: removedDeepChild.name,
+            machineId: 'singleSidedDuplicateNestedGo',
+            components: [],
+            children: [],
+            tombstone: true,
+        });
+        expectThrow(() => (0, compiler_1.compileV3)(document), 'ambiguous owner/source path', 'single-sided duplicate nested GameObject removal target fails closed');
+        innerBoundary.children.pop();
+        document.identity.delete('singleSidedDuplicateNestedGo');
+        document.identity.delete('singleSidedDuplicateNestedTransform');
         const innerBoundaryIndex = outerBoundary.children.indexOf(innerBoundary);
         outerBoundary.children.splice(innerBoundaryIndex, 1);
         const sourceRootRemoved = (0, unity_yaml_parser_1.parseUnityYaml)((0, unity_yaml_writer_1.writeUnityYaml)((0, compiler_1.compileV3)(document)));
@@ -1272,6 +1349,38 @@ console.log('\n=== v3 ownership cold-boundary edits ===');
     assert(String(added.targetCorrespondingSourceObject.fileID) === inheritedTransform.sourceFileId &&
         added.targetCorrespondingSourceObject.guid === inheritedTransform.sourceGuid &&
         String(added.addedObject.fileID) === addedTransform.fileId, 'adding a local child beneath inherited hierarchy compiles to m_AddedGameObjects');
+}
+{
+    const document = (0, reader_1.readV3)(sourceBackedVariantText());
+    const inheritedRoot = document.variantRoots[0];
+    document.identity.set('gCombinedAdded', {
+        machineId: 'gCombinedAdded', kind: 'gameObject', typeId: 1, typeName: 'GameObject',
+        prefabOwnerId: document.variantRootId,
+    });
+    document.identity.set('tCombinedAdded', {
+        machineId: 'tCombinedAdded', kind: 'transform', typeId: 224, typeName: 'RectTransform',
+        ownerId: 'gCombinedAdded', prefabOwnerId: document.variantRootId,
+    });
+    document.identity.set('cCombinedAdded', {
+        machineId: 'cCombinedAdded', kind: 'component', typeId: 65, typeName: 'BoxCollider',
+        displayName: 'BoxCollider', ownerId: 'gCombinedAdded', prefabOwnerId: document.variantRootId,
+    });
+    document.details.set('cCombinedAdded', {
+        m_Enabled: 1, serializedVersion: 3,
+        m_Size: { x: 1, y: 1, z: 1 }, m_Center: { x: 0, y: 0, z: 0 },
+    });
+    inheritedRoot.children.push({
+        name: 'CombinedAdded', machineId: 'gCombinedAdded',
+        components: [{ typeName: 'BoxCollider', machineId: 'cCombinedAdded' }], children: [],
+    });
+    const rebuilt = (0, unity_yaml_parser_1.parseUnityYaml)((0, unity_yaml_writer_1.writeUnityYaml)((0, compiler_1.compileV3)(document)));
+    const instance = rebuilt.documents.find(item => item.typeId === 1001);
+    const modification = instance.properties.m_Modification;
+    const addedGameObject = rebuilt.documents.find(item => item.properties.m_Name === 'CombinedAdded');
+    const addedComponent = rebuilt.documents.find(item => item.typeId === 65 &&
+        String(item.properties.m_GameObject?.fileID) === addedGameObject.fileId);
+    assert(modification.m_AddedGameObjects.length === 1 &&
+        modification.m_AddedComponents.length === 0 && !!addedComponent, 'one edit can add a local child with a local component below inherited hierarchy');
 }
 {
     const v3Text = (0, writer_1.writeV3)((0, unity_yaml_parser_1.parseUnityYaml)(sample('prefabs', 'RootPrefabInstance.prefab')));

@@ -487,10 +487,12 @@ function buildInheritedVariantRoots(rootInstance, sourceGuid, options, identitie
         const result = new Set();
         for (const reference of references) {
             const fileId = String(reference.fileID ?? '0');
-            if (String(reference.guid ?? '') !== sourceGuid || fileId === '0' || result.has(fileId)) {
+            const guid = String(reference.guid ?? '');
+            const key = `${guid}:${fileId}`;
+            if (!guid || fileId === '0' || result.has(key)) {
                 throw new Error(`Variant root ${rootInstance.fileId} has ambiguous ${label} ownership for ${fileId}.`);
             }
-            result.add(fileId);
+            result.add(key);
         }
         return result;
     };
@@ -498,6 +500,16 @@ function buildInheritedVariantRoots(rootInstance, sourceGuid, options, identitie
     const matchedRemovedGameObjectIds = new Set();
     const removedComponentIds = collectDirectRemovals(rootInstance.removedComponents, 'removed-component');
     const matchedRemovedComponentIds = new Set();
+    const matchRemoval = (removals, matched, guid, fileId, label) => {
+        const key = `${guid}:${fileId}`;
+        if (!removals.has(key))
+            return false;
+        if (matched.has(key)) {
+            throw new Error(`Variant root ${rootInstance.fileId} has ambiguous ${label} ownership for ${key}.`);
+        }
+        matched.add(key);
+        return true;
+    };
     const directSourceModificationKeys = new Set();
     for (const modification of rootInstance.modifications) {
         if (String(modification.target.guid ?? '') !== sourceGuid)
@@ -642,6 +654,7 @@ function buildInheritedVariantRoots(rootInstance, sourceGuid, options, identitie
         }
         const goId = `ig${++gameObjectIndex}`;
         const transformId = `it${++transformIndex}`;
+        const tombstone = matchRemoval(removedGameObjectIds, matchedRemovedGameObjectIds, nestedSourceGuid, node.fileId, 'removed-GameObject');
         identities.set(goId, {
             machineId: goId,
             kind: 'gameObject',
@@ -667,7 +680,7 @@ function buildInheritedVariantRoots(rootInstance, sourceGuid, options, identitie
             sourceGuid: nestedSourceGuid,
             sourceFileId: node.transform.fileId,
         });
-        const components = node.components.map((component, index) => {
+        const components = node.components.flatMap((component, index) => {
             const sourceDocument = nestedDocuments.get(component.fileId);
             if (!sourceDocument) {
                 throw new Error(`Inherited nested component ${component.fileId} is missing from source ${nestedSourceGuid}.`);
@@ -688,14 +701,18 @@ function buildInheritedVariantRoots(rootInstance, sourceGuid, options, identitie
                 sourceFileId: component.fileId,
             });
             projectNestedOverrides(componentId, nestedSourceGuid, component.fileId);
+            if (matchRemoval(removedComponentIds, matchedRemovedComponentIds, nestedSourceGuid, component.fileId, 'removed-component'))
+                return [];
             return { typeName: component.typeName, machineId: componentId };
         });
         projectAddedComponents(goId, nestedSourceGuid, node.fileId, components);
+        const children = node.children.map((child, index) => buildNestedInternal(child, nestedSourceGuid, prefabOwnerId, nestedDocuments, transformId, index, resolvingSources));
         return {
             name: effectiveName,
             machineId: goId,
             components,
-            children: node.children.map((child, index) => buildNestedInternal(child, nestedSourceGuid, prefabOwnerId, nestedDocuments, transformId, index, resolvingSources)),
+            children: tombstone ? [] : children,
+            tombstone,
         };
     };
     const build = (node, parentTransformMachineId, siblingIndex = 0) => {
@@ -752,9 +769,7 @@ function buildInheritedVariantRoots(rootInstance, sourceGuid, options, identitie
         }
         const goId = `ig${++gameObjectIndex}`;
         const transformId = `it${++transformIndex}`;
-        const tombstone = removedGameObjectIds.has(node.fileId);
-        if (tombstone)
-            matchedRemovedGameObjectIds.add(node.fileId);
+        const tombstone = matchRemoval(removedGameObjectIds, matchedRemovedGameObjectIds, sourceGuid, node.fileId, 'removed-GameObject');
         identities.set(goId, {
             machineId: goId,
             kind: 'gameObject',
@@ -795,8 +810,7 @@ function buildInheritedVariantRoots(rootInstance, sourceGuid, options, identitie
                 sourceGuid,
                 sourceFileId: component.fileId,
             });
-            if (removedComponentIds.has(component.fileId)) {
-                matchedRemovedComponentIds.add(component.fileId);
+            if (matchRemoval(removedComponentIds, matchedRemovedComponentIds, sourceGuid, component.fileId, 'removed-component')) {
                 return [];
             }
             return { typeName: component.typeName, machineId: componentId };
@@ -816,14 +830,14 @@ function buildInheritedVariantRoots(rootInstance, sourceGuid, options, identitie
         throw new Error(`Added component target ${addedComponentsBySourceGameObject.keys().next().value} ` +
             `is missing from the direct source ${sourceGuid}.`);
     }
-    for (const fileId of removedGameObjectIds) {
-        if (!matchedRemovedGameObjectIds.has(fileId)) {
-            throw new Error(`Removed inherited GameObject ${fileId} is missing from source ${sourceGuid}.`);
+    for (const key of removedGameObjectIds) {
+        if (!matchedRemovedGameObjectIds.has(key)) {
+            throw new Error(`Removed inherited GameObject ${key} is missing from the expanded source graph.`);
         }
     }
-    for (const fileId of removedComponentIds) {
-        if (!matchedRemovedComponentIds.has(fileId)) {
-            throw new Error(`Removed inherited component ${fileId} is missing from source ${sourceGuid}.`);
+    for (const key of removedComponentIds) {
+        if (!matchedRemovedComponentIds.has(key)) {
+            throw new Error(`Removed inherited component ${key} is missing from the expanded source graph.`);
         }
     }
     for (const key of nestedOverrides.keys()) {

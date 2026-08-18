@@ -3,7 +3,11 @@ import { readFileSync } from 'fs';
 import { UnityDocument, UnityFile } from '../types';
 import { V3CompileOptions, V3Document, V3IdentityRecord, V3StructureNode } from './model';
 import { markCanonicalFlowMappings } from './value';
-import { resolveV3OverrideReference, resolveV3References } from './references';
+import {
+  resolveV3OverrideReference,
+  resolveV3References,
+  validateV3ExternalObjectReference,
+} from './references';
 import {
   isV3OverrideStructuralPath,
   pathsHaveSegmentPrefixOverlap,
@@ -295,6 +299,24 @@ function applyNestedInstancePlan(
     }
   }
   return properties;
+}
+
+function validateRawModificationObjectReference(value: unknown, context: string): void {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`Invalid v3 object reference at ${context}.`);
+  }
+  const objectReference = value as Record<string, unknown>;
+  const keys = Object.keys(objectReference);
+  if (keys.length === 1 && keys[0] === 'fileID') {
+    const fileId = typeof objectReference.fileID === 'number'
+      ? (Number.isSafeInteger(objectReference.fileID) ? String(objectReference.fileID) : '')
+      : typeof objectReference.fileID === 'string' && /^(0|-?[1-9]\d*)$/.test(objectReference.fileID)
+        ? objectReference.fileID
+        : '';
+    if (!fileId) throw new Error(`Invalid v3 object reference at ${context}.`);
+    return;
+  }
+  validateV3ExternalObjectReference(objectReference, context);
 }
 
 function upsertModification(
@@ -1233,34 +1255,64 @@ function compileVariant(document: V3Document): UnityFile {
       modification.m_RemovedComponents = removedComponents;
       modification.m_AddedGameObjects = addedGameObjects;
       modification.m_AddedComponents = addedComponents;
-      const nestedTargets = new Set([...document.identity.values()]
-        .filter(candidate => candidate.origin === 'inherited' && candidate.prefabOwnerId &&
-          candidate.sourceGuid && candidate.sourceFileId)
-        .map(candidate => `${candidate.sourceGuid}:${candidate.sourceFileId}`));
+      const inheritedSourceTargets = new Map<string, number>();
+      const inheritedSourceGuids = new Set<string>();
+      const nestedSourceGuids = new Set<string>();
+      const nestedTargets = new Set<string>();
+      for (const candidate of document.identity.values()) {
+        if (candidate.origin !== 'inherited' || !candidate.sourceGuid) continue;
+        inheritedSourceGuids.add(candidate.sourceGuid);
+        if (!candidate.sourceFileId) continue;
+        const sourceKey = `${candidate.sourceGuid}:${candidate.sourceFileId}`;
+        inheritedSourceTargets.set(sourceKey, (inheritedSourceTargets.get(sourceKey) ?? 0) + 1);
+        if (candidate.prefabOwnerId) {
+          nestedSourceGuids.add(candidate.sourceGuid);
+          nestedTargets.add(sourceKey);
+        }
+      }
+      if (document.baseGuid) inheritedSourceGuids.add(document.baseGuid);
       if (Array.isArray(modification.m_Modifications)) {
-        const rawNestedPaths = new Map<string, string[]>();
+        const rawSourcePaths = new Map<string, string[]>();
         modification.m_Modifications = (modification.m_Modifications as any[]).filter(entry => {
-          const targetKey = `${String(entry?.target?.guid ?? '')}:${String(entry?.target?.fileID ?? '0')}`;
-          if (!nestedTargets.has(targetKey)) return true;
+          const targetGuid = String(entry?.target?.guid ?? '');
+          const targetKey = `${targetGuid}:${String(entry?.target?.fileID ?? '0')}`;
           const propertyPath = String(entry?.propertyPath ?? '');
-          validateV3OverridePropertyPath(propertyPath, `${targetKey}.${propertyPath}`);
-          const existingPaths = rawNestedPaths.get(targetKey) ?? [];
-          const conflict = existingPaths.find(existing =>
-            existing === propertyPath || pathsHaveSegmentPrefixOverlap(existing, propertyPath)
-          );
-          if (conflict) {
-            throw new Error(
-              `Raw inherited nested modification ${targetKey}.${propertyPath} overlaps another property path ${conflict}.`
+          if (inheritedSourceGuids.has(targetGuid)) {
+            validateV3OverridePropertyPath(propertyPath, `${targetKey}.${propertyPath}`);
+            if (nestedSourceGuids.has(targetGuid) && propertyPath !== 'm_Name' &&
+                isV3OverrideStructuralPath(propertyPath)) {
+              throw new Error(
+                `Raw inherited nested modification ${targetKey}.${propertyPath} is structural and not supported.`
+              );
+            }
+            validateRawModificationObjectReference(
+              entry?.objectReference,
+              `${targetKey}.${propertyPath}`
             );
-          }
-          existingPaths.push(propertyPath);
-          rawNestedPaths.set(targetKey, existingPaths);
-          if (propertyPath === 'm_Name') return false;
-          if (isV3OverrideStructuralPath(propertyPath)) {
-            throw new Error(
-              `Raw inherited nested modification ${targetKey}.${propertyPath} is structural and not supported.`
+            const existingPaths = rawSourcePaths.get(targetKey) ?? [];
+            const conflict = existingPaths.find(existing =>
+              existing === propertyPath || pathsHaveSegmentPrefixOverlap(existing, propertyPath)
             );
+            if (conflict) {
+              throw new Error(
+                `Raw inherited modification ${targetKey}.${propertyPath} overlaps another property path ${conflict}.`
+              );
+            }
+            existingPaths.push(propertyPath);
+            rawSourcePaths.set(targetKey, existingPaths);
+            const targetCount = inheritedSourceTargets.get(targetKey) ?? 0;
+            if (targetCount === 0) {
+              throw new Error(
+                `Raw inherited modification target ${targetKey} does not resolve to an inherited source identity.`
+              );
+            }
+            if (targetCount !== 1) {
+              throw new Error(
+                `Raw inherited modification target ${targetKey} resolves ambiguously to inherited source identities.`
+              );
+            }
           }
+          if (!nestedTargets.has(targetKey)) return true;
           return false;
         });
       }

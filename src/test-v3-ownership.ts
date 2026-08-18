@@ -192,8 +192,44 @@ console.log('\n=== v3 ownership cold-boundary edits ===');
 
   const details: any = document.details.get(document.variantRootId!);
   const modifications: any[] = details.m_Modification.m_Modifications;
+  modifications.push({
+    target: { fileID: 999999, guid: sourceGuid, type: 3 },
+    propertyPath: 'm_CustomScalar', value: '123', objectReference: { fileID: 0 },
+  });
+  expectThrow(
+    () => compileV3(document),
+    'does not resolve to an inherited source identity',
+    'dangling direct-source raw scalar modifications fail closed'
+  );
+  modifications.pop();
   const name = modifications.find(modification => modification.propertyPath === 'm_Name');
   assert(name?.value === 'Ellen', 'variant name override is present in standalone DETAILS');
+  const externalReference = {
+    fileID: 21300000, guid: 'abcdefabcdefabcdefabcdefabcdefab', type: 3,
+  };
+  modifications.push(
+    {
+      target: { ...name.target }, propertyPath: 'm_CustomScalar',
+      value: '123', objectReference: { fileID: 0 },
+    },
+    {
+      target: { ...name.target }, propertyPath: 'm_CustomReference',
+      value: '', objectReference: externalReference,
+    }
+  );
+  const validRawRebuilt = parseUnityYaml(writeUnityYaml(compileV3(document)));
+  const validRawScalar = validRawRebuilt.prefabInstances[0].modifications.find(modification =>
+    modification.propertyPath === 'm_CustomScalar'
+  );
+  const validRawReference = validRawRebuilt.prefabInstances[0].modifications.find(modification =>
+    modification.propertyPath === 'm_CustomReference'
+  );
+  assert(validRawScalar?.value === '123' &&
+         String(validRawScalar.objectReference.fileID) === '0' &&
+         validRawReference?.value === '' &&
+         JSON.stringify(validRawReference.objectReference) === JSON.stringify(externalReference),
+    'valid direct-source raw scalar and object-reference modifications compile unchanged');
+  modifications.splice(-2);
   name.value = 'Ellen_v3_edited';
 
   // Only the parsed v3 document enters compileV3.
@@ -1144,6 +1180,49 @@ console.log('\n=== v3 ownership cold-boundary edits ===');
 
     const rawRootDetails: any = document.details.get(document.variantRootId!)!;
     const rawNestedModifications: any[] = rawRootDetails.m_Modification.m_Modifications;
+    for (const [propertyPath, expected] of [
+      ['m_GameObject.fileID', 'is structural and not supported'],
+      ['m_Custom.__proto__', 'unsafe property path segment'],
+    ]) {
+      rawNestedModifications.push({
+        target: { fileID: 999999, guid: innerGuid, type: 3 },
+        propertyPath, value: '123', objectReference: { fileID: 0 },
+      });
+      expectThrow(
+        () => compileV3(document), expected,
+        `dangling inherited nested raw modifications validate ${propertyPath.startsWith('m_GameObject') ? 'structural' : 'unsafe'} paths before target resolution`
+      );
+      rawNestedModifications.pop();
+    }
+    rawNestedModifications.push({
+      target: { fileID: 999999, guid: innerGuid, type: 3 },
+      propertyPath: 'm_CustomScalar', value: '123', objectReference: { fileID: 0 },
+    });
+    expectThrow(
+      () => compileV3(document),
+      'does not resolve to an inherited source identity',
+      'dangling inherited nested raw scalar modifications fail closed'
+    );
+    rawNestedModifications.pop();
+    const malformedRawReferences: Array<[string, unknown, boolean]> = [
+      ['null', null, false],
+      ['absent', undefined, true],
+      ['array', [], false],
+    ];
+    for (const [label, objectReference, omit] of malformedRawReferences) {
+      const rawModification: any = {
+        target: { fileID: fontComponent.sourceFileId!, guid: fontComponent.sourceGuid!, type: 3 },
+        propertyPath: 'm_CustomMalformedReference', value: '123', objectReference,
+      };
+      if (omit) delete rawModification.objectReference;
+      rawNestedModifications.push(rawModification);
+      expectThrow(
+        () => compileV3(document),
+        'Invalid v3 object reference',
+        `raw inherited nested modification rejects ${label} objectReference before projection`
+      );
+      rawNestedModifications.pop();
+    }
     for (const propertyPath of ['m_GameObject', 'm_GameObject.fileID']) {
       rawNestedModifications.push({
         target: { fileID: fontComponent.sourceFileId!, guid: fontComponent.sourceGuid!, type: 3 },

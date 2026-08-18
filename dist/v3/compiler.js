@@ -248,6 +248,24 @@ function applyNestedInstancePlan(document, identity, plan, properties) {
     }
     return properties;
 }
+function validateRawModificationObjectReference(value, context) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        throw new Error(`Invalid v3 object reference at ${context}.`);
+    }
+    const objectReference = value;
+    const keys = Object.keys(objectReference);
+    if (keys.length === 1 && keys[0] === 'fileID') {
+        const fileId = typeof objectReference.fileID === 'number'
+            ? (Number.isSafeInteger(objectReference.fileID) ? String(objectReference.fileID) : '')
+            : typeof objectReference.fileID === 'string' && /^(0|-?[1-9]\d*)$/.test(objectReference.fileID)
+                ? objectReference.fileID
+                : '';
+        if (!fileId)
+            throw new Error(`Invalid v3 object reference at ${context}.`);
+        return;
+    }
+    (0, references_1.validateV3ExternalObjectReference)(objectReference, context);
+}
 function upsertModification(modifications, target, propertyPath, value, objectReference = { fileID: 0 }) {
     const targetFileId = String(target.fileID ?? '0');
     const targetGuid = String(target.guid ?? '');
@@ -1058,30 +1076,55 @@ function compileVariant(document) {
             modification.m_RemovedComponents = removedComponents;
             modification.m_AddedGameObjects = addedGameObjects;
             modification.m_AddedComponents = addedComponents;
-            const nestedTargets = new Set([...document.identity.values()]
-                .filter(candidate => candidate.origin === 'inherited' && candidate.prefabOwnerId &&
-                candidate.sourceGuid && candidate.sourceFileId)
-                .map(candidate => `${candidate.sourceGuid}:${candidate.sourceFileId}`));
+            const inheritedSourceTargets = new Map();
+            const inheritedSourceGuids = new Set();
+            const nestedSourceGuids = new Set();
+            const nestedTargets = new Set();
+            for (const candidate of document.identity.values()) {
+                if (candidate.origin !== 'inherited' || !candidate.sourceGuid)
+                    continue;
+                inheritedSourceGuids.add(candidate.sourceGuid);
+                if (!candidate.sourceFileId)
+                    continue;
+                const sourceKey = `${candidate.sourceGuid}:${candidate.sourceFileId}`;
+                inheritedSourceTargets.set(sourceKey, (inheritedSourceTargets.get(sourceKey) ?? 0) + 1);
+                if (candidate.prefabOwnerId) {
+                    nestedSourceGuids.add(candidate.sourceGuid);
+                    nestedTargets.add(sourceKey);
+                }
+            }
+            if (document.baseGuid)
+                inheritedSourceGuids.add(document.baseGuid);
             if (Array.isArray(modification.m_Modifications)) {
-                const rawNestedPaths = new Map();
+                const rawSourcePaths = new Map();
                 modification.m_Modifications = modification.m_Modifications.filter(entry => {
-                    const targetKey = `${String(entry?.target?.guid ?? '')}:${String(entry?.target?.fileID ?? '0')}`;
+                    const targetGuid = String(entry?.target?.guid ?? '');
+                    const targetKey = `${targetGuid}:${String(entry?.target?.fileID ?? '0')}`;
+                    const propertyPath = String(entry?.propertyPath ?? '');
+                    if (inheritedSourceGuids.has(targetGuid)) {
+                        (0, override_validation_1.validateV3OverridePropertyPath)(propertyPath, `${targetKey}.${propertyPath}`);
+                        if (nestedSourceGuids.has(targetGuid) && propertyPath !== 'm_Name' &&
+                            (0, override_validation_1.isV3OverrideStructuralPath)(propertyPath)) {
+                            throw new Error(`Raw inherited nested modification ${targetKey}.${propertyPath} is structural and not supported.`);
+                        }
+                        validateRawModificationObjectReference(entry?.objectReference, `${targetKey}.${propertyPath}`);
+                        const existingPaths = rawSourcePaths.get(targetKey) ?? [];
+                        const conflict = existingPaths.find(existing => existing === propertyPath || (0, override_validation_1.pathsHaveSegmentPrefixOverlap)(existing, propertyPath));
+                        if (conflict) {
+                            throw new Error(`Raw inherited modification ${targetKey}.${propertyPath} overlaps another property path ${conflict}.`);
+                        }
+                        existingPaths.push(propertyPath);
+                        rawSourcePaths.set(targetKey, existingPaths);
+                        const targetCount = inheritedSourceTargets.get(targetKey) ?? 0;
+                        if (targetCount === 0) {
+                            throw new Error(`Raw inherited modification target ${targetKey} does not resolve to an inherited source identity.`);
+                        }
+                        if (targetCount !== 1) {
+                            throw new Error(`Raw inherited modification target ${targetKey} resolves ambiguously to inherited source identities.`);
+                        }
+                    }
                     if (!nestedTargets.has(targetKey))
                         return true;
-                    const propertyPath = String(entry?.propertyPath ?? '');
-                    (0, override_validation_1.validateV3OverridePropertyPath)(propertyPath, `${targetKey}.${propertyPath}`);
-                    const existingPaths = rawNestedPaths.get(targetKey) ?? [];
-                    const conflict = existingPaths.find(existing => existing === propertyPath || (0, override_validation_1.pathsHaveSegmentPrefixOverlap)(existing, propertyPath));
-                    if (conflict) {
-                        throw new Error(`Raw inherited nested modification ${targetKey}.${propertyPath} overlaps another property path ${conflict}.`);
-                    }
-                    existingPaths.push(propertyPath);
-                    rawNestedPaths.set(targetKey, existingPaths);
-                    if (propertyPath === 'm_Name')
-                        return false;
-                    if ((0, override_validation_1.isV3OverrideStructuralPath)(propertyPath)) {
-                        throw new Error(`Raw inherited nested modification ${targetKey}.${propertyPath} is structural and not supported.`);
-                    }
                     return false;
                 });
             }

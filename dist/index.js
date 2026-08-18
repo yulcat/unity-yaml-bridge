@@ -14,7 +14,7 @@ var __exportStar = (this && this.__exportStar) || function(m, exports) {
     for (var p in m) if (p !== "default" && !Object.prototype.hasOwnProperty.call(exports, p)) __createBinding(exports, m, p);
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.resolveV3References = exports.encodeV3References = exports.compareLocalPrefabSemantics = exports.normalizeLocalPrefab = exports.compileV3 = exports.writeV3 = exports.readV3 = exports.GuidResolver = exports.writeUnityYaml = exports.mergeCompactChanges = exports.parseCompactValue = exports.readCompact = exports.writeCompact = exports.parseUnityYaml = void 0;
+exports.resolveV3References = exports.encodeV3References = exports.compareLocalPrefabSemantics = exports.normalizeLocalPrefab = exports.V3_STABLE_PROFILE = exports.compileV3 = exports.writeV3 = exports.readV3 = exports.GuidResolver = exports.writeUnityYaml = exports.mergeCompactChanges = exports.parseCompactValue = exports.readCompact = exports.writeCompact = exports.parseUnityYaml = void 0;
 var unity_yaml_parser_1 = require("./unity-yaml-parser");
 Object.defineProperty(exports, "parseUnityYaml", { enumerable: true, get: function () { return unity_yaml_parser_1.parseUnityYaml; } });
 var compact_writer_1 = require("./compact-writer");
@@ -34,6 +34,8 @@ var writer_1 = require("./v3/writer");
 Object.defineProperty(exports, "writeV3", { enumerable: true, get: function () { return writer_1.writeV3; } });
 var compiler_1 = require("./v3/compiler");
 Object.defineProperty(exports, "compileV3", { enumerable: true, get: function () { return compiler_1.compileV3; } });
+var model_1 = require("./v3/model");
+Object.defineProperty(exports, "V3_STABLE_PROFILE", { enumerable: true, get: function () { return model_1.V3_STABLE_PROFILE; } });
 var semantic_normalizer_1 = require("./v3/semantic-normalizer");
 Object.defineProperty(exports, "normalizeLocalPrefab", { enumerable: true, get: function () { return semantic_normalizer_1.normalizeLocalPrefab; } });
 Object.defineProperty(exports, "compareLocalPrefabSemantics", { enumerable: true, get: function () { return semantic_normalizer_1.compareLocalPrefabSemantics; } });

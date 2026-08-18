@@ -2,7 +2,7 @@ import { createHash } from 'crypto';
 import { readFileSync } from 'fs';
 import { GameObjectNode, PropertyModification, UnityDocument, UnityFile } from '../types';
 import { parseUnityYaml } from '../unity-yaml-parser';
-import { V3IdentityRecord, V3StructureNode, V3WriterOptions } from './model';
+import { V3IdentityRecord, V3_STABLE_PROFILE, V3StructureNode, V3WriterOptions } from './model';
 import { formatV3Value } from './value';
 import {
   encodeV3References,
@@ -42,6 +42,9 @@ function validateUnityModificationObjectReference(
 }
 
 export function writeV3(file: UnityFile, options: V3WriterOptions = {}): string {
+  if (options.profile !== undefined && options.profile !== V3_STABLE_PROFILE) {
+    throw new Error(`Unsupported v3 profile ${JSON.stringify(options.profile)} in writeV3 options; expected ${JSON.stringify(V3_STABLE_PROFILE)}.`);
+  }
   if (file.type === 'variant') return writeVariantV3(file, options);
   if (file.type !== 'prefab' || !file.hierarchy) throw new Error('writeV3 requires a prefab hierarchy.');
   const byId = new Map(file.documents.map(document => [document.fileId, document]));
@@ -163,7 +166,7 @@ export function writeV3(file: UnityFile, options: V3WriterOptions = {}): string 
   }
   applySourceFingerprints(identities, options);
   const lines = [
-    `# ubridge v3 | prefab | profile:${options.profile || 'unity-generic-v1'}${options.assetGuid ? ` | asset-guid:${options.assetGuid}` : ''}`,
+    `# ubridge v3 | prefab | profile:${options.profile || V3_STABLE_PROFILE}${options.assetGuid ? ` | asset-guid:${options.assetGuid}` : ''}`,
     '--- STRUCTURE',
     ...writeStructure(structure),
     '--- DETAILS',
@@ -404,7 +407,7 @@ function writeVariantV3(file: UnityFile, options: V3WriterOptions): string {
     .map(identity => `${identity.sourceGuid}:${identity.sourceFileId}`));
 
   const lines = [
-    `# ubridge v3 | variant | profile:${options.profile || 'unity-generic-v1'}${options.assetGuid ? ` | asset-guid:${options.assetGuid}` : ''}`,
+    `# ubridge v3 | variant | profile:${options.profile || V3_STABLE_PROFILE}${options.assetGuid ? ` | asset-guid:${options.assetGuid}` : ''}`,
     '--- STRUCTURE',
     `(variant @${rootId} source:${rootInstance.sourcePrefab.guid})`,
     ...writeVariantRoots(effectiveRoots),

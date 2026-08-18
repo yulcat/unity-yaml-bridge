@@ -35,6 +35,29 @@ t2 = transform | fileID:500 | type:4 | typeName:Transform | owner:g2
 - Unknown, ambiguous, or unsupported states must fail instead of falling back
   to an original YAML file.
 
+### Stable profile and evolution policy
+
+uBridge 2.0 supports exactly one v3 profile identifier:
+`unity-generic-v1`. It is case-sensitive and must appear exactly as shown in
+the header. This is the spelling emitted by the pre-release v3 writer, so v3
+documents produced by the current implementation remain accepted. Empty,
+unknown, case-changed, and near-match identifiers are rejected; readers and
+compilers do not silently normalize or substitute profiles.
+
+The profile participates in deterministic identity allocation when an asset
+GUID is unavailable. Consequently, changing or accepting an alias for it could
+change generated fileIDs. Compatible clarifications and fail-closed validation
+may evolve within this profile, but an incompatible serialization, identity,
+or compilation semantic requires a new explicitly supported profile (or a new
+format version). Implementations must continue to recognize this identifier
+with its documented v3 semantics rather than reassigning it.
+
+The package exports `V3_STABLE_PROFILE` with the literal value
+`"unity-generic-v1"`; `V3Document.profile` and `V3WriterOptions.profile` use
+that literal type. `writeV3` emits it by default and rejects any different
+runtime value. `readV3` and `compileV3` independently enforce it so constructed
+API objects cannot bypass header validation.
+
 A resolved inherited nested prefab in a source-backed variant is represented by
 its source-root GameObject, not by its PrefabInstance document and not by an
 extra same-name child level. The PrefabInstance machine identity is explicit

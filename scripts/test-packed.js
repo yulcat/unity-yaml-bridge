@@ -54,14 +54,20 @@ try {
       'writeUnityYaml', 'readV3', 'writeV3', 'compileV3']) {
       if (typeof api[name] !== 'function') throw new Error('missing CJS export: ' + name);
     }
+    if (api.V3_STABLE_PROFILE !== 'unity-generic-v1') {
+      throw new Error('missing canonical V3_STABLE_PROFILE export');
+    }
   `], { cwd: consumerDir });
   assert.strictEqual(apiProbe.stderr, '');
 
   fs.writeFileSync(path.join(consumerDir, 'types-probe.ts'), `
-    import { parseUnityYaml, writeV3, readV3, compileV3, V3Document } from 'unity-yaml-bridge';
+    import { parseUnityYaml, writeV3, readV3, compileV3, V3Document,
+      V3_STABLE_PROFILE, V3StableProfile } from 'unity-yaml-bridge';
     const parsed = parseUnityYaml('%YAML 1.1\\n');
     const text: string = writeV3(parsed);
     const document: V3Document = readV3(text);
+    const profile: V3StableProfile = V3_STABLE_PROFILE;
+    if (document.profile !== profile) throw new Error('unexpected v3 profile');
     compileV3(document);
   `);
   run(process.execPath, [path.join(repoRoot, 'node_modules', 'typescript', 'bin', 'tsc'),

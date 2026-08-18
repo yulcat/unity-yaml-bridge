@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.compileV3 = compileV3;
 const crypto_1 = require("crypto");
 const fs_1 = require("fs");
+const model_1 = require("./model");
 const value_1 = require("./value");
 const references_1 = require("./references");
 const override_validation_1 = require("./override-validation");
@@ -62,6 +63,9 @@ function flattenPrimitiveOverrideObject(propertyPath, value, context) {
 function compileV3(document, options = {}) {
     if (document.version !== 3)
         throw new Error('compileV3 accepts v3 documents only.');
+    if (document.profile !== model_1.V3_STABLE_PROFILE) {
+        throw new Error(`Unsupported v3 profile ${JSON.stringify(document.profile)} in compileV3 document; expected ${JSON.stringify(model_1.V3_STABLE_PROFILE)}.`);
+    }
     validateSourceFingerprints(document, options);
     if (document.kind === 'variant')
         return compileVariant(document);

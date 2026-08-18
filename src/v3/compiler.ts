@@ -1,7 +1,13 @@
 import { createHash } from 'crypto';
 import { readFileSync } from 'fs';
 import { UnityDocument, UnityFile } from '../types';
-import { V3CompileOptions, V3Document, V3IdentityRecord, V3StructureNode } from './model';
+import {
+  V3CompileOptions,
+  V3Document,
+  V3IdentityRecord,
+  V3_STABLE_PROFILE,
+  V3StructureNode,
+} from './model';
 import { markCanonicalFlowMappings } from './value';
 import {
   resolveV3OverrideReference,
@@ -80,6 +86,9 @@ function flattenPrimitiveOverrideObject(
 
 export function compileV3(document: V3Document, options: V3CompileOptions = {}): UnityFile {
   if (document.version !== 3) throw new Error('compileV3 accepts v3 documents only.');
+  if (document.profile !== V3_STABLE_PROFILE) {
+    throw new Error(`Unsupported v3 profile ${JSON.stringify(document.profile)} in compileV3 document; expected ${JSON.stringify(V3_STABLE_PROFILE)}.`);
+  }
   validateSourceFingerprints(document, options);
   if (document.kind === 'variant') return compileVariant(document);
   if (!document.structure) throw new Error('v3 prefab requires STRUCTURE.');

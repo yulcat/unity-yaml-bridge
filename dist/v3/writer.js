@@ -4,6 +4,7 @@ exports.writeV3 = writeV3;
 const crypto_1 = require("crypto");
 const fs_1 = require("fs");
 const unity_yaml_parser_1 = require("../unity-yaml-parser");
+const model_1 = require("./model");
 const value_1 = require("./value");
 const references_1 = require("./references");
 const override_validation_1 = require("./override-validation");
@@ -32,6 +33,9 @@ function validateUnityModificationObjectReference(value, context) {
     return { fileId: String(projected.fileID), projected };
 }
 function writeV3(file, options = {}) {
+    if (options.profile !== undefined && options.profile !== model_1.V3_STABLE_PROFILE) {
+        throw new Error(`Unsupported v3 profile ${JSON.stringify(options.profile)} in writeV3 options; expected ${JSON.stringify(model_1.V3_STABLE_PROFILE)}.`);
+    }
     if (file.type === 'variant')
         return writeVariantV3(file, options);
     if (file.type !== 'prefab' || !file.hierarchy)
@@ -148,7 +152,7 @@ function writeV3(file, options = {}) {
     }
     applySourceFingerprints(identities, options);
     const lines = [
-        `# ubridge v3 | prefab | profile:${options.profile || 'unity-generic-v1'}${options.assetGuid ? ` | asset-guid:${options.assetGuid}` : ''}`,
+        `# ubridge v3 | prefab | profile:${options.profile || model_1.V3_STABLE_PROFILE}${options.assetGuid ? ` | asset-guid:${options.assetGuid}` : ''}`,
         '--- STRUCTURE',
         ...writeStructure(structure),
         '--- DETAILS',
@@ -368,7 +372,7 @@ function writeVariantV3(file, options) {
         (identity.kind === 'gameObject' || identity.kind === 'component'))
         .map(identity => `${identity.sourceGuid}:${identity.sourceFileId}`));
     const lines = [
-        `# ubridge v3 | variant | profile:${options.profile || 'unity-generic-v1'}${options.assetGuid ? ` | asset-guid:${options.assetGuid}` : ''}`,
+        `# ubridge v3 | variant | profile:${options.profile || model_1.V3_STABLE_PROFILE}${options.assetGuid ? ` | asset-guid:${options.assetGuid}` : ''}`,
         '--- STRUCTURE',
         `(variant @${rootId} source:${rootInstance.sourcePrefab.guid})`,
         ...writeVariantRoots(effectiveRoots),

@@ -378,8 +378,15 @@ function compileVariant(document: V3Document): UnityFile {
   );
 
   const requireEmittedPrefabOwner = (identity: V3IdentityRecord, operation: string): string => {
-    if (!identity.prefabOwnerId || !identity.sourceGuid || !identity.sourceFileId) {
+    if (!identity.sourceGuid || !identity.sourceFileId) {
       throw new Error(`Inherited nested identity ${identity.machineId} has incomplete ${operation} ownership.`);
+    }
+    if (!identity.prefabOwnerId) {
+      if (identity.origin !== 'inherited' || identity.sourceGuid !== document.baseGuid ||
+          !document.variantRootId) {
+        throw new Error(`Direct inherited identity ${identity.machineId} has incomplete ${operation} ownership.`);
+      }
+      return document.variantRootId;
     }
     const visited = new Set<string>();
     let ownerId = identity.prefabOwnerId;
@@ -914,18 +921,23 @@ function compileVariant(document: V3Document): UnityFile {
           (identity.ownerId !== goIdentity.machineId || identity.baselineOrder !== index ||
            (identity.displayName || identity.typeName) !== component.typeName);
       });
-      const directStructuralChange = goIdentity.displayName !== node.name ||
-        transformIdentity.baselineParentId !== parentTransformMachineId ||
+      const directStructuralChange = transformIdentity.baselineParentId !== parentTransformMachineId ||
         transformIdentity.baselineOrder !== siblingIndex || directComponentStructureChanged;
-      const directSemanticChange = document.details.has(goIdentity.machineId) ||
-        document.details.has(transformIdentity.machineId) || node.components.some(component => {
-          const identity = requireIdentity(document, component.machineId, 'component');
-          return identity.origin === 'inherited' && document.details.has(identity.machineId);
-        });
-      if (!goIdentity.prefabOwnerId && (directStructuralChange || directSemanticChange)) {
+      if (!goIdentity.prefabOwnerId && directStructuralChange) {
         throw new Error(
           `Structural editing of direct inherited GameObject ${goIdentity.machineId} is not implemented.`
         );
+      }
+      if (!goIdentity.prefabOwnerId && goIdentity.displayName !== node.name) {
+        queueInheritedNestedOverride(goIdentity, 'm_Name', node.name);
+      }
+      if (!goIdentity.prefabOwnerId) {
+        queueInheritedNestedDetails(goIdentity);
+        if (document.details.has(transformIdentity.machineId)) {
+          throw new Error(
+            `Structural editing of direct inherited Transform ${transformIdentity.machineId} is not implemented.`
+          );
+        }
       }
       const desiredComponents = new Set(node.components.map(component => component.machineId));
       for (const identity of document.identity.values()) {
@@ -945,7 +957,10 @@ function compileVariant(document: V3Document): UnityFile {
       }
       for (const component of node.components) {
         const identity = requireIdentity(document, component.machineId, 'component');
-        if (identity.origin === 'inherited') continue;
+        if (identity.origin === 'inherited') {
+          if (!goIdentity.prefabOwnerId) queueInheritedNestedDetails(identity);
+          continue;
+        }
         if (identity.ownerId !== goIdentity.machineId ||
             !identity.prefabOwnerId || identity.prefabOwnerId !== document.variantRootId) {
           throw new Error(

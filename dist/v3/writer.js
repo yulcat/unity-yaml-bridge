@@ -362,6 +362,11 @@ function writeVariantV3(file, options) {
     const effectiveReferenceIds = collectEffectiveV3StructureIds(effectiveRoots, identities);
     effectiveReferenceIds.add(rootId);
     normalizeProjectedOverrideReferences(projectedDetails, identities, documentIds, effectiveReferenceIds);
+    const directSemanticTargets = new Set([...identities.values()]
+        .filter(identity => identity.origin === 'inherited' && !identity.prefabOwnerId &&
+        identity.sourceGuid === rootInstance.sourcePrefab.guid && identity.sourceFileId &&
+        (identity.kind === 'gameObject' || identity.kind === 'component'))
+        .map(identity => `${identity.sourceGuid}:${identity.sourceFileId}`));
     const lines = [
         `# ubridge v3 | variant | profile:${options.profile || 'unity-generic-v1'}${options.assetGuid ? ` | asset-guid:${options.assetGuid}` : ''}`,
         '--- STRUCTURE',
@@ -377,7 +382,16 @@ function writeVariantV3(file, options) {
             if (identity.kind !== 'prefabInstance' && identity.kind !== 'stripped' && identity.kind !== 'owned' &&
                 STRUCTURAL_FIELDS.has(key) && key !== 'm_Father' && key !== 'm_RootOrder')
                 continue;
-            lines.push(`${key} = ${(0, value_1.formatV3Value)((0, references_1.encodeV3References)(value, documentIds))}`);
+            const projectedValue = machineId === rootId && key === 'm_Modification' &&
+                value && typeof value === 'object'
+                ? {
+                    ...value,
+                    m_Modifications: Array.isArray(value.m_Modifications)
+                        ? value.m_Modifications.filter((entry) => !directSemanticTargets.has(`${String(entry?.target?.guid ?? '')}:${String(entry?.target?.fileID ?? '0')}`))
+                        : value.m_Modifications,
+                }
+                : value;
+            lines.push(`${key} = ${(0, value_1.formatV3Value)((0, references_1.encodeV3References)(projectedValue, documentIds))}`);
         }
     }
     for (const [machineId, properties] of projectedDetails) {
@@ -599,22 +613,13 @@ function buildInheritedVariantRoots(rootInstance, sourceGuid, options, identitie
         }
         directSourceModificationKeys.add(key);
     }
-    const nameOverrides = new Map();
-    for (const modification of rootInstance.modifications) {
-        if (modification.propertyPath !== 'm_Name' || modification.target.guid !== sourceGuid)
-            continue;
-        const fileId = String(modification.target.fileID ?? '0');
-        if (nameOverrides.has(fileId)) {
-            throw new Error(`Variant root ${rootInstance.fileId} has ambiguous name ownership for ${fileId}.`);
-        }
-        nameOverrides.set(fileId, modification.value);
-    }
     const nestedOverrides = new Map();
     const matchedNestedOverrides = new Set();
     for (const modification of rootInstance.modifications) {
         const guid = String(modification.target.guid ?? '');
         const fileId = String(modification.target.fileID ?? '0');
-        if (guid === sourceGuid)
+        const directDocument = guid === sourceGuid ? sourceById.get(fileId) : undefined;
+        if (directDocument && (directDocument.typeId === 4 || directDocument.typeId === 224))
             continue;
         const key = `${guid}:${fileId}:${modification.propertyPath}`;
         if (!guid || fileId === '0' || nestedOverrides.has(key)) {
@@ -908,10 +913,11 @@ function buildInheritedVariantRoots(rootInstance, sourceGuid, options, identitie
             origin: 'inherited',
             typeId: gameObjectDocument.typeId,
             typeName: gameObjectDocument.typeName,
-            displayName: nameOverrides.get(node.fileId) ?? node.name,
+            displayName: node.name,
             sourceGuid,
             sourceFileId: node.fileId,
         });
+        const effectiveName = projectNestedOverrides(goId, sourceGuid, node.fileId, node.name, gameObjectDocument.properties);
         identities.set(transformId, {
             machineId: transformId,
             kind: 'transform',
@@ -942,6 +948,7 @@ function buildInheritedVariantRoots(rootInstance, sourceGuid, options, identitie
                 sourceGuid,
                 sourceFileId: component.fileId,
             });
+            projectNestedOverrides(componentId, sourceGuid, component.fileId, undefined, sourceDocument.properties);
             if (matchRemoval(removedComponentIds, matchedRemovedComponentIds, sourceGuid, component.fileId, 'removed-component')) {
                 return [];
             }
@@ -950,7 +957,7 @@ function buildInheritedVariantRoots(rootInstance, sourceGuid, options, identitie
         projectAddedComponents(goId, sourceGuid, node.fileId, components);
         const children = node.children.map((child, index) => build(child, transformId, index));
         return {
-            name: nameOverrides.get(node.fileId) ?? node.name,
+            name: effectiveName,
             machineId: goId,
             components,
             children: tombstone ? [] : children,

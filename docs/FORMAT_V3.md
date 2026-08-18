@@ -153,6 +153,24 @@ Otherwise it deterministically preserves the scalar empty string. Existing
 reference overrides therefore export, cold-compile, can be replaced, and are
 removed when their DETAILS key is removed.
 
+The same rename and typed property-authoring contract is stable for direct
+inherited GameObjects and components in a source-backed variant. Effective
+STRUCTURE names and semantic DETAILS are desired state: the compiler emits leaf
+root PrefabInstance modifications targeting the identity's exact direct-source
+GUID/fileID, using the same canonical scalar, null, stable-reference, external-
+reference, and primitive-leaf partial-object contracts described above. Existing
+direct-source modifications are projected out of raw PrefabInstance DETAILS into
+the effective GameObject/component STRUCTURE and DETAILS view; unchanged values
+cold-roundtrip, edits replace the exact target/property tuple, and deleting a
+projected key (or restoring a source-baseline name) removes that modification.
+Variant-of-variant leaf edits target identities in the leaf's direct source and
+do not replay intermediate deltas or emit source documents. Unknown, duplicate,
+or ambiguous targets, malformed references, arrays, unsafe/prototype-sensitive
+or structural property paths, and overlapping flat/object paths fail closed.
+Direct inherited reparenting, sibling/component reordering, and Transform
+property authoring remain structural exclusions and fail closed. Existing direct
+inherited GameObject/component addition and removal behavior is unchanged.
+
 It never emits the nested source GameObject/component or an inherited
 PrefabInstance source document. Missing/cyclic owner chains and ambiguous
 duplicate owner/source/property targets fail closed. Reparenting,

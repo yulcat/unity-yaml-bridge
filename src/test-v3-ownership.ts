@@ -202,18 +202,22 @@ console.log('\n=== v3 ownership cold-boundary edits ===');
     'dangling direct-source raw scalar modifications fail closed'
   );
   modifications.pop();
-  const name = modifications.find(modification => modification.propertyPath === 'm_Name');
-  assert(name?.value === 'Ellen', 'variant name override is present in standalone DETAILS');
+  const directTarget = {
+    fileID: inheritedIdentity!.sourceFileId!, guid: inheritedIdentity!.sourceGuid!, type: 3,
+  };
+  assert(inheritedRoot?.name === 'Ellen' && inheritedIdentity?.displayName === 'Amount' &&
+         !modifications.some(modification => modification.propertyPath === 'm_Name'),
+    'variant name override is projected into effective STRUCTURE with a stable source baseline');
   const externalReference = {
     fileID: 21300000, guid: 'abcdefabcdefabcdefabcdefabcdefab', type: 3,
   };
   modifications.push(
     {
-      target: { ...name.target }, propertyPath: 'm_CustomScalar',
+      target: { ...directTarget }, propertyPath: 'm_CustomScalar',
       value: '123', objectReference: { fileID: 0 },
     },
     {
-      target: { ...name.target }, propertyPath: 'm_CustomReference',
+      target: { ...directTarget }, propertyPath: 'm_CustomReference',
       value: '', objectReference: externalReference,
     }
   );
@@ -230,7 +234,7 @@ console.log('\n=== v3 ownership cold-boundary edits ===');
          JSON.stringify(validRawReference.objectReference) === JSON.stringify(externalReference),
     'valid direct-source raw scalar and object-reference modifications compile unchanged');
   modifications.splice(-2);
-  name.value = 'Ellen_v3_edited';
+  inheritedRoot!.name = 'Ellen_v3_edited';
 
   // Only the parsed v3 document enters compileV3.
   const rebuilt = parseUnityYaml(writeUnityYaml(compileV3(document)));
@@ -362,6 +366,22 @@ console.log('\n=== v3 ownership cold-boundary edits ===');
            rebuilt.variantSource?.guid === middleGuid &&
            rebuilt.prefabInstances[0].modifications.length === 0,
       'untouched variant-of-variant cold-compiles without source YAML');
+
+    const inheritedComponentBinding = inheritedRoot.components[0];
+    const inheritedComponentIdentity = document.identity.get(inheritedComponentBinding.machineId)!;
+    inheritedRoot.name = 'LeafDirectRename';
+    document.details.set(inheritedComponentBinding.machineId, { m_Enabled: false });
+    const editedLeaf = parseUnityYaml(writeUnityYaml(compileV3(document)));
+    assert(editedLeaf.prefabInstances[0].modifications.some(modification =>
+             modification.propertyPath === 'm_Name' && modification.value === 'LeafDirectRename' &&
+             String(modification.target.fileID) === inheritedIdentity.sourceFileId &&
+             modification.target.guid === middleGuid
+           ) && editedLeaf.prefabInstances[0].modifications.some(modification =>
+             modification.propertyPath === 'm_Enabled' && modification.value === '0' &&
+             String(modification.target.fileID) === inheritedComponentIdentity.sourceFileId &&
+             modification.target.guid === middleGuid
+           ) && editedLeaf.documents.length === leaf.documents.length,
+      'variant-chain leaf rename and DETAILS target leaf direct-source identities without replaying intermediate deltas');
 
     const middleInstance = middle.documents.find(item => item.typeId === 1001)!;
     middleInstance.properties.m_Modification.m_Modifications[0].target.guid = middleGuid;
@@ -2169,13 +2189,17 @@ console.log('\n=== v3 ownership cold-boundary edits ===');
   const directInherited = readV3(sourceBackedVariantText());
   const root = directInherited.variantRoots![0];
   const child = root.children[0];
-  child.name = 'SilentlyIgnoredDirectRename';
-  expectThrow(
-    () => compileV3(directInherited),
-    'Structural editing of direct inherited',
-    'direct inherited rename fails closed instead of compiling as a no-op'
+  const childIdentity = directInherited.identity.get(child.machineId)!;
+  child.name = 'DirectInheritedRenamed';
+  const renamed = parseUnityYaml(writeUnityYaml(compileV3(directInherited)));
+  const renameDelta = renamed.prefabInstances[0].modifications.find(modification =>
+    modification.propertyPath === 'm_Name' &&
+    String(modification.target.fileID) === childIdentity.sourceFileId &&
+    modification.target.guid === childIdentity.sourceGuid
   );
-  child.name = directInherited.identity.get(child.machineId)!.displayName!;
+  assert(renameDelta?.value === 'DirectInheritedRenamed',
+    'direct inherited GameObject rename emits an exact direct-source delta');
+  child.name = childIdentity.displayName!;
   root.children = root.children.filter(node => node.machineId !== child.machineId);
   directInherited.variantRoots!.push(child);
   expectThrow(
@@ -2192,12 +2216,128 @@ console.log('\n=== v3 ownership cold-boundary edits ===');
     'direct inherited component reorder fails closed instead of compiling as a no-op'
   );
   root.components.reverse();
-  directInherited.details.set(child.machineId, { m_IsActive: 0 });
-  expectThrow(
-    () => compileV3(directInherited),
-    'Structural editing of direct inherited',
-    'direct inherited semantic DETAILS fail closed instead of compiling as a no-op'
+  directInherited.details.set(child.machineId, { m_CustomString: 'direct-value' });
+  const stringEdited = parseUnityYaml(writeUnityYaml(compileV3(directInherited)));
+  const stringDelta = stringEdited.prefabInstances[0].modifications.find(modification =>
+    modification.propertyPath === 'm_CustomString' &&
+    String(modification.target.fileID) === childIdentity.sourceFileId &&
+    modification.target.guid === childIdentity.sourceGuid
   );
+  assert(stringDelta?.value === 'direct-value' &&
+         String(stringDelta.objectReference.fileID) === '0',
+    'direct inherited GameObject string DETAILS emits canonical exact-source delta');
+  directInherited.details.delete(child.machineId);
+  const inheritedComponent = child.components[0];
+  const componentIdentity = directInherited.identity.get(inheritedComponent.machineId)!;
+  const externalReference = {
+    fileID: '21300000', guid: 'abcdefabcdefabcdefabcdefabcdefab', type: 3,
+  };
+  directInherited.details.set(inheritedComponent.machineId, {
+    m_CustomString: 'component-value',
+    m_CustomNumber: 3.5,
+    m_CustomBoolean: true,
+    m_CustomNull: null,
+    m_CustomInheritedRef: { $ref: child.machineId },
+    m_CustomLocalRef: { $ref: directInherited.variantRootId! },
+    m_CustomExternalRef: externalReference,
+    m_CustomPartial: { z: 2, nested: { enabled: false } },
+  });
+  const typed = parseUnityYaml(writeUnityYaml(compileV3(directInherited)));
+  const componentDeltas = typed.prefabInstances[0].modifications.filter(modification =>
+    String(modification.target.fileID) === componentIdentity.sourceFileId &&
+    modification.target.guid === componentIdentity.sourceGuid
+  );
+  const byPath = new Map(componentDeltas.map(modification => [modification.propertyPath, modification]));
+  assert(byPath.get('m_CustomString')?.value === 'component-value' &&
+         byPath.get('m_CustomNumber')?.value === '3.5' &&
+         byPath.get('m_CustomBoolean')?.value === '1' &&
+         byPath.get('m_CustomNull')?.value === '' &&
+         String(byPath.get('m_CustomNull')?.objectReference.fileID) === '0',
+    'direct inherited component string, finite number, boolean, and null DETAILS use canonical scalar contracts');
+  assert(String(byPath.get('m_CustomInheritedRef')?.objectReference.fileID) === childIdentity.sourceFileId &&
+         byPath.get('m_CustomInheritedRef')?.objectReference.guid === childIdentity.sourceGuid &&
+         String(byPath.get('m_CustomLocalRef')?.objectReference.fileID) ===
+           directInherited.identity.get(directInherited.variantRootId!)!.fileId &&
+         String(byPath.get('m_CustomExternalRef')?.objectReference.fileID) === externalReference.fileID &&
+         byPath.get('m_CustomExternalRef')?.objectReference.guid === externalReference.guid &&
+         byPath.get('m_CustomExternalRef')?.objectReference.type === externalReference.type,
+    'direct inherited component stable local/inherited and explicit external references use canonical objectReference contracts');
+  assert(JSON.stringify(componentDeltas
+    .filter(modification => modification.propertyPath.startsWith('m_CustomPartial.'))
+    .map(modification => [modification.propertyPath, modification.value])) === JSON.stringify([
+      ['m_CustomPartial.nested.enabled', '0'], ['m_CustomPartial.z', '2'],
+    ]),
+    'direct inherited component primitive-leaf partial objects emit sorted exact-source leaf deltas');
+  directInherited.details.delete(inheritedComponent.machineId);
+}
+
+{
+  const variant = sourceBackedVariant();
+  const sourceGuid = variant.variantSource!.guid!;
+  const sourcePath = path.join(__dirname, '..', 'samples', 'prefabs', 'Amount.prefab');
+  const componentFileId = '6714972992410759118';
+  const externalReference = {
+    fileID: '21300000', guid: 'abcdefabcdefabcdefabcdefabcdefab', type: 3,
+  };
+  variant.prefabInstances[0].modifications.push(
+    {
+      target: { fileID: componentFileId, guid: sourceGuid, type: 3 },
+      propertyPath: 'm_Enabled', value: '0', objectReference: { fileID: '0' },
+    },
+    {
+      target: { fileID: componentFileId, guid: sourceGuid, type: 3 },
+      propertyPath: 'm_Color.a', value: '0.25', objectReference: { fileID: '0' },
+    },
+    {
+      target: { fileID: componentFileId, guid: sourceGuid, type: 3 },
+      propertyPath: 'm_Material', value: '', objectReference: externalReference,
+    }
+  );
+  const exported = readV3(writeV3(variant, {
+    sourceResolver: { resolveFilePath: guid => guid === sourceGuid ? sourcePath : undefined },
+  }));
+  const component = [...exported.identity.values()].find(identity =>
+    identity.kind === 'component' && identity.sourceGuid === sourceGuid &&
+    identity.sourceFileId === componentFileId
+  )!;
+  const details: any = exported.details.get(component.machineId)!;
+  assert(details.m_Enabled === 0 && details.m_Color?.a === 0.25 &&
+         JSON.stringify(details.m_Material) === JSON.stringify(externalReference),
+    'existing direct-source typed modifications export into effective component DETAILS');
+  exported.details.set(component.machineId, { m_Enabled: true, m_Color: { g: 0.5 } });
+  const edited = parseUnityYaml(writeUnityYaml(compileV3(exported)));
+  const editedDeltas = edited.prefabInstances[0].modifications.filter(modification =>
+    String(modification.target.fileID) === componentFileId && modification.target.guid === sourceGuid
+  );
+  assert(JSON.stringify(editedDeltas.map(modification => [
+    modification.propertyPath, modification.value, String(modification.objectReference.fileID),
+  ])) === JSON.stringify([
+    ['m_Color.g', '0.5', '0'], ['m_Enabled', '1', '0'],
+  ]),
+    'exported direct-source DETAILS are edited, replaced, and removed as an exact desired override set');
+  const cold = readV3(writeV3(edited, {
+    sourceResolver: { resolveFilePath: guid => guid === sourceGuid ? sourcePath : undefined },
+  }));
+  const coldComponent = [...cold.identity.values()].find(identity =>
+    identity.kind === 'component' && identity.sourceGuid === sourceGuid &&
+    identity.sourceFileId === componentFileId
+  )!;
+  assert(cold.details.get(coldComponent.machineId)?.m_Enabled === 1 &&
+         (cold.details.get(coldComponent.machineId)?.m_Color as any)?.g === 0.5,
+    'edited direct-source DETAILS cold-roundtrip through effective projection');
+}
+
+{
+  const document = readV3(sourceBackedVariantText());
+  const inheritedRoot = document.variantRoots![0];
+  const rootIdentity = document.identity.get(inheritedRoot.machineId)!;
+  inheritedRoot.name = 'Amount';
+  const rebuilt = parseUnityYaml(writeUnityYaml(compileV3(document)));
+  assert(!rebuilt.prefabInstances[0].modifications.some(modification =>
+    modification.propertyPath === 'm_Name' &&
+    String(modification.target.fileID) === rootIdentity.sourceFileId &&
+    modification.target.guid === rootIdentity.sourceGuid
+  ), 'restoring a direct inherited baseline name removes the existing rename modification');
 }
 
 {

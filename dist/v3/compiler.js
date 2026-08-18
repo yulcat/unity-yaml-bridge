@@ -253,12 +253,22 @@ function applyNestedInstancePlan(document, identity, plan, properties) {
     }
     return properties;
 }
+function isPlainRecord(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value))
+        return false;
+    const prototype = Object.getPrototypeOf(value);
+    return prototype === Object.prototype || prototype === null;
+}
 function validateRawModificationObjectReference(value, context) {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    if (!isPlainRecord(value)) {
         throw new Error(`Invalid v3 object reference at ${context}.`);
     }
     const objectReference = value;
     const keys = Object.keys(objectReference);
+    if (keys.length === 1 && keys[0] === '$ref' &&
+        typeof objectReference.$ref === 'string' && objectReference.$ref.length > 0) {
+        return '$ref';
+    }
     if (keys.length === 1 && keys[0] === 'fileID') {
         const fileId = typeof objectReference.fileID === 'number'
             ? (Number.isSafeInteger(objectReference.fileID) ? String(objectReference.fileID) : '')
@@ -267,9 +277,129 @@ function validateRawModificationObjectReference(value, context) {
                 : '';
         if (!fileId)
             throw new Error(`Invalid v3 object reference at ${context}.`);
-        return;
+        return fileId;
     }
-    (0, references_1.validateV3ExternalObjectReference)(objectReference, context);
+    if (keys.length !== 3 || !keys.includes('fileID') || !keys.includes('guid') ||
+        !keys.includes('type')) {
+        throw new Error(`Invalid v3 object reference at ${context}.`);
+    }
+    const fileId = typeof objectReference.fileID === 'number'
+        ? (Number.isSafeInteger(objectReference.fileID) ? String(objectReference.fileID) : '')
+        : typeof objectReference.fileID === 'string' && /^(0|-?[1-9]\d*)$/.test(objectReference.fileID)
+            ? objectReference.fileID
+            : '';
+    if (!fileId || fileId === '0' || typeof objectReference.guid !== 'string' ||
+        !/^[0-9a-f]{32}$/.test(objectReference.guid) ||
+        (objectReference.type !== 2 && objectReference.type !== 3)) {
+        throw new Error(`Invalid v3 object reference at ${context}.`);
+    }
+    return fileId;
+}
+function validateRawModificationEnvelope(entry, context) {
+    if (!isPlainRecord(entry)) {
+        throw new Error(`Invalid raw modification envelope at ${context}.`);
+    }
+    const modification = entry;
+    const keys = Object.keys(modification).sort();
+    const value = modification.value;
+    if (typeof modification.propertyPath !== 'string' ||
+        (typeof value !== 'string' && typeof value !== 'number' && typeof value !== 'boolean') ||
+        (typeof value === 'number' && !Number.isFinite(value))) {
+        throw new Error(`Invalid raw modification envelope at ${context}.`);
+    }
+    const target = (0, references_1.validateV3ExternalObjectReference)(modification.target, `${context}.target`);
+    const targetGuid = String(target.guid);
+    const targetKey = `${targetGuid}:${String(target.fileID)}`;
+    const propertyPath = modification.propertyPath;
+    (0, override_validation_1.validateV3OverridePropertyPath)(propertyPath, `${targetKey}.${propertyPath}`);
+    const referenceFileId = validateRawModificationObjectReference(modification.objectReference, `${targetKey}.${propertyPath}`);
+    if (keys.join(',') !== 'objectReference,propertyPath,target,value') {
+        throw new Error(`Invalid raw modification envelope at ${context}.`);
+    }
+    if (modification.value !== '' && referenceFileId !== '0') {
+        throw new Error(`Raw modification ${targetKey}.${propertyPath} mixes a nonempty scalar value with a nonzero objectReference.`);
+    }
+    return { targetGuid, targetKey, propertyPath };
+}
+function validateAddedObjectReference(value, context) {
+    if (!isPlainRecord(value))
+        throw new Error(`Invalid added-object reference at ${context}.`);
+    const keys = Object.keys(value);
+    if (keys.length === 1 && keys[0] === '$ref' &&
+        typeof value.$ref === 'string' && value.$ref.length > 0)
+        return;
+    if (keys.length === 1 && keys[0] === 'fileID') {
+        const fileId = typeof value.fileID === 'number'
+            ? (Number.isSafeInteger(value.fileID) ? String(value.fileID) : '')
+            : typeof value.fileID === 'string' && /^-?[1-9]\d*$/.test(value.fileID)
+                ? value.fileID
+                : '';
+        if (fileId && fileId !== '0')
+            return;
+    }
+    throw new Error(`Invalid added-object reference at ${context}.`);
+}
+function validateVariantModificationContainers(document) {
+    const fields = [
+        'm_Modifications', 'm_RemovedGameObjects', 'm_RemovedComponents',
+        'm_AddedGameObjects', 'm_AddedComponents',
+    ];
+    for (const identity of document.identity.values()) {
+        if (identity.kind !== 'prefabInstance')
+            continue;
+        const details = document.details.get(identity.machineId);
+        if (!details || !Object.prototype.hasOwnProperty.call(details, 'm_Modification'))
+            continue;
+        const modification = details.m_Modification;
+        if (!isPlainRecord(modification)) {
+            throw new Error(`PrefabInstance ${identity.machineId} m_Modification must be a plain object.`);
+        }
+        for (const field of fields) {
+            if (!Object.prototype.hasOwnProperty.call(modification, field))
+                continue;
+            const entries = modification[field];
+            if (!Array.isArray(entries)) {
+                throw new Error(`PrefabInstance ${identity.machineId} ${field} must be an array.`);
+            }
+            entries.forEach((entry, index) => {
+                const context = `${identity.machineId}.m_Modification.${field}[${index}]`;
+                if (field === 'm_Modifications') {
+                    validateRawModificationEnvelope(entry, context);
+                    return;
+                }
+                if (field === 'm_RemovedGameObjects' || field === 'm_RemovedComponents') {
+                    (0, references_1.validateV3ExternalObjectReference)(entry, context);
+                    return;
+                }
+                if (!isPlainRecord(entry) ||
+                    Object.keys(entry).sort().join(',') !==
+                        'addedObject,insertIndex,targetCorrespondingSourceObject' ||
+                    !Number.isSafeInteger(entry.insertIndex)) {
+                    throw new Error(`Invalid ${field} entry at ${context}.`);
+                }
+                (0, references_1.validateV3ExternalObjectReference)(entry.targetCorrespondingSourceObject, `${context}.targetCorrespondingSourceObject`);
+                validateAddedObjectReference(entry.addedObject, `${context}.addedObject`);
+            });
+        }
+    }
+}
+function validateInheritedOwnerSourceUniqueness(document) {
+    const identitiesByOwnerSource = new Map();
+    for (const identity of document.identity.values()) {
+        if (identity.origin !== 'inherited' || !identity.sourceGuid || !identity.sourceFileId)
+            continue;
+        const effectiveOwnerId = identity.prefabOwnerId ?? document.variantRootId;
+        if (!effectiveOwnerId)
+            continue;
+        const key = `${effectiveOwnerId}|${identity.sourceGuid}:${identity.sourceFileId}`;
+        const existing = identitiesByOwnerSource.get(key);
+        if (existing) {
+            throw new Error(`Inherited identities ${existing.machineId} and ${identity.machineId} have a duplicate inherited ` +
+                `owner/source identity ${effectiveOwnerId}/${identity.sourceGuid}:${identity.sourceFileId} ` +
+                'and therefore an ambiguous owner/source path.');
+        }
+        identitiesByOwnerSource.set(key, identity);
+    }
 }
 function upsertModification(modifications, target, propertyPath, value, objectReference = { fileID: 0 }) {
     const targetFileId = String(target.fileID ?? '0');
@@ -290,6 +420,8 @@ function upsertModification(modifications, target, propertyPath, value, objectRe
     });
 }
 function compileVariant(document) {
+    validateVariantModificationContainers(document);
+    validateInheritedOwnerSourceUniqueness(document);
     const allocated = allocateFileIds(document);
     const effectiveReferenceIds = collectEffectiveReferenceIds(document);
     const emitted = new Set();
@@ -1182,24 +1314,23 @@ function compileVariant(document) {
             const preservedRawSourcePaths = new Map();
             if (Array.isArray(modification.m_Modifications)) {
                 const rawSourcePaths = new Map();
-                modification.m_Modifications = modification.m_Modifications.filter(entry => {
-                    const targetGuid = String(entry?.target?.guid ?? '');
-                    const targetKey = `${targetGuid}:${String(entry?.target?.fileID ?? '0')}`;
-                    const propertyPath = String(entry?.propertyPath ?? '');
+                modification.m_Modifications = modification.m_Modifications.filter((entry, index) => {
+                    const { targetGuid, targetKey, propertyPath } = validateRawModificationEnvelope(entry, `m_Modification.m_Modifications[${index}]`);
+                    const existingPaths = rawSourcePaths.get(targetKey) ?? [];
+                    const conflict = existingPaths.find(existing => existing === propertyPath || (0, override_validation_1.pathsHaveSegmentPrefixOverlap)(existing, propertyPath));
+                    if (conflict) {
+                        throw new Error(`Raw modification ${targetKey}.${propertyPath} overlaps another property path ${conflict}.`);
+                    }
+                    existingPaths.push(propertyPath);
+                    rawSourcePaths.set(targetKey, existingPaths);
+                    if (!inheritedSourceGuids.has(targetGuid) && (0, override_validation_1.isV3OverrideStructuralPath)(propertyPath)) {
+                        throw new Error(`Raw unrelated modification ${targetKey}.${propertyPath} is structural and not supported.`);
+                    }
                     if (inheritedSourceGuids.has(targetGuid)) {
-                        (0, override_validation_1.validateV3OverridePropertyPath)(propertyPath, `${targetKey}.${propertyPath}`);
                         if (nestedSourceGuids.has(targetGuid) && propertyPath !== 'm_Name' &&
                             (0, override_validation_1.isV3OverrideStructuralPath)(propertyPath)) {
                             throw new Error(`Raw inherited nested modification ${targetKey}.${propertyPath} is structural and not supported.`);
                         }
-                        validateRawModificationObjectReference(entry?.objectReference, `${targetKey}.${propertyPath}`);
-                        const existingPaths = rawSourcePaths.get(targetKey) ?? [];
-                        const conflict = existingPaths.find(existing => existing === propertyPath || (0, override_validation_1.pathsHaveSegmentPrefixOverlap)(existing, propertyPath));
-                        if (conflict) {
-                            throw new Error(`Raw inherited modification ${targetKey}.${propertyPath} overlaps another property path ${conflict}.`);
-                        }
-                        existingPaths.push(propertyPath);
-                        rawSourcePaths.set(targetKey, existingPaths);
                         const targetCount = inheritedSourceTargets.get(targetKey) ?? 0;
                         if (targetCount === 0) {
                             throw new Error(`Raw inherited modification target ${targetKey} does not resolve to an inherited source identity.`);

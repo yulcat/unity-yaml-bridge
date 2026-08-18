@@ -962,6 +962,22 @@ console.log('\n=== v3 ownership cold-boundary edits ===');
     const outerPrefab = document.identity.get(outerBoundary.prefabInstanceId!)!;
     const innerPrefab = document.identity.get(innerBoundary.prefabInstanceId!)!;
     const innerRoot = document.identity.get(innerBoundary.machineId)!;
+    const directDistinctOwnerComponent = document.identity.get(
+      document.variantRoots![0].components[0].machineId
+    )!;
+    const innerDistinctOwnerComponent = document.identity.get(innerBoundary.components[0].machineId)!;
+    const originalDirectDistinctOwnerSource = {
+      guid: directDistinctOwnerComponent.sourceGuid,
+      fileId: directDistinctOwnerComponent.sourceFileId,
+    };
+    directDistinctOwnerComponent.sourceGuid = innerDistinctOwnerComponent.sourceGuid;
+    directDistinctOwnerComponent.sourceFileId = innerDistinctOwnerComponent.sourceFileId;
+    const distinctOwnerRebuilt = parseUnityYaml(writeUnityYaml(compileV3(document)));
+    assert(!directDistinctOwnerComponent.prefabOwnerId && !!innerDistinctOwnerComponent.prefabOwnerId &&
+           distinctOwnerRebuilt.documents.length === variant.documents.length,
+      'equal inherited source tuples under distinct direct PrefabInstance owners remain valid');
+    directDistinctOwnerComponent.sourceGuid = originalDirectDistinctOwnerSource.guid;
+    directDistinctOwnerComponent.sourceFileId = originalDirectDistinctOwnerSource.fileId;
     const rebuilt = parseUnityYaml(writeUnityYaml(compileV3(document)));
     assert(!!innerBoundary &&
            text.includes(`@${outerBoundary.machineId} {prefab:@${outerBoundary.prefabInstanceId} source:${middleGuid}}`) &&
@@ -1732,8 +1748,8 @@ console.log('\n=== v3 ownership cold-boundary edits ===');
     ambiguousReferenceTarget.sourceFileId = deepComponent.sourceFileId;
     expectThrow(
       () => compileV3(document),
-      'Ambiguous inherited v3 reference',
-      'nested override rejects ambiguous inherited stable references'
+      'duplicate inherited owner/source identity',
+      'global identity index rejects ambiguous inherited stable-reference targets before reconciliation'
     );
     ambiguousReferenceTarget.sourceGuid = originalAmbiguousSourceGuid;
     ambiguousReferenceTarget.sourceFileId = originalAmbiguousSourceFileId;
@@ -3226,6 +3242,209 @@ console.log('\n=== v3 ownership cold-boundary edits ===');
     'variant with added root objects is independently reconstructed');
   assert(writeUnityYaml(first) === secondText,
     'variant ownership compilation is deterministic');
+}
+
+{
+  const document = readV3(sourceBackedVariantText());
+  const details: any = document.details.get(document.variantRootId!)!;
+  details.m_Modification.m_Modifications.push({
+    target: { fileID: '42', guid: '01010101010101010101010101010101', type: 3 },
+    propertyPath: 'm_Custom.__proto__.polluted', value: '1', objectReference: { fileID: 0 },
+  });
+  expectThrow(
+    () => compileV3(document),
+    'unsafe property path segment',
+    'unknown-GUID raw modifications reject unsafe property paths before identity routing'
+  );
+}
+
+{
+  const document = readV3(sourceBackedVariantText());
+  const details: any = document.details.get(document.variantRootId!)!;
+  details.m_Modification.m_Modifications.push({
+    target: { fileID: '42', guid: '02020202020202020202020202020202', type: 3 },
+    propertyPath: 'm_CustomReference', value: 'must-not-mix',
+    objectReference: {
+      fileID: '21300000', guid: '03030303030303030303030303030303', type: 3,
+    },
+  });
+  expectThrow(
+    () => compileV3(document),
+    'mixes a nonempty scalar value with a nonzero objectReference',
+    'unknown-GUID raw modifications reject mixed scalar/reference envelopes before identity routing'
+  );
+}
+
+{
+  const document = readV3(sourceBackedVariantText());
+  const details: any = document.details.get(document.variantRootId!)!;
+  details.m_Modification.m_Modifications.push({
+    target: { fileID: '42', guid: '04040404040404040404040404040404', type: 3 },
+    propertyPath: 'm_GameObject.fileID', value: '1', objectReference: { fileID: 0 },
+  });
+  expectThrow(
+    () => compileV3(document),
+    'structural and not supported',
+    'unknown-GUID raw modifications reject structural property paths before identity routing'
+  );
+}
+
+{
+  const document = readV3(sourceBackedVariantText());
+  const details: any = document.details.get(document.variantRootId!)!;
+  const unrelated = {
+    target: { fileID: '42', guid: '05050505050505050505050505050505', type: 3 },
+    propertyPath: 'm_UnrelatedScalar', value: 'preserved', objectReference: { fileID: 0 },
+  };
+  details.m_Modification.m_Modifications.push(unrelated);
+  const rebuilt = parseUnityYaml(writeUnityYaml(compileV3(document)));
+  const preserved = rebuilt.prefabInstances[0].modifications.find(modification =>
+    modification.target.guid === unrelated.target.guid &&
+    String(modification.target.fileID) === unrelated.target.fileID &&
+    modification.propertyPath === unrelated.propertyPath
+  );
+  assert(preserved?.value === unrelated.value && String(preserved.objectReference.fileID) === '0',
+    'valid unrelated-GUID raw modifications remain preserved after generic envelope validation');
+}
+
+{
+  const malformedUnknownEntries: Array<[string, Record<string, unknown>, string]> = [
+    ['non-3 target type', {
+      target: { fileID: '42', guid: '06060606060606060606060606060606', type: 2 },
+      propertyPath: 'm_Value', value: '1', objectReference: { fileID: 0 },
+    }, 'Invalid v3 external object reference'],
+    ['extra target key', {
+      target: {
+        fileID: '42', guid: '06060606060606060606060606060606', type: 3, extra: true,
+      },
+      propertyPath: 'm_Value', value: '1', objectReference: { fileID: 0 },
+    }, 'Invalid v3 external object reference'],
+    ['extra objectReference key', {
+      target: { fileID: '42', guid: '06060606060606060606060606060606', type: 3 },
+      propertyPath: 'm_Value', value: '', objectReference: { fileID: 0, extra: true },
+    }, 'Invalid v3 object reference'],
+    ['extra envelope key', {
+      target: { fileID: '42', guid: '06060606060606060606060606060606', type: 3 },
+      propertyPath: 'm_Value', value: '1', objectReference: { fileID: 0 }, extra: true,
+    }, 'Invalid raw modification envelope'],
+  ];
+  for (const [label, entry, expected] of malformedUnknownEntries) {
+    const document = readV3(sourceBackedVariantText());
+    const details: any = document.details.get(document.variantRootId!)!;
+    details.m_Modification.m_Modifications.push(entry);
+    expectThrow(
+      () => compileV3(document),
+      expected,
+      `unknown-GUID raw modification rejects ${label} before identity routing`
+    );
+  }
+}
+
+{
+  const document = readV3(sourceBackedVariantText());
+  const details: any = document.details.get(document.variantRootId!)!;
+  const target = { fileID: '42', guid: '07070707070707070707070707070707', type: 3 };
+  details.m_Modification.m_Modifications.push(
+    { target: { ...target }, propertyPath: 'm_Overlap', value: '1', objectReference: { fileID: 0 } },
+    { target: { ...target }, propertyPath: 'm_Overlap.child', value: '2', objectReference: { fileID: 0 } },
+  );
+  expectThrow(
+    () => compileV3(document),
+    'overlaps another property path',
+    'unknown-GUID raw modifications reject segment-prefix overlaps before identity routing'
+  );
+}
+
+{
+  const listFields = [
+    'm_Modifications', 'm_RemovedGameObjects', 'm_RemovedComponents',
+    'm_AddedGameObjects', 'm_AddedComponents',
+  ];
+  const malformedContainers: Array<[string, unknown]> = [
+    ['null', null], ['object', {}], ['string', 'invalid'], ['number', 1],
+  ];
+  for (const field of listFields) {
+    for (const [label, malformed] of malformedContainers) {
+      const document = readV3(sourceBackedVariantText());
+      const details: any = document.details.get(document.variantRootId!)!;
+      details.m_Modification[field] = malformed;
+      expectThrow(
+        () => compileV3(document),
+        `${field} must be an array`,
+        `variant compiler rejects ${label} ${field} before desired-state reconciliation`
+      );
+    }
+  }
+}
+
+{
+  for (const [label, malformed] of [
+    ['null', null], ['array', []], ['string', 'invalid'], ['number', 1],
+  ] as Array<[string, unknown]>) {
+    const document = readV3(sourceBackedVariantText());
+    const details: any = document.details.get(document.variantRootId!)!;
+    details.m_Modification = malformed;
+    expectThrow(
+      () => compileV3(document),
+      'm_Modification must be a plain object',
+      `variant compiler rejects ${label} m_Modification before desired-state reconciliation`
+    );
+  }
+}
+
+{
+  const invalidEntries: Array<[string, string]> = [
+    ['m_Modifications', 'Invalid raw modification envelope'],
+    ['m_RemovedGameObjects', 'Invalid v3 external object reference'],
+    ['m_RemovedComponents', 'Invalid v3 external object reference'],
+    ['m_AddedGameObjects', 'Invalid m_AddedGameObjects entry'],
+    ['m_AddedComponents', 'Invalid m_AddedComponents entry'],
+  ];
+  for (const [field, expected] of invalidEntries) {
+    const document = readV3(sourceBackedVariantText());
+    const details: any = document.details.get(document.variantRootId!)!;
+    details.m_Modification[field] = [{}];
+    expectThrow(
+      () => compileV3(document),
+      expected,
+      `variant compiler rejects malformed ${field} entries before desired-state reconciliation`
+    );
+  }
+}
+
+{
+  const document = readV3(sourceBackedVariantText());
+  const details: any = document.details.get(document.variantRootId!)!;
+  for (const field of [
+    'm_Modifications', 'm_RemovedGameObjects', 'm_RemovedComponents',
+    'm_AddedGameObjects', 'm_AddedComponents',
+  ]) delete details.m_Modification[field];
+  const rebuilt = compileV3(document);
+  const rootModification = rebuilt.documents.find(item => item.typeId === 1001)!
+    .properties.m_Modification;
+  assert(rebuilt.documents.length > 0 &&
+         Array.isArray(rootModification.m_RemovedGameObjects) &&
+         Array.isArray(rootModification.m_RemovedComponents) &&
+         Array.isArray(rootModification.m_AddedGameObjects) &&
+         Array.isArray(rootModification.m_AddedComponents),
+    'absent variant delta lists remain a valid empty desired-state input');
+}
+
+{
+  const document = readV3(sourceBackedVariantText());
+  const component = document.variantRoots![0].children[0].components[0];
+  const identity = document.identity.get(component.machineId)!;
+  document.identity.set('hiddenDuplicateInheritedComponent', {
+    ...identity,
+    machineId: 'hiddenDuplicateInheritedComponent',
+    baselineOrder: (identity.baselineOrder ?? 0) + 100,
+  });
+  document.details.set(identity.machineId, { m_Enabled: false });
+  expectThrow(
+    () => compileV3(document),
+    'duplicate inherited owner/source identity',
+    'hidden duplicate inherited component identity fails before modification and removal reconciliation'
+  );
 }
 
 console.log(`\nv3 ownership tests: ${passed} passed, ${failed} failed`);

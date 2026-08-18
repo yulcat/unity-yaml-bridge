@@ -6,6 +6,7 @@ const fs_1 = require("fs");
 const unity_yaml_parser_1 = require("../unity-yaml-parser");
 const value_1 = require("./value");
 const references_1 = require("./references");
+const override_validation_1 = require("./override-validation");
 const STRUCTURAL_FIELDS = new Set([
     'm_CorrespondingSourceObject', 'm_PrefabInstance', 'm_PrefabAsset',
     'm_GameObject', 'm_Father', 'm_Children', 'm_RootOrder', 'm_Component',
@@ -339,7 +340,9 @@ function writeVariantV3(file, options) {
         });
     }
     applySourceFingerprints(identities, options);
-    normalizeProjectedOverrideReferences(projectedDetails, identities, documentIds);
+    const effectiveReferenceIds = collectEffectiveV3StructureIds(effectiveRoots, identities);
+    effectiveReferenceIds.add(rootId);
+    normalizeProjectedOverrideReferences(projectedDetails, identities, documentIds, effectiveReferenceIds);
     const lines = [
         `# ubridge v3 | variant | profile:${options.profile || 'unity-generic-v1'}${options.assetGuid ? ` | asset-guid:${options.assetGuid}` : ''}`,
         '--- STRUCTURE',
@@ -369,7 +372,26 @@ function writeVariantV3(file, options) {
         lines.push(writeIdentity(identity));
     return lines.join('\n') + '\n';
 }
-function normalizeProjectedOverrideReferences(projectedDetails, identities, documentIds) {
+function collectEffectiveV3StructureIds(roots, identities) {
+    const result = new Set();
+    const visit = (node) => {
+        if (node.tombstone)
+            return;
+        result.add(node.machineId);
+        if (node.prefabInstanceId)
+            result.add(node.prefabInstanceId);
+        node.components.forEach(component => result.add(component.machineId));
+        for (const identity of identities.values()) {
+            if (identity.kind === 'transform' && identity.ownerId === node.machineId) {
+                result.add(identity.machineId);
+            }
+        }
+        node.children.forEach(visit);
+    };
+    roots.forEach(visit);
+    return result;
+}
+function normalizeProjectedOverrideReferences(projectedDetails, identities, documentIds, effectiveReferenceIds) {
     for (const properties of projectedDetails.values()) {
         for (const [propertyPath, value] of Object.entries(properties)) {
             if (!value || typeof value !== 'object' || Array.isArray(value) ||
@@ -380,16 +402,21 @@ function normalizeProjectedOverrideReferences(projectedDetails, identities, docu
             const guid = String(reference.guid ?? '');
             if (!guid) {
                 const machineId = documentIds.get(fileId);
-                if (!machineId || !identities.has(machineId)) {
-                    throw new Error(`Variant nested override ${propertyPath} has no stable local identity for fileID ${fileId}.`);
+                if (!machineId || !identities.has(machineId) || !effectiveReferenceIds.has(machineId)) {
+                    throw new Error(`Variant nested override ${propertyPath} has no effective stable local identity for fileID ${fileId}.`);
                 }
                 properties[propertyPath] = { $ref: machineId };
                 continue;
             }
             const matches = [...identities.values()].filter(identity => identity.origin === 'inherited' && identity.sourceGuid === guid &&
                 identity.sourceFileId === fileId);
-            if (matches.length === 1)
+            if (matches.length === 1) {
+                if (!effectiveReferenceIds.has(matches[0].machineId)) {
+                    throw new Error(`Variant nested override ${propertyPath} references ${guid}:${fileId}, ` +
+                        'which is not an effective identity.');
+                }
                 properties[propertyPath] = { $ref: matches[0].machineId };
+            }
         }
     }
 }
@@ -578,8 +605,8 @@ function buildInheritedVariantRoots(rootInstance, sourceGuid, options, identitie
     }
     const projectNestedOverrides = (machineId, guid, fileId, sourceName, baselineProperties) => {
         const assignProjectedValue = (propertyPath, value) => {
-            const details = projectedDetails.get(machineId) ?? {};
-            const segments = propertyPath.split('.');
+            const details = projectedDetails.get(machineId) ?? Object.create(null);
+            const segments = (0, override_validation_1.validateV3OverridePropertyPath)(propertyPath, `${machineId}.${propertyPath}`);
             let baseline = baselineProperties;
             let groupable = segments.length > 1;
             for (const segment of segments.slice(0, -1)) {
@@ -609,14 +636,14 @@ function buildInheritedVariantRoots(rootInstance, sourceGuid, options, identitie
                     Object.prototype.hasOwnProperty.call(details[root], 'fileID'))) {
                 throw new Error(`Variant nested override ${guid}:${fileId}.${propertyPath} overlaps another projected property path.`);
             }
-            const partial = (details[root] ?? (details[root] = {}));
+            const partial = (details[root] ?? (details[root] = Object.create(null)));
             let cursor = partial;
             for (const segment of segments.slice(1, -1)) {
                 const existing = cursor[segment];
                 if (existing !== undefined && (!existing || typeof existing !== 'object' || Array.isArray(existing))) {
                     throw new Error(`Variant nested override ${guid}:${fileId}.${propertyPath} overlaps another projected property path.`);
                 }
-                cursor = (cursor[segment] ?? (cursor[segment] = {}));
+                cursor = (cursor[segment] ?? (cursor[segment] = Object.create(null)));
             }
             const leaf = segments[segments.length - 1];
             cursor[leaf] = value;
@@ -626,27 +653,24 @@ function buildInheritedVariantRoots(rootInstance, sourceGuid, options, identitie
         for (const [key, modification] of [...nestedOverrides].sort(([left], [right]) => left.localeCompare(right))) {
             if (!key.startsWith(`${guid}:${fileId}:`))
                 continue;
+            (0, override_validation_1.validateV3OverridePropertyPath)(modification.propertyPath, `${machineId}.${modification.propertyPath}`);
             matchedNestedOverrides.add(key);
             if (modification.propertyPath === 'm_Name') {
                 name = modification.value;
                 continue;
             }
-            if (STRUCTURAL_FIELDS.has(modification.propertyPath)) {
-                throw new Error(`Variant nested override ${guid}:${fileId}.${modification.propertyPath} is not a scalar semantic override.`);
+            if ((0, override_validation_1.isV3OverrideStructuralPath)(modification.propertyPath)) {
+                throw new Error(`Variant nested override ${guid}:${fileId}.${modification.propertyPath} is structural and not supported.`);
             }
             const objectReferenceFileId = String(modification.objectReference?.fileID ?? '0');
             if (objectReferenceFileId !== '0') {
-                const details = projectedDetails.get(machineId) ?? {};
-                details[modification.propertyPath] = {
-                    fileID: objectReferenceFileId,
-                    ...(modification.objectReference.guid
-                        ? { guid: String(modification.objectReference.guid) }
-                        : {}),
-                    ...(modification.objectReference.type !== undefined
-                        ? { type: Number(modification.objectReference.type) }
-                        : {}),
-                };
-                projectedDetails.set(machineId, details);
+                const objectReference = modification.objectReference;
+                const keys = Object.keys(objectReference);
+                const projectedReference = Object.prototype.hasOwnProperty.call(objectReference, 'guid') ||
+                    keys.length !== 1 || keys[0] !== 'fileID'
+                    ? (0, references_1.validateV3ExternalObjectReference)(objectReference, `${machineId}.${modification.propertyPath}`)
+                    : { fileID: objectReferenceFileId };
+                assignProjectedValue(modification.propertyPath, projectedReference);
                 continue;
             }
             const baseline = baselineProperties?.[modification.propertyPath];

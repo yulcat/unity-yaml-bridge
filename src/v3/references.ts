@@ -4,6 +4,30 @@ export interface V3MachineReference {
 
 export type V3OverrideReferenceResolver = (machineId: string) => Record<string, unknown> | undefined;
 
+export function validateV3ExternalObjectReference(
+  value: unknown,
+  context: string
+): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`Invalid v3 external object reference at ${context}.`);
+  }
+  const object = value as Record<string, unknown>;
+  const keys = Object.keys(object);
+  if (keys.length !== 3 || !keys.includes('fileID') || !keys.includes('guid') || !keys.includes('type')) {
+    throw new Error(`Invalid v3 external object reference at ${context}.`);
+  }
+  const fileId = typeof object.fileID === 'number'
+    ? (Number.isSafeInteger(object.fileID) ? String(object.fileID) : '')
+    : typeof object.fileID === 'string' && /^(0|-?[1-9]\d*)$/.test(object.fileID)
+      ? object.fileID
+      : '';
+  if (!fileId || fileId === '0' || typeof object.guid !== 'string' ||
+      !/^[0-9a-f]{32}$/.test(object.guid) || object.type !== 3) {
+    throw new Error(`Invalid v3 external object reference at ${context}.`);
+  }
+  return { fileID: fileId, guid: object.guid, type: 3 };
+}
+
 /** Normalize the deliberately narrow object-reference forms accepted by an
  * inherited nested DETAILS override. Arbitrary object values fail closed. */
 export function resolveV3OverrideReference(
@@ -29,16 +53,7 @@ export function resolveV3OverrideReference(
   if (keys.length !== 3 || !keys.includes('fileID') || !keys.includes('guid') || !keys.includes('type')) {
     throw new Error(`Invalid v3 object reference at ${context}.`);
   }
-  const fileId = typeof object.fileID === 'number'
-    ? (Number.isSafeInteger(object.fileID) ? String(object.fileID) : '')
-    : typeof object.fileID === 'string' && /^(0|-?[1-9]\d*)$/.test(object.fileID)
-      ? object.fileID
-      : '';
-  if (!fileId || fileId === '0' || typeof object.guid !== 'string' ||
-      !/^[0-9a-f]{32}$/.test(object.guid) || object.type !== 3) {
-    throw new Error(`Invalid v3 external object reference at ${context}.`);
-  }
-  return { fileID: fileId, guid: object.guid, type: 3 };
+  return validateV3ExternalObjectReference(object, context);
 }
 
 /** Convert local `{fileID}` references to stable v3 machine identities. */

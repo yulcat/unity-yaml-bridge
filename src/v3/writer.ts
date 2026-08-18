@@ -4,7 +4,14 @@ import { GameObjectNode, UnityDocument, UnityFile } from '../types';
 import { parseUnityYaml } from '../unity-yaml-parser';
 import { V3IdentityRecord, V3StructureNode, V3WriterOptions } from './model';
 import { formatV3Value } from './value';
-import { encodeV3References } from './references';
+import {
+  encodeV3References,
+  validateV3ExternalObjectReference,
+} from './references';
+import {
+  isV3OverrideStructuralPath,
+  validateV3OverridePropertyPath,
+} from './override-validation';
 
 const STRUCTURAL_FIELDS = new Set([
   'm_CorrespondingSourceObject', 'm_PrefabInstance', 'm_PrefabAsset',
@@ -363,7 +370,11 @@ function writeVariantV3(file: UnityFile, options: V3WriterOptions): string {
     });
   }
   applySourceFingerprints(identities, options);
-  normalizeProjectedOverrideReferences(projectedDetails, identities, documentIds);
+  const effectiveReferenceIds = collectEffectiveV3StructureIds(effectiveRoots, identities);
+  effectiveReferenceIds.add(rootId);
+  normalizeProjectedOverrideReferences(
+    projectedDetails, identities, documentIds, effectiveReferenceIds
+  );
 
   const lines = [
     `# ubridge v3 | variant | profile:${options.profile || 'unity-generic-v1'}${options.assetGuid ? ` | asset-guid:${options.assetGuid}` : ''}`,
@@ -393,10 +404,32 @@ function writeVariantV3(file: UnityFile, options: V3WriterOptions): string {
   return lines.join('\n') + '\n';
 }
 
+function collectEffectiveV3StructureIds(
+  roots: V3StructureNode[],
+  identities: ReadonlyMap<string, V3IdentityRecord>
+): Set<string> {
+  const result = new Set<string>();
+  const visit = (node: V3StructureNode): void => {
+    if (node.tombstone) return;
+    result.add(node.machineId);
+    if (node.prefabInstanceId) result.add(node.prefabInstanceId);
+    node.components.forEach(component => result.add(component.machineId));
+    for (const identity of identities.values()) {
+      if (identity.kind === 'transform' && identity.ownerId === node.machineId) {
+        result.add(identity.machineId);
+      }
+    }
+    node.children.forEach(visit);
+  };
+  roots.forEach(visit);
+  return result;
+}
+
 function normalizeProjectedOverrideReferences(
   projectedDetails: Map<string, Record<string, unknown>>,
   identities: ReadonlyMap<string, V3IdentityRecord>,
-  documentIds: ReadonlyMap<string, string>
+  documentIds: ReadonlyMap<string, string>,
+  effectiveReferenceIds: ReadonlySet<string>
 ): void {
   for (const properties of projectedDetails.values()) {
     for (const [propertyPath, value] of Object.entries(properties)) {
@@ -407,9 +440,9 @@ function normalizeProjectedOverrideReferences(
       const guid = String(reference.guid ?? '');
       if (!guid) {
         const machineId = documentIds.get(fileId);
-        if (!machineId || !identities.has(machineId)) {
+        if (!machineId || !identities.has(machineId) || !effectiveReferenceIds.has(machineId)) {
           throw new Error(
-            `Variant nested override ${propertyPath} has no stable local identity for fileID ${fileId}.`
+            `Variant nested override ${propertyPath} has no effective stable local identity for fileID ${fileId}.`
           );
         }
         properties[propertyPath] = { $ref: machineId };
@@ -419,7 +452,15 @@ function normalizeProjectedOverrideReferences(
         identity.origin === 'inherited' && identity.sourceGuid === guid &&
         identity.sourceFileId === fileId
       );
-      if (matches.length === 1) properties[propertyPath] = { $ref: matches[0].machineId };
+      if (matches.length === 1) {
+        if (!effectiveReferenceIds.has(matches[0].machineId)) {
+          throw new Error(
+            `Variant nested override ${propertyPath} references ${guid}:${fileId}, ` +
+            'which is not an effective identity.'
+          );
+        }
+        properties[propertyPath] = { $ref: matches[0].machineId };
+      }
     }
   }
 }
@@ -674,8 +715,10 @@ function buildInheritedVariantRoots(
     baselineProperties?: Record<string, unknown>
   ): string | undefined => {
     const assignProjectedValue = (propertyPath: string, value: unknown): void => {
-      const details = projectedDetails.get(machineId) ?? {};
-      const segments = propertyPath.split('.');
+      const details = projectedDetails.get(machineId) ?? Object.create(null) as Record<string, unknown>;
+      const segments = validateV3OverridePropertyPath(
+        propertyPath, `${machineId}.${propertyPath}`
+      );
       let baseline: unknown = baselineProperties;
       let groupable = segments.length > 1;
       for (const segment of segments.slice(0, -1)) {
@@ -711,7 +754,7 @@ function buildInheritedVariantRoots(
           `Variant nested override ${guid}:${fileId}.${propertyPath} overlaps another projected property path.`
         );
       }
-      const partial = (details[root] ??= {}) as Record<string, unknown>;
+      const partial = (details[root] ??= Object.create(null)) as Record<string, unknown>;
       let cursor = partial;
       for (const segment of segments.slice(1, -1)) {
         const existing = cursor[segment];
@@ -720,7 +763,7 @@ function buildInheritedVariantRoots(
             `Variant nested override ${guid}:${fileId}.${propertyPath} overlaps another projected property path.`
           );
         }
-        cursor = (cursor[segment] ??= {}) as Record<string, unknown>;
+        cursor = (cursor[segment] ??= Object.create(null)) as Record<string, unknown>;
       }
       const leaf = segments[segments.length - 1];
       cursor[leaf] = value;
@@ -731,29 +774,30 @@ function buildInheritedVariantRoots(
     for (const [key, modification] of [...nestedOverrides].sort(([left], [right]) =>
       left.localeCompare(right))) {
       if (!key.startsWith(`${guid}:${fileId}:`)) continue;
+      validateV3OverridePropertyPath(
+        modification.propertyPath, `${machineId}.${modification.propertyPath}`
+      );
       matchedNestedOverrides.add(key);
       if (modification.propertyPath === 'm_Name') {
         name = modification.value;
         continue;
       }
-      if (STRUCTURAL_FIELDS.has(modification.propertyPath)) {
+      if (isV3OverrideStructuralPath(modification.propertyPath)) {
         throw new Error(
-          `Variant nested override ${guid}:${fileId}.${modification.propertyPath} is not a scalar semantic override.`
+          `Variant nested override ${guid}:${fileId}.${modification.propertyPath} is structural and not supported.`
         );
       }
       const objectReferenceFileId = String(modification.objectReference?.fileID ?? '0');
       if (objectReferenceFileId !== '0') {
-        const details = projectedDetails.get(machineId) ?? {};
-        details[modification.propertyPath] = {
-          fileID: objectReferenceFileId,
-          ...(modification.objectReference.guid
-            ? { guid: String(modification.objectReference.guid) }
-            : {}),
-          ...(modification.objectReference.type !== undefined
-            ? { type: Number(modification.objectReference.type) }
-            : {}),
-        };
-        projectedDetails.set(machineId, details);
+        const objectReference = modification.objectReference as unknown as Record<string, unknown>;
+        const keys = Object.keys(objectReference);
+        const projectedReference = Object.prototype.hasOwnProperty.call(objectReference, 'guid') ||
+          keys.length !== 1 || keys[0] !== 'fileID'
+          ? validateV3ExternalObjectReference(
+              objectReference, `${machineId}.${modification.propertyPath}`
+            )
+          : { fileID: objectReferenceFileId };
+        assignProjectedValue(modification.propertyPath, projectedReference);
         continue;
       }
       const baseline = baselineProperties?.[modification.propertyPath];

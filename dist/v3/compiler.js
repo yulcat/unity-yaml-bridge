@@ -5,17 +5,13 @@ const crypto_1 = require("crypto");
 const fs_1 = require("fs");
 const value_1 = require("./value");
 const references_1 = require("./references");
+const override_validation_1 = require("./override-validation");
 const COMMON_LOCAL_ENVELOPE = {
     m_ObjectHideFlags: 0,
     m_CorrespondingSourceObject: { fileID: 0 },
     m_PrefabInstance: { fileID: 0 },
     m_PrefabAsset: { fileID: 0 },
 };
-const INHERITED_OVERRIDE_STRUCTURAL_FIELDS = new Set([
-    'm_CorrespondingSourceObject', 'm_PrefabInstance', 'm_PrefabAsset',
-    'm_GameObject', 'm_Father', 'm_Children', 'm_RootOrder', 'm_Component',
-    'm_Name', 'm_Script',
-]);
 const SAFE_OBJECT_KEY = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const UNSAFE_OBJECT_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
 function flattenPrimitiveOverrideObject(propertyPath, value, context) {
@@ -354,6 +350,14 @@ function compileVariant(document) {
         if (duplicate) {
             throw new Error(`Inherited nested overrides ${duplicate.machineId} and ${identity.machineId} have an ambiguous owner/source path.`);
         }
+        const overlap = inheritedNestedOverrides.find(override => override.ownerId === ownerId &&
+            String(override.target.fileID) === identity.sourceFileId &&
+            String(override.target.guid) === identity.sourceGuid &&
+            (0, override_validation_1.pathsHaveSegmentPrefixOverlap)(override.propertyPath, propertyPath));
+        if (overlap) {
+            throw new Error(`Inherited nested override ${identity.machineId}.${propertyPath} overlaps another property path ` +
+                `${overlap.propertyPath}.`);
+        }
         inheritedNestedOverrides.push({
             machineId: identity.machineId,
             ownerId,
@@ -371,7 +375,8 @@ function compileVariant(document) {
             if (propertyPath.length === 0) {
                 throw new Error(`Inherited nested DETAILS ${identity.machineId} has an empty property path.`);
             }
-            if ([...INHERITED_OVERRIDE_STRUCTURAL_FIELDS].some(field => propertyPath === field || propertyPath.startsWith(`${field}.`))) {
+            (0, override_validation_1.validateV3OverridePropertyPath)(propertyPath, `${identity.machineId}.${propertyPath}`);
+            if ((0, override_validation_1.isV3OverrideStructuralPath)(propertyPath)) {
                 throw new Error(`Inherited nested DETAILS ${identity.machineId}.${propertyPath} is structural and not supported.`);
             }
             if (value === null) {
@@ -1062,7 +1067,7 @@ function compileVariant(document) {
                     const targetKey = `${String(entry?.target?.guid ?? '')}:${String(entry?.target?.fileID ?? '0')}`;
                     const propertyPath = String(entry?.propertyPath ?? '');
                     return !nestedTargets.has(targetKey) ||
-                        propertyPath !== 'm_Name' && INHERITED_OVERRIDE_STRUCTURAL_FIELDS.has(propertyPath);
+                        propertyPath !== 'm_Name' && override_validation_1.V3_OVERRIDE_STRUCTURAL_FIELDS.has(propertyPath);
                 });
             }
             for (const override of inheritedNestedOverrides) {

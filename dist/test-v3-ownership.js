@@ -763,6 +763,34 @@ console.log('\n=== v3 ownership cold-boundary edits ===');
         assert(coldFlat.prefabInstances[0].modifications.some(modification => modification.propertyPath === 'm_Unproven.x' && modification.value === '7' &&
             String(modification.target.fileID) === colorComponent.sourceFileId &&
             modification.target.guid === colorComponent.sourceGuid), 'an unproven flat property path survives export and cold compilation');
+        for (const unsafeSegment of ['__proto__', 'constructor', 'prototype']) {
+            for (const propertyPath of [unsafeSegment, `m_Custom.${unsafeSegment}`]) {
+                const unsafeExport = (0, unity_yaml_parser_1.parseUnityYaml)((0, unity_yaml_writer_1.writeUnityYaml)(objectEdited));
+                unsafeExport.prefabInstances[0].modifications.push({
+                    target: {
+                        fileID: colorComponent.sourceFileId, guid: colorComponent.sourceGuid, type: 3,
+                    },
+                    propertyPath, value: '7', objectReference: { fileID: '0' },
+                });
+                expectThrow(() => (0, writer_1.writeV3)(unsafeExport, {
+                    sourceResolver: {
+                        resolveFilePath: guid => guid === outerGuid ? outerPath :
+                            guid === middleGuid ? middlePath : guid === innerGuid ? innerPath : undefined,
+                    },
+                }), 'unsafe property path segment', `export rejects ${unsafeSegment} in ${propertyPath === unsafeSegment ? 'root' : 'descendant'} property paths`);
+            }
+        }
+        const structuralDescendantExport = (0, unity_yaml_parser_1.parseUnityYaml)((0, unity_yaml_writer_1.writeUnityYaml)(objectEdited));
+        structuralDescendantExport.prefabInstances[0].modifications.push({
+            target: { fileID: colorComponent.sourceFileId, guid: colorComponent.sourceGuid, type: 3 },
+            propertyPath: 'm_GameObject.fileID', value: '7', objectReference: { fileID: '0' },
+        });
+        expectThrow(() => (0, writer_1.writeV3)(structuralDescendantExport, {
+            sourceResolver: {
+                resolveFilePath: guid => guid === outerGuid ? outerPath :
+                    guid === middleGuid ? middlePath : guid === innerGuid ? innerPath : undefined,
+            },
+        }), 'structural and not supported', 'export rejects structural descendant property paths before producing a cold-invalid document');
         const overlappingExport = (0, unity_yaml_parser_1.parseUnityYaml)((0, unity_yaml_writer_1.writeUnityYaml)(objectEdited));
         overlappingExport.prefabInstances[0].modifications.push({
             target: { fileID: colorComponent.sourceFileId, guid: colorComponent.sourceGuid, type: 3 },
@@ -890,6 +918,26 @@ console.log('\n=== v3 ownership cold-boundary edits ===');
             identity.sourceFileId === innerRoot.sourceFileId);
         assert(JSON.stringify(exportedExternal.details.get(exportedExternalIdentity.machineId)?.m_Icon) ===
             JSON.stringify({ fileID: '21300000', guid: externalReference.guid, type: 3 }), 'existing external reference override exports explicitly without guessing an identity');
+        const malformedExternalReferences = [
+            ['missing type', { fileID: '21300000', guid: externalReference.guid }],
+            ['invalid type', { fileID: '21300000', guid: externalReference.guid, type: 2 }],
+            ['invalid GUID', { fileID: '21300000', guid: 'not-a-guid', type: 3 }],
+            ['noncanonical fileID', { fileID: '01', guid: externalReference.guid, type: 3 }],
+            ['extra keys', { fileID: '21300000', guid: externalReference.guid, type: 3, extra: true }],
+        ];
+        for (const [label, objectReference] of malformedExternalReferences) {
+            const malformedExport = (0, unity_yaml_parser_1.parseUnityYaml)((0, unity_yaml_writer_1.writeUnityYaml)(externalEdited));
+            const modification = malformedExport.prefabInstances[0].modifications.find(candidate => candidate.propertyPath === 'm_Icon' &&
+                String(candidate.target.fileID) === innerRoot.sourceFileId &&
+                candidate.target.guid === innerRoot.sourceGuid);
+            modification.objectReference = objectReference;
+            expectThrow(() => (0, writer_1.writeV3)(malformedExport, {
+                sourceResolver: {
+                    resolveFilePath: guid => guid === outerGuid ? outerPath :
+                        guid === middleGuid ? middlePath : guid === innerGuid ? innerPath : undefined,
+                },
+            }), 'Invalid v3 external object reference', `export rejects an external object reference with ${label}`);
+        }
         document.details.set(innerRoot.machineId, {
             m_Icon: { ...externalReference, fileID: '21300000' },
         });
@@ -1004,6 +1052,12 @@ console.log('\n=== v3 ownership cold-boundary edits ===');
         expectThrow(() => (0, compiler_1.compileV3)(document), 'plain JSON object', 'primitive object override rejects non-plain object instances');
         document.details.set(innerRoot.machineId, { m_Custom: { constructor: 1 } });
         expectThrow(() => (0, compiler_1.compileV3)(document), 'unsafe object key', 'primitive object override rejects unsafe prototype keys');
+        for (const unsafeSegment of ['__proto__', 'constructor', 'prototype']) {
+            for (const propertyPath of [unsafeSegment, `m_Custom.${unsafeSegment}`]) {
+                document.details.set(innerRoot.machineId, Object.fromEntries([[propertyPath, 1]]));
+                expectThrow(() => (0, compiler_1.compileV3)(document), 'unsafe property path segment', `nested DETAILS rejects ${unsafeSegment} in ${propertyPath === unsafeSegment ? 'root' : 'descendant'} property paths`);
+            }
+        }
         document.details.set(innerRoot.machineId, { m_GameObject: { local: 1 } });
         expectThrow(() => (0, compiler_1.compileV3)(document), 'is structural and not supported', 'primitive object override rejects a structural property root');
         document.details.set(innerRoot.machineId, { 'm_GameObject.fileID': 1 });
@@ -1013,6 +1067,13 @@ console.log('\n=== v3 ownership cold-boundary edits ===');
             'm_Color.r': 0.5,
         });
         expectThrow(() => (0, compiler_1.compileV3)(document), 'ambiguous owner/source path', 'primitive object override rejects overlapping object and flat property paths');
+        for (const entries of [
+            [['m_Color', { r: 1 }], ['m_Color.r.x', 0.5]],
+            [['m_Color.r.x', 0.5], ['m_Color', { r: 1 }]],
+        ]) {
+            document.details.set(innerRoot.machineId, Object.fromEntries(entries));
+            expectThrow(() => (0, compiler_1.compileV3)(document), 'overlaps another property path', `primitive object override rejects segment-prefix overlap in ${entries[0][0] === 'm_Color' ? 'object-first' : 'flat-first'} insertion order`);
+        }
         document.details.set(innerRoot.machineId, { m_Icon: { $ref: 'missingIdentity' } });
         expectThrow(() => (0, compiler_1.compileV3)(document), 'not an effective identity', 'nested override rejects dangling stable references');
         document.details.set(innerRoot.machineId, { m_Icon: { $ref: deepComponent.machineId } });
@@ -1273,6 +1334,22 @@ console.log('\n=== v3 ownership cold-boundary edits ===');
             deepRemovedDeltas[0].guid === removedDeepIdentity.sourceGuid &&
             [...removedDeepDescendantIds].every(machineId => document.identity.has(machineId)) &&
             deeplyRemoved.documents.length === variant.documents.length, 'removing a recursively expanded inherited nested subtree emits one leaf-owned source delta and preserves identities');
+        const referenceToRemoved = (0, unity_yaml_parser_1.parseUnityYaml)((0, unity_yaml_writer_1.writeUnityYaml)(deeplyRemoved));
+        referenceToRemoved.prefabInstances[0].modifications.push({
+            target: { fileID: innerRoot.sourceFileId, guid: innerRoot.sourceGuid, type: 3 },
+            propertyPath: 'm_Icon', value: '',
+            objectReference: {
+                fileID: removedDeepIdentity.sourceFileId,
+                guid: removedDeepIdentity.sourceGuid,
+                type: 3,
+            },
+        });
+        expectThrow(() => (0, writer_1.writeV3)(referenceToRemoved, {
+            sourceResolver: {
+                resolveFilePath: guid => guid === outerGuid ? outerPath :
+                    guid === middleGuid ? middlePath : guid === innerGuid ? innerPath : undefined,
+            },
+        }), 'not an effective identity', 'export rejects a reference to a removed inherited identity instead of emitting a dangling stable reference');
         const exportedDeepRemoval = (0, reader_1.readV3)((0, writer_1.writeV3)(deeplyRemoved, {
             sourceResolver: {
                 resolveFilePath: guid => guid === outerGuid ? outerPath :

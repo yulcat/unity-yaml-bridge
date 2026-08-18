@@ -396,14 +396,28 @@ function compileVariant(document) {
         const details = document.details.get(identity.machineId);
         if (!details)
             return;
+        const baselineAt = (propertyPath) => {
+            let value = identity.baselineDetails;
+            for (const segment of propertyPath.split('.')) {
+                if (!value || typeof value !== 'object' || Array.isArray(value) ||
+                    !Object.prototype.hasOwnProperty.call(value, segment))
+                    return undefined;
+                value = value[segment];
+            }
+            return value;
+        };
+        const equalsBaseline = (propertyPath, value) => JSON.stringify(baselineAt(propertyPath)) === JSON.stringify(value);
         for (const [propertyPath, value] of Object.entries(details).sort(([left], [right]) => left.localeCompare(right))) {
             if (propertyPath.length === 0) {
                 throw new Error(`Inherited nested DETAILS ${identity.machineId} has an empty property path.`);
             }
             (0, override_validation_1.validateV3OverridePropertyPath)(propertyPath, `${identity.machineId}.${propertyPath}`);
-            if ((0, override_validation_1.isV3OverrideStructuralPath)(propertyPath)) {
+            if ((0, override_validation_1.isV3OverrideStructuralPath)(propertyPath) &&
+                !(identity.kind === 'component' && propertyPath === 'm_Name')) {
                 throw new Error(`Inherited nested DETAILS ${identity.machineId}.${propertyPath} is structural and not supported.`);
             }
+            if (equalsBaseline(propertyPath, value))
+                continue;
             if (value === null) {
                 queueInheritedNestedOverride(identity, propertyPath, '', { fileID: 0 });
                 continue;
@@ -414,6 +428,12 @@ function compileVariant(document) {
                 const isReferenceShape = keys.includes('$ref') || keys.includes('fileID');
                 if (!isReferenceShape) {
                     for (const leaf of flattenPrimitiveOverrideObject(propertyPath, value, `${identity.machineId}.${propertyPath}`)) {
+                        if (equalsBaseline(leaf.propertyPath, typeof baselineAt(leaf.propertyPath) === 'boolean'
+                            ? leaf.value === '1'
+                            : typeof baselineAt(leaf.propertyPath) === 'number'
+                                ? Number(leaf.value)
+                                : leaf.value))
+                            continue;
                         queueInheritedNestedOverride(identity, leaf.propertyPath, leaf.value);
                     }
                     continue;
@@ -736,11 +756,21 @@ function compileVariant(document) {
         if (goIdentity.origin === 'inherited') {
             if (!goIdentity.prefabOwnerId)
                 effectiveDirectInheritedGameObjects.add(goIdentity.machineId);
-            const directComponentStructureChanged = node.components.some((component, index) => {
+            const desiredInheritedComponentIds = new Set();
+            let previousInheritedOrder = -Infinity;
+            const directComponentStructureChanged = node.components.some(component => {
                 const identity = requireIdentity(document, component.machineId, 'component');
-                return identity.origin === 'inherited' &&
-                    (identity.ownerId !== goIdentity.machineId || identity.baselineOrder !== index ||
-                        (identity.displayName || identity.typeName) !== component.typeName);
+                if (identity.origin !== 'inherited')
+                    return false;
+                const baselineOrder = identity.baselineOrder;
+                const changed = desiredInheritedComponentIds.has(identity.machineId) ||
+                    identity.ownerId !== goIdentity.machineId || baselineOrder === undefined ||
+                    baselineOrder <= previousInheritedOrder ||
+                    (identity.displayName || identity.typeName) !== component.typeName;
+                desiredInheritedComponentIds.add(identity.machineId);
+                if (baselineOrder !== undefined)
+                    previousInheritedOrder = baselineOrder;
+                return changed;
             });
             const directStructuralChange = transformIdentity.baselineParentId !== parentTransformMachineId ||
                 transformIdentity.baselineOrder !== siblingIndex || directComponentStructureChanged;
@@ -1108,6 +1138,7 @@ function compileVariant(document) {
             }
             if (document.baseGuid)
                 inheritedSourceGuids.add(document.baseGuid);
+            const preservedRawSourcePaths = new Map();
             if (Array.isArray(modification.m_Modifications)) {
                 const rawSourcePaths = new Map();
                 modification.m_Modifications = modification.m_Modifications.filter(entry => {
@@ -1136,14 +1167,25 @@ function compileVariant(document) {
                             throw new Error(`Raw inherited modification target ${targetKey} resolves ambiguously to inherited source identities.`);
                         }
                     }
-                    if (!nestedTargets.has(targetKey))
+                    if (!nestedTargets.has(targetKey)) {
+                        const paths = preservedRawSourcePaths.get(targetKey) ?? [];
+                        paths.push(propertyPath);
+                        preservedRawSourcePaths.set(targetKey, paths);
                         return true;
+                    }
                     return false;
                 });
             }
             for (const override of inheritedNestedOverrides) {
                 if (override.ownerId !== identity.machineId)
                     continue;
+                const targetKey = `${String(override.target.guid)}:${String(override.target.fileID)}`;
+                const rawConflict = (preservedRawSourcePaths.get(targetKey) ?? []).find(propertyPath => propertyPath === override.propertyPath ||
+                    (0, override_validation_1.pathsHaveSegmentPrefixOverlap)(propertyPath, override.propertyPath));
+                if (rawConflict) {
+                    throw new Error(`Preserved raw modification ${targetKey}.${rawConflict} overlaps newly authored semantic ` +
+                        `modification ${override.propertyPath}.`);
+                }
                 if (!Array.isArray(modification.m_Modifications))
                     modification.m_Modifications = [];
                 upsertModification(modification.m_Modifications, override.target, override.propertyPath, override.value, override.objectReference);

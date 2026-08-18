@@ -164,7 +164,12 @@ the effective GameObject/component STRUCTURE and DETAILS view; unchanged values
 cold-roundtrip, edits replace the exact target/property tuple, and deleting a
 projected key (or restoring a source-baseline name) removes that modification.
 Variant-of-variant leaf edits target identities in the leaf's direct source and
-do not replay intermediate deltas or emit source documents. Unknown, duplicate,
+do not replay intermediate deltas or emit source documents. Intermediate typed
+GameObject/component overrides are projected as effective DETAILS. Their opaque,
+base64url-encoded `baselineDetails` IDENTITY metadata records only that direct
+source's effective overridden values, allowing cold compilation to distinguish an
+untouched inherited value from a newly authored leaf delta; agents edit DETAILS,
+not this metadata. Unknown, duplicate,
 or ambiguous targets, malformed references, arrays, unsafe/prototype-sensitive
 or structural property paths, and overlapping flat/object paths fail closed.
 Direct inherited reparenting, sibling/component reordering, and Transform

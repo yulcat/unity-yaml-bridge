@@ -296,6 +296,79 @@ console.log('\n=== v3 ownership cold-boundary edits ===');
 }
 
 {
+  const sourceGuid = '96969696969696969696969696969696';
+  const source = parseUnityYaml(sample('prefabs', 'Amount.prefab'));
+  const sourcePath = path.join(__dirname, '..', 'samples', 'prefabs', 'Amount.prefab');
+  const variant = makeVariantSource(sourceGuid, source.hierarchy!.fileId);
+  variant.documents.find(item => item.typeId === 1001)!
+    .properties.m_Modification.m_Modifications.push({
+      target: { fileID: source.hierarchy!.components[0].fileId, guid: sourceGuid, type: 3 },
+      propertyPath: 'm_Material', value: 'must-not-be-discarded',
+      objectReference: {
+        fileID: '21300000', guid: 'abababababababababababababababab', type: 3,
+      },
+    });
+  expectThrow(
+    () => writeV3(parseUnityYaml(writeUnityYaml(variant)), {
+      sourceResolver: { resolveFilePath: guid => guid === sourceGuid ? sourcePath : undefined },
+    }),
+    'mixes a nonempty scalar value with a nonzero objectReference',
+    'variant export rejects malformed mixed scalar/reference modification envelopes'
+  );
+}
+
+{
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'ubridge-v3-duplicate-source-'));
+  try {
+    const sourceGuid = '97979797979797979797979797979797';
+    const source = parseUnityYaml(sample('prefabs', 'Amount.prefab'));
+    const duplicate = source.documents.find(item => item.fileId === source.hierarchy!.components[0].fileId)!;
+    source.documents.push({
+      ...duplicate,
+      properties: JSON.parse(JSON.stringify(duplicate.properties)),
+    });
+    const sourcePath = path.join(directory, 'DuplicateSource.prefab');
+    fs.writeFileSync(sourcePath, writeUnityYaml(source));
+    const variant = makeVariantSource(sourceGuid, source.hierarchy!.fileId);
+    expectThrow(
+      () => writeV3(variant, {
+        sourceResolver: { resolveFilePath: guid => guid === sourceGuid ? sourcePath : undefined },
+      }),
+      'duplicate source document fileID',
+      'variant export rejects duplicate direct-source documents before target indexing'
+    );
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+}
+
+{
+  const sourceGuid = '98989898989898989898989898989898';
+  const source = parseUnityYaml(sample('prefabs', 'Amount.prefab'));
+  const sourcePath = path.join(__dirname, '..', 'samples', 'prefabs', 'Amount.prefab');
+  const component = source.hierarchy!.components[0];
+  const variant = makeVariantSource(sourceGuid, source.hierarchy!.fileId);
+  variant.documents.find(item => item.typeId === 1001)!
+    .properties.m_Modification.m_Modifications.push({
+      target: { fileID: component.fileId, guid: sourceGuid, type: 3 },
+      propertyPath: 'm_Name', value: 'ComponentOverride', objectReference: { fileID: '0' },
+    });
+  const document = readV3(writeV3(parseUnityYaml(writeUnityYaml(variant)), {
+    sourceResolver: { resolveFilePath: guid => guid === sourceGuid ? sourcePath : undefined },
+  }));
+  const componentIdentity = [...document.identity.values()].find(identity =>
+    identity.kind === 'component' && identity.sourceFileId === component.fileId
+  )!;
+  const details = document.details.get(componentIdentity.machineId);
+  const rebuilt = parseUnityYaml(writeUnityYaml(compileV3(document)));
+  const modification = rebuilt.prefabInstances[0].modifications.find(item =>
+    item.propertyPath === 'm_Name' && String(item.target.fileID) === component.fileId
+  );
+  assert(details?.m_Name === 'ComponentOverride' && modification?.value === 'ComponentOverride',
+    'component m_Name remains typed DETAILS and cold-roundtrips instead of becoming a GameObject rename');
+}
+
+{
   const sourceGuid = '99999999999999999999999999999999';
   const sourcePath = path.join(__dirname, '..', 'samples', 'prefabs', 'Amount.prefab');
   const mixed = makeMixedVariant(sourceGuid);
@@ -346,6 +419,15 @@ console.log('\n=== v3 ownership cold-boundary edits ===');
     const baseGuid = '11111111111111111111111111111111';
     const middleGuid = '22222222222222222222222222222222';
     const middle = makeVariantSource(baseGuid, base.hierarchy!.fileId, 'MiddleVariantRoot');
+    const baseComponent = base.hierarchy!.components[0];
+    const middleInstanceDocument = middle.documents.find(item => item.typeId === 1001)!;
+    middleInstanceDocument.properties.m_Modification.m_Modifications.push({
+      target: { fileID: baseComponent.fileId, guid: baseGuid, type: 3 },
+      propertyPath: 'm_Enabled', value: '0', objectReference: { fileID: '0' },
+    }, {
+      target: { fileID: baseComponent.fileId, guid: baseGuid, type: 3 },
+      propertyPath: 'm_Name', value: 'MiddleComponentName', objectReference: { fileID: '0' },
+    });
     const middlePath = path.join(directory, 'Middle.prefab');
     fs.writeFileSync(middlePath, writeUnityYaml(middle));
     const leaf = makeVariantSource(middleGuid, base.hierarchy!.fileId);
@@ -357,34 +439,39 @@ console.log('\n=== v3 ownership cold-boundary edits ===');
     const document = readV3(text);
     const inheritedRoot = document.variantRoots![0];
     const inheritedIdentity = document.identity.get(inheritedRoot.machineId)!;
+    const inheritedComponentBinding = inheritedRoot.components.find(component =>
+      document.identity.get(component.machineId)?.sourceFileId === baseComponent.fileId
+    )!;
+    const inheritedComponentIdentity = document.identity.get(inheritedComponentBinding.machineId)!;
+    const inheritedComponentDetails = document.details.get(inheritedComponentBinding.machineId);
     const rebuilt = parseUnityYaml(writeUnityYaml(compileV3(document)));
     assert(inheritedRoot.name === 'MiddleVariantRoot' &&
            inheritedIdentity.sourceGuid === middleGuid &&
-           inheritedIdentity.sourceFileId === base.hierarchy!.fileId,
-      'variant-of-variant expands the direct source effective tree and preserves direct ownership');
+           inheritedIdentity.sourceFileId === base.hierarchy!.fileId &&
+           inheritedComponentDetails?.m_Enabled === 0 &&
+           inheritedComponentDetails?.m_Name === 'MiddleComponentName',
+      'variant-of-variant projects intermediate typed DETAILS through leaf direct-source identity',
+      JSON.stringify({ inheritedComponentDetails, identity: inheritedComponentIdentity }));
     assert(rebuilt.documents.length === leaf.documents.length &&
            rebuilt.variantSource?.guid === middleGuid &&
            rebuilt.prefabInstances[0].modifications.length === 0,
       'untouched variant-of-variant cold-compiles without source YAML');
 
-    const inheritedComponentBinding = inheritedRoot.components[0];
-    const inheritedComponentIdentity = document.identity.get(inheritedComponentBinding.machineId)!;
     inheritedRoot.name = 'LeafDirectRename';
-    document.details.set(inheritedComponentBinding.machineId, { m_Enabled: false });
+    document.details.set(inheritedComponentBinding.machineId, { m_Enabled: true });
     const editedLeaf = parseUnityYaml(writeUnityYaml(compileV3(document)));
     assert(editedLeaf.prefabInstances[0].modifications.some(modification =>
              modification.propertyPath === 'm_Name' && modification.value === 'LeafDirectRename' &&
              String(modification.target.fileID) === inheritedIdentity.sourceFileId &&
              modification.target.guid === middleGuid
            ) && editedLeaf.prefabInstances[0].modifications.some(modification =>
-             modification.propertyPath === 'm_Enabled' && modification.value === '0' &&
+             modification.propertyPath === 'm_Enabled' && modification.value === '1' &&
              String(modification.target.fileID) === inheritedComponentIdentity.sourceFileId &&
              modification.target.guid === middleGuid
            ) && editedLeaf.documents.length === leaf.documents.length,
       'variant-chain leaf rename and DETAILS target leaf direct-source identities without replaying intermediate deltas');
 
-    const middleInstance = middle.documents.find(item => item.typeId === 1001)!;
-    middleInstance.properties.m_Modification.m_Modifications[0].target.guid = middleGuid;
+    middleInstanceDocument.properties.m_Modification.m_Modifications[0].target.guid = middleGuid;
     fs.writeFileSync(middlePath, writeUnityYaml(middle));
     expectThrow(
       () => writeV3(leaf, {
@@ -395,8 +482,8 @@ console.log('\n=== v3 ownership cold-boundary edits ===');
       'ambiguous name ownership',
       'variant source-chain name override rejects the wrong direct-source GUID owner'
     );
-    middleInstance.properties.m_Modification.m_Modifications[0].target.guid = baseGuid;
-    middleInstance.properties.m_Modification.m_Modifications.push({
+    middleInstanceDocument.properties.m_Modification.m_Modifications[0].target.guid = baseGuid;
+    middleInstanceDocument.properties.m_Modification.m_Modifications.push({
       target: { fileID: base.hierarchy!.fileId, guid: baseGuid, type: 3 },
       propertyPath: 'm_Name',
       value: 'ConflictingMiddleName',
@@ -2501,6 +2588,30 @@ console.log('\n=== v3 ownership cold-boundary edits ===');
 }
 
 {
+  for (const [label, rawPath, semanticDetails] of [
+    ['equal', 'm_CustomOverlap', { m_CustomOverlap: 1 }],
+    ['raw-parent', 'm_Color', { 'm_Color.r': 1 }],
+    ['semantic-parent', 'm_Color.r', { m_Color: 1 }],
+  ] as Array<[string, string, Record<string, unknown>]>) {
+    const document = readV3(sourceBackedVariantText());
+    const inheritedRoot = document.variantRoots![0];
+    const component = inheritedRoot.components[0];
+    const identity = document.identity.get(component.machineId)!;
+    const rootDetails: any = document.details.get(document.variantRootId!);
+    rootDetails.m_Modification.m_Modifications.push({
+      target: { fileID: identity.sourceFileId, guid: identity.sourceGuid, type: 3 },
+      propertyPath: rawPath, value: '7', objectReference: { fileID: '0' },
+    });
+    document.details.set(component.machineId, semanticDetails);
+    expectThrow(
+      () => compileV3(document),
+      'overlaps newly authored semantic modification',
+      `preserved raw direct modification rejects ${label} overlap with semantic DETAILS`
+    );
+  }
+}
+
+{
   const document = readV3(sourceBackedVariantText());
   const inheritedRoot = document.variantRoots![0];
   const removedComponent = inheritedRoot.components.pop()!;
@@ -2511,6 +2622,20 @@ console.log('\n=== v3 ownership cold-boundary edits ===');
          String(removed[0].fileID) === sourceIdentity.sourceFileId &&
          removed[0].guid === sourceIdentity.sourceGuid,
     'removing an inherited component compiles to m_RemovedComponents');
+}
+
+{
+  const document = readV3(sourceBackedVariantText());
+  const inheritedRoot = document.variantRoots![0];
+  const removedComponent = inheritedRoot.components.shift()!;
+  const survivingOrder = inheritedRoot.components.map(component => component.machineId);
+  const sourceIdentity = document.identity.get(removedComponent.machineId)!;
+  const rebuilt = parseUnityYaml(writeUnityYaml(compileV3(document)));
+  const removed = rebuilt.prefabInstances[0].removedComponents;
+  assert(removed.length === 1 &&
+         String(removed[0].fileID) === sourceIdentity.sourceFileId &&
+         inheritedRoot.components.map(component => component.machineId).join(',') === survivingOrder.join(','),
+    'removing a non-tail inherited component preserves surviving relative order');
 }
 
 {

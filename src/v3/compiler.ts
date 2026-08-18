@@ -490,17 +490,30 @@ function compileVariant(document: V3Document): UnityFile {
   const queueInheritedNestedDetails = (identity: V3IdentityRecord): void => {
     const details = document.details.get(identity.machineId);
     if (!details) return;
+    const baselineAt = (propertyPath: string): unknown => {
+      let value: unknown = identity.baselineDetails;
+      for (const segment of propertyPath.split('.')) {
+        if (!value || typeof value !== 'object' || Array.isArray(value) ||
+            !Object.prototype.hasOwnProperty.call(value, segment)) return undefined;
+        value = (value as Record<string, unknown>)[segment];
+      }
+      return value;
+    };
+    const equalsBaseline = (propertyPath: string, value: unknown): boolean =>
+      JSON.stringify(baselineAt(propertyPath)) === JSON.stringify(value);
     for (const [propertyPath, value] of Object.entries(details).sort(([left], [right]) =>
       left.localeCompare(right))) {
       if (propertyPath.length === 0) {
         throw new Error(`Inherited nested DETAILS ${identity.machineId} has an empty property path.`);
       }
       validateV3OverridePropertyPath(propertyPath, `${identity.machineId}.${propertyPath}`);
-      if (isV3OverrideStructuralPath(propertyPath)) {
+      if (isV3OverrideStructuralPath(propertyPath) &&
+          !(identity.kind === 'component' && propertyPath === 'm_Name')) {
         throw new Error(
           `Inherited nested DETAILS ${identity.machineId}.${propertyPath} is structural and not supported.`
         );
       }
+      if (equalsBaseline(propertyPath, value)) continue;
       if (value === null) {
         queueInheritedNestedOverride(identity, propertyPath, '', { fileID: 0 });
         continue;
@@ -513,6 +526,12 @@ function compileVariant(document: V3Document): UnityFile {
           for (const leaf of flattenPrimitiveOverrideObject(
             propertyPath, value, `${identity.machineId}.${propertyPath}`
           )) {
+            if (equalsBaseline(leaf.propertyPath,
+              typeof baselineAt(leaf.propertyPath) === 'boolean'
+                ? leaf.value === '1'
+                : typeof baselineAt(leaf.propertyPath) === 'number'
+                  ? Number(leaf.value)
+                  : leaf.value)) continue;
             queueInheritedNestedOverride(identity, leaf.propertyPath, leaf.value);
           }
           continue;
@@ -915,11 +934,19 @@ function compileVariant(document: V3Document): UnityFile {
     const transformIdentity = findOwnedTransform(document, node.machineId);
     if (goIdentity.origin === 'inherited') {
       if (!goIdentity.prefabOwnerId) effectiveDirectInheritedGameObjects.add(goIdentity.machineId);
-      const directComponentStructureChanged = node.components.some((component, index) => {
+      const desiredInheritedComponentIds = new Set<string>();
+      let previousInheritedOrder = -Infinity;
+      const directComponentStructureChanged = node.components.some(component => {
         const identity = requireIdentity(document, component.machineId, 'component');
-        return identity.origin === 'inherited' &&
-          (identity.ownerId !== goIdentity.machineId || identity.baselineOrder !== index ||
-           (identity.displayName || identity.typeName) !== component.typeName);
+        if (identity.origin !== 'inherited') return false;
+        const baselineOrder = identity.baselineOrder;
+        const changed = desiredInheritedComponentIds.has(identity.machineId) ||
+          identity.ownerId !== goIdentity.machineId || baselineOrder === undefined ||
+          baselineOrder <= previousInheritedOrder ||
+          (identity.displayName || identity.typeName) !== component.typeName;
+        desiredInheritedComponentIds.add(identity.machineId);
+        if (baselineOrder !== undefined) previousInheritedOrder = baselineOrder;
+        return changed;
       });
       const directStructuralChange = transformIdentity.baselineParentId !== parentTransformMachineId ||
         transformIdentity.baselineOrder !== siblingIndex || directComponentStructureChanged;
@@ -1286,6 +1313,7 @@ function compileVariant(document: V3Document): UnityFile {
         }
       }
       if (document.baseGuid) inheritedSourceGuids.add(document.baseGuid);
+      const preservedRawSourcePaths = new Map<string, string[]>();
       if (Array.isArray(modification.m_Modifications)) {
         const rawSourcePaths = new Map<string, string[]>();
         modification.m_Modifications = (modification.m_Modifications as any[]).filter(entry => {
@@ -1327,12 +1355,28 @@ function compileVariant(document: V3Document): UnityFile {
               );
             }
           }
-          if (!nestedTargets.has(targetKey)) return true;
+          if (!nestedTargets.has(targetKey)) {
+            const paths = preservedRawSourcePaths.get(targetKey) ?? [];
+            paths.push(propertyPath);
+            preservedRawSourcePaths.set(targetKey, paths);
+            return true;
+          }
           return false;
         });
       }
       for (const override of inheritedNestedOverrides) {
         if (override.ownerId !== identity.machineId) continue;
+        const targetKey = `${String(override.target.guid)}:${String(override.target.fileID)}`;
+        const rawConflict = (preservedRawSourcePaths.get(targetKey) ?? []).find(propertyPath =>
+          propertyPath === override.propertyPath ||
+          pathsHaveSegmentPrefixOverlap(propertyPath, override.propertyPath)
+        );
+        if (rawConflict) {
+          throw new Error(
+            `Preserved raw modification ${targetKey}.${rawConflict} overlaps newly authored semantic ` +
+            `modification ${override.propertyPath}.`
+          );
+        }
         if (!Array.isArray(modification.m_Modifications)) modification.m_Modifications = [];
         upsertModification(
           modification.m_Modifications as any[],

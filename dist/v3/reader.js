@@ -216,6 +216,19 @@ function parseIdentity(lines) {
         if (origin !== undefined && origin !== 'inherited') {
             throw new Error(`Invalid v3 identity origin for ${machineId}: ${origin}`);
         }
+        let baselineDetails;
+        const encodedBaseline = fields.get('baselineDetails');
+        if (encodedBaseline !== undefined) {
+            try {
+                const parsed = JSON.parse(Buffer.from(encodedBaseline, 'base64url').toString('utf8'));
+                if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))
+                    throw new Error();
+                baselineDetails = parsed;
+            }
+            catch {
+                throw new Error(`Invalid v3 baselineDetails for ${machineId}.`);
+            }
+        }
         result.set(machineId, {
             machineId,
             kind,
@@ -236,6 +249,7 @@ function parseIdentity(lines) {
             sourceGuid: fields.get('sourceGuid'),
             sourceFileId: fields.get('sourceFileID'),
             sourceFingerprint: fields.get('sourceFingerprint'),
+            baselineDetails,
         });
     }
     return result;

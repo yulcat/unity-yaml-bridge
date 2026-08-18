@@ -20,6 +20,7 @@ export interface V3IdentityRecord {
     sourceGuid?: string;
     sourceFileId?: string;
     sourceFingerprint?: string;
+    baselineDetails?: Record<string, unknown>;
 }
 export interface V3StructureComponent {
     typeName: string;

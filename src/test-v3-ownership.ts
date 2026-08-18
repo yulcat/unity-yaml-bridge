@@ -1512,9 +1512,8 @@ console.log('\n=== v3 ownership cold-boundary edits ===');
       String(modification.target.fileID) === exportedInheritedOwner.sourceFileId &&
       modification.target.guid === exportedInheritedOwner.sourceGuid
     );
-    assert(String(coldInheritedDelta?.objectReference.fileID) === exportedInheritedTarget.sourceFileId &&
-           coldInheritedDelta?.objectReference.guid === exportedInheritedTarget.sourceGuid,
-      'exported inherited stable reference cold-roundtrips without nested source documents');
+    assert(!coldInheritedDelta,
+      'exported inherited stable reference equal to its baseline suppresses a redundant leaf delta');
     exportedInheritedReference.details.set(exportedInheritedOwner.machineId, {
       m_Icon: { fileID: 21300000, guid: externalReference.guid, type: 3 },
     });
@@ -2356,6 +2355,138 @@ console.log('\n=== v3 ownership cold-boundary edits ===');
     ]),
     'direct inherited component primitive-leaf partial objects emit sorted exact-source leaf deltas');
   directInherited.details.delete(inheritedComponent.machineId);
+}
+
+{
+  class NonPlainDirectOverride {
+    nested = 1;
+  }
+  const invalidCases: Array<{
+    label: string;
+    value: unknown;
+    baseline?: unknown;
+    expected: string;
+  }> = [
+    { label: 'undefined with a missing baseline', value: undefined, expected: 'requires a scalar' },
+    { label: 'function with a missing baseline', value: () => 1, expected: 'requires a scalar' },
+    { label: 'symbol with a missing baseline', value: Symbol('bad'), expected: 'requires a scalar' },
+    { label: 'bigint with a missing baseline', value: 1n, expected: 'requires a scalar' },
+    { label: 'NaN with a null-looking baseline', value: Number.NaN, baseline: null, expected: 'finite number' },
+    { label: 'Infinity with a null-looking baseline', value: Number.POSITIVE_INFINITY, baseline: null, expected: 'finite number' },
+    { label: 'array with a matching-looking baseline', value: [1], baseline: [1], expected: 'nonempty primitive object' },
+    { label: 'empty object with a matching-looking baseline', value: {}, baseline: {}, expected: 'nonempty primitive object' },
+    {
+      label: 'non-plain object with a matching-looking baseline',
+      value: new NonPlainDirectOverride(), baseline: { nested: 1 }, expected: 'plain JSON object',
+    },
+    {
+      label: 'invalid reference with a matching-looking baseline',
+      value: { $ref: '' }, baseline: { $ref: '' }, expected: 'Invalid v3 machine reference',
+    },
+    {
+      label: 'unsafe object with a matching-looking baseline',
+      value: { constructor: 1 }, baseline: { constructor: 1 }, expected: 'unsafe object key',
+    },
+  ];
+  for (const invalid of invalidCases) {
+    const document = readV3(sourceBackedVariantText());
+    const component = document.variantRoots![0].children[0].components[0];
+    const identity = document.identity.get(component.machineId)!;
+    identity.baselineDetails = invalid.baseline === undefined
+      ? undefined
+      : { m_Bad: invalid.baseline };
+    document.details.set(component.machineId, { m_Bad: invalid.value });
+    expectThrow(
+      () => compileV3(document),
+      invalid.expected,
+      `direct inherited DETAILS rejects ${invalid.label} before baseline suppression`
+    );
+  }
+
+  const overlapping = readV3(sourceBackedVariantText());
+  const overlappingComponent = overlapping.variantRoots![0].children[0].components[0];
+  const overlappingIdentity = overlapping.identity.get(overlappingComponent.machineId)!;
+  overlappingIdentity.baselineDetails = { m_Overlap: { x: 1 } };
+  overlapping.details.set(overlappingComponent.machineId, {
+    m_Overlap: { x: 1 },
+    'm_Overlap.x': 1,
+  });
+  expectThrow(
+    () => compileV3(overlapping),
+    'ambiguous owner/source path',
+    'direct inherited DETAILS rejects overlapping baseline-equal paths before suppression'
+  );
+
+  const structural = readV3(sourceBackedVariantText());
+  const structuralComponent = structural.variantRoots![0].children[0].components[0];
+  const structuralIdentity = structural.identity.get(structuralComponent.machineId)!;
+  structuralIdentity.baselineDetails = { m_GameObject: { fileID: 1 } };
+  structural.details.set(structuralComponent.machineId, { 'm_GameObject.fileID': 1 });
+  expectThrow(
+    () => compileV3(structural),
+    'is structural and not supported',
+    'direct inherited DETAILS rejects a baseline-equal structural path before suppression'
+  );
+}
+
+{
+  const document = readV3(sourceBackedVariantText());
+  const child = document.variantRoots![0].children[0];
+  const component = child.components[0];
+  const identity = document.identity.get(component.machineId)!;
+  const externalReference = {
+    fileID: '21300000', guid: 'abcdefabcdefabcdefabcdefabcdefab', type: 3,
+  };
+  identity.baselineDetails = {
+    m_Scalar: 'same',
+    m_Boolean: true,
+    m_Null: null,
+    m_Number: 1,
+    m_ExternalReference: externalReference,
+    m_StableReference: { $ref: child.machineId },
+    m_Partial: { x: 1, nested: { enabled: false } },
+  };
+  document.details.set(component.machineId, {
+    m_Scalar: 'same',
+    m_Boolean: true,
+    m_Null: null,
+    m_Number: 1,
+    m_ExternalReference: {
+      type: 3, guid: externalReference.guid, fileID: externalReference.fileID,
+    },
+    m_StableReference: { $ref: child.machineId },
+    m_Partial: { nested: { enabled: false }, x: 1 },
+  });
+  const suppressed = parseUnityYaml(writeUnityYaml(compileV3(document)));
+  const suppressedDeltas = suppressed.prefabInstances[0].modifications.filter(modification =>
+    String(modification.target.fileID) === identity.sourceFileId &&
+    modification.target.guid === identity.sourceGuid
+  );
+  assert(suppressedDeltas.length === 0,
+    'validated baseline-equal scalar, boolean, null, references, and partial object leaves suppress direct deltas');
+
+  document.details.set(component.machineId, {
+    m_Scalar: 'changed',
+    m_Boolean: false,
+    m_Null: 'changed-from-null',
+    m_Number: '1',
+    m_ExternalReference: {
+      fileID: '21300001', guid: externalReference.guid, type: 3,
+    },
+    m_StableReference: { $ref: document.variantRootId! },
+    m_Partial: { x: 2, nested: { enabled: true } },
+  });
+  const changed = parseUnityYaml(writeUnityYaml(compileV3(document)));
+  const changedDeltas = changed.prefabInstances[0].modifications.filter(modification =>
+    String(modification.target.fileID) === identity.sourceFileId &&
+    modification.target.guid === identity.sourceGuid
+  );
+  const changedPaths = new Set(changedDeltas.map(modification => modification.propertyPath));
+  assert([
+    'm_Scalar', 'm_Boolean', 'm_Null', 'm_Number', 'm_ExternalReference',
+    'm_StableReference', 'm_Partial.x', 'm_Partial.nested.enabled',
+  ].every(propertyPath => changedPaths.has(propertyPath)) && changedDeltas.length === 8,
+  'type-changed and value-changed direct DETAILS emit exact scalar, reference, and partial-object deltas');
 }
 
 {

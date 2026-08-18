@@ -54,6 +54,7 @@ function flattenPrimitiveOverrideObject(propertyPath, value, context) {
         leaves.push({
             propertyPath: childPath,
             value: typeof child === 'boolean' ? (child ? '1' : '0') : String(child),
+            canonicalValue: child,
         });
     }
     return leaves;
@@ -401,12 +402,59 @@ function compileVariant(document) {
             for (const segment of propertyPath.split('.')) {
                 if (!value || typeof value !== 'object' || Array.isArray(value) ||
                     !Object.prototype.hasOwnProperty.call(value, segment))
-                    return undefined;
+                    return { found: false };
                 value = value[segment];
             }
-            return value;
+            return { found: true, value };
         };
-        const equalsBaseline = (propertyPath, value) => JSON.stringify(baselineAt(propertyPath)) === JSON.stringify(value);
+        const resolveReference = (value, context) => (0, references_1.resolveV3OverrideReference)(value, machineId => {
+            const target = document.identity.get(machineId);
+            if (!target || !effectiveReferenceIds.has(machineId))
+                return undefined;
+            if (target.origin === 'inherited') {
+                if (!target.sourceGuid || !target.sourceFileId)
+                    return undefined;
+                const matches = [...effectiveReferenceIds].filter(candidateId => {
+                    const candidate = document.identity.get(candidateId);
+                    return candidate?.origin === 'inherited' &&
+                        candidate.sourceGuid === target.sourceGuid &&
+                        candidate.sourceFileId === target.sourceFileId;
+                });
+                if (matches.length !== 1) {
+                    throw new Error(`Ambiguous inherited v3 reference at ${context}: ${machineId}.`);
+                }
+                return { fileID: target.sourceFileId, guid: target.sourceGuid, type: 3 };
+            }
+            const fileID = allocated.get(machineId);
+            return fileID ? { fileID } : undefined;
+        }, context);
+        const referencesEqual = (propertyPath, authoredReference) => {
+            const baseline = baselineAt(propertyPath);
+            if (!baseline.found)
+                return false;
+            let baselineReference;
+            try {
+                baselineReference = resolveReference(baseline.value, `${identity.machineId}.${propertyPath} baseline`);
+            }
+            catch {
+                return false;
+            }
+            const authoredKeys = Object.keys(authoredReference).sort();
+            const baselineKeys = Object.keys(baselineReference).sort();
+            return authoredKeys.length === baselineKeys.length &&
+                authoredKeys.every((key, index) => key === baselineKeys[index] && Object.is(authoredReference[key], baselineReference[key]));
+        };
+        const authoredPaths = [];
+        const registerAuthoredPath = (propertyPath) => {
+            const conflict = authoredPaths.find(existing => existing === propertyPath || (0, override_validation_1.pathsHaveSegmentPrefixOverlap)(existing, propertyPath));
+            if (conflict === propertyPath) {
+                throw new Error(`Inherited nested overrides ${identity.machineId} and ${identity.machineId} have an ambiguous owner/source path.`);
+            }
+            if (conflict) {
+                throw new Error(`Inherited nested override ${identity.machineId}.${propertyPath} overlaps another property path ${conflict}.`);
+            }
+            authoredPaths.push(propertyPath);
+        };
         for (const [propertyPath, value] of Object.entries(details).sort(([left], [right]) => left.localeCompare(right))) {
             if (propertyPath.length === 0) {
                 throw new Error(`Inherited nested DETAILS ${identity.machineId} has an empty property path.`);
@@ -416,49 +464,40 @@ function compileVariant(document) {
                 !(identity.kind === 'component' && propertyPath === 'm_Name')) {
                 throw new Error(`Inherited nested DETAILS ${identity.machineId}.${propertyPath} is structural and not supported.`);
             }
-            if (equalsBaseline(propertyPath, value))
-                continue;
             if (value === null) {
+                registerAuthoredPath(propertyPath);
+                const baseline = baselineAt(propertyPath);
+                if (baseline.found && Object.is(baseline.value, null))
+                    continue;
                 queueInheritedNestedOverride(identity, propertyPath, '', { fileID: 0 });
                 continue;
             }
             if (typeof value === 'object') {
+                if (!Array.isArray(value)) {
+                    const prototype = Object.getPrototypeOf(value);
+                    if (prototype !== Object.prototype && prototype !== null) {
+                        throw new Error(`Inherited nested DETAILS ${identity.machineId}.${propertyPath} requires a plain JSON object.`);
+                    }
+                }
                 const object = value;
                 const keys = Object.keys(object);
                 const isReferenceShape = keys.includes('$ref') || keys.includes('fileID');
                 if (!isReferenceShape) {
-                    for (const leaf of flattenPrimitiveOverrideObject(propertyPath, value, `${identity.machineId}.${propertyPath}`)) {
-                        if (equalsBaseline(leaf.propertyPath, typeof baselineAt(leaf.propertyPath) === 'boolean'
-                            ? leaf.value === '1'
-                            : typeof baselineAt(leaf.propertyPath) === 'number'
-                                ? Number(leaf.value)
-                                : leaf.value))
+                    const leaves = flattenPrimitiveOverrideObject(propertyPath, value, `${identity.machineId}.${propertyPath}`);
+                    for (const leaf of leaves)
+                        registerAuthoredPath(leaf.propertyPath);
+                    for (const leaf of leaves) {
+                        const baseline = baselineAt(leaf.propertyPath);
+                        if (baseline.found && Object.is(baseline.value, leaf.canonicalValue))
                             continue;
                         queueInheritedNestedOverride(identity, leaf.propertyPath, leaf.value);
                     }
                     continue;
                 }
-                const objectReference = (0, references_1.resolveV3OverrideReference)(value, machineId => {
-                    const target = document.identity.get(machineId);
-                    if (!target || !effectiveReferenceIds.has(machineId))
-                        return undefined;
-                    if (target.origin === 'inherited') {
-                        if (!target.sourceGuid || !target.sourceFileId)
-                            return undefined;
-                        const matches = [...effectiveReferenceIds].filter(candidateId => {
-                            const candidate = document.identity.get(candidateId);
-                            return candidate?.origin === 'inherited' &&
-                                candidate.sourceGuid === target.sourceGuid &&
-                                candidate.sourceFileId === target.sourceFileId;
-                        });
-                        if (matches.length !== 1) {
-                            throw new Error(`Ambiguous inherited v3 reference at ${identity.machineId}.${propertyPath}: ${machineId}.`);
-                        }
-                        return { fileID: target.sourceFileId, guid: target.sourceGuid, type: 3 };
-                    }
-                    const fileID = allocated.get(machineId);
-                    return fileID ? { fileID } : undefined;
-                }, `${identity.machineId}.${propertyPath}`);
+                const objectReference = resolveReference(value, `${identity.machineId}.${propertyPath}`);
+                registerAuthoredPath(propertyPath);
+                if (referencesEqual(propertyPath, objectReference))
+                    continue;
                 queueInheritedNestedOverride(identity, propertyPath, '', objectReference);
                 continue;
             }
@@ -468,6 +507,10 @@ function compileVariant(document) {
             if (typeof value === 'number' && !Number.isFinite(value)) {
                 throw new Error(`Inherited nested DETAILS ${identity.machineId}.${propertyPath} requires a finite number.`);
             }
+            registerAuthoredPath(propertyPath);
+            const baseline = baselineAt(propertyPath);
+            if (baseline.found && Object.is(baseline.value, value))
+                continue;
             queueInheritedNestedOverride(identity, propertyPath, typeof value === 'boolean' ? (value ? '1' : '0') : String(value));
         }
     };

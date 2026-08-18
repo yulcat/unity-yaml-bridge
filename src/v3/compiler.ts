@@ -3,7 +3,7 @@ import { readFileSync } from 'fs';
 import { UnityDocument, UnityFile } from '../types';
 import { V3CompileOptions, V3Document, V3IdentityRecord, V3StructureNode } from './model';
 import { markCanonicalFlowMappings } from './value';
-import { resolveV3References } from './references';
+import { resolveV3OverrideReference, resolveV3References } from './references';
 
 const COMMON_LOCAL_ENVELOPE: Record<string, unknown> = {
   m_ObjectHideFlags: 0,
@@ -250,7 +250,8 @@ function upsertModification(
   modifications: any[],
   target: any,
   propertyPath: string,
-  value: string
+  value: string,
+  objectReference: Record<string, unknown> = { fileID: 0 }
 ): void {
   const targetFileId = String(target.fileID ?? '0');
   const targetGuid = String(target.guid ?? '');
@@ -261,19 +262,20 @@ function upsertModification(
   );
   if (existing) {
     existing.value = value;
-    existing.objectReference = { fileID: 0 };
+    existing.objectReference = clone(objectReference);
     return;
   }
   modifications.push({
     target: clone(target),
     propertyPath,
     value,
-    objectReference: { fileID: 0 },
+    objectReference: clone(objectReference),
   });
 }
 
 function compileVariant(document: V3Document): UnityFile {
   const allocated = allocateFileIds(document);
+  const effectiveReferenceIds = collectEffectiveReferenceIds(document);
   const emitted = new Set<string>();
   const documents: UnityDocument[] = [];
   const nestedPlans = new Map<string, NestedInstancePlan>();
@@ -296,6 +298,7 @@ function compileVariant(document: V3Document): UnityFile {
     target: Record<string, unknown>;
     propertyPath: string;
     value: string;
+    objectReference: Record<string, unknown>;
   }> = [];
   const hasInheritedStructure = [...document.identity.values()].some(identity =>
     identity.origin === 'inherited'
@@ -368,7 +371,8 @@ function compileVariant(document: V3Document): UnityFile {
   const queueInheritedNestedOverride = (
     identity: V3IdentityRecord,
     propertyPath: string,
-    value: string
+    value: string,
+    objectReference: Record<string, unknown> = { fileID: 0 }
   ): void => {
     const ownerId = requireEmittedPrefabOwner(identity, 'override');
     const duplicate = inheritedNestedOverrides.find(override =>
@@ -388,6 +392,7 @@ function compileVariant(document: V3Document): UnityFile {
       target: { fileID: identity.sourceFileId, guid: identity.sourceGuid, type: 3 },
       propertyPath,
       value,
+      objectReference,
     });
   };
 
@@ -400,9 +405,42 @@ function compileVariant(document: V3Document): UnityFile {
           `Inherited nested DETAILS ${identity.machineId}.${propertyPath} is structural and not supported.`
         );
       }
+      if (value === null) {
+        queueInheritedNestedOverride(identity, propertyPath, '', { fileID: 0 });
+        continue;
+      }
+      if (typeof value === 'object') {
+        const objectReference = resolveV3OverrideReference(
+          value,
+          machineId => {
+            const target = document.identity.get(machineId);
+            if (!target || !effectiveReferenceIds.has(machineId)) return undefined;
+            if (target.origin === 'inherited') {
+              if (!target.sourceGuid || !target.sourceFileId) return undefined;
+              const matches = [...effectiveReferenceIds].filter(candidateId => {
+                const candidate = document.identity.get(candidateId);
+                return candidate?.origin === 'inherited' &&
+                  candidate.sourceGuid === target.sourceGuid &&
+                  candidate.sourceFileId === target.sourceFileId;
+              });
+              if (matches.length !== 1) {
+                throw new Error(
+                  `Ambiguous inherited v3 reference at ${identity.machineId}.${propertyPath}: ${machineId}.`
+                );
+              }
+              return { fileID: target.sourceFileId, guid: target.sourceGuid, type: 3 };
+            }
+            const fileID = allocated.get(machineId);
+            return fileID ? { fileID } : undefined;
+          },
+          `${identity.machineId}.${propertyPath}`
+        );
+        queueInheritedNestedOverride(identity, propertyPath, '', objectReference!);
+        continue;
+      }
       if (typeof value !== 'string' && typeof value !== 'number' && typeof value !== 'boolean') {
         throw new Error(
-          `Inherited nested DETAILS ${identity.machineId}.${propertyPath} requires a string, number, or boolean value.`
+          `Inherited nested DETAILS ${identity.machineId}.${propertyPath} requires a scalar, null, stable reference, or explicit external reference.`
         );
       }
       queueInheritedNestedOverride(
@@ -1131,7 +1169,8 @@ function compileVariant(document: V3Document): UnityFile {
           modification.m_Modifications as any[],
           override.target,
           override.propertyPath,
-          override.value
+          override.value,
+          override.objectReference
         );
       }
     }
@@ -1156,6 +1195,38 @@ function compileVariant(document: V3Document): UnityFile {
       ? { fileID: '100100000', guid: document.baseGuid, type: 3 }
       : undefined,
   };
+}
+
+function collectEffectiveReferenceIds(document: V3Document): Set<string> {
+  const result = new Set<string>();
+  const visit = (node: V3StructureNode): void => {
+    if (node.tombstone) return;
+    result.add(node.machineId);
+    if (node.prefabInstanceId) result.add(node.prefabInstanceId);
+    for (const component of node.components) result.add(component.machineId);
+    for (const identity of document.identity.values()) {
+      if (identity.kind === 'transform' && identity.ownerId === node.machineId) {
+        result.add(identity.machineId);
+      }
+    }
+    node.children.forEach(visit);
+  };
+  if (document.structure) visit(document.structure);
+  document.variantRoots?.forEach(visit);
+  if (document.variantRootId) result.add(document.variantRootId);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const identity of document.identity.values()) {
+      if (identity.origin === 'inherited' || result.has(identity.machineId)) continue;
+      const emittedRawRoot = identity.kind === 'owned' && !identity.ownerId;
+      if (emittedRawRoot || (identity.ownerId && result.has(identity.ownerId))) {
+        result.add(identity.machineId);
+        changed = true;
+      }
+    }
+  }
+  return result;
 }
 
 function pruneAbsentAddedObjects(properties: Record<string, any>, emitted: Set<string>): void {

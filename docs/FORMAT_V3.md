@@ -97,25 +97,45 @@ the containing boundary; the outermost inherited boundary is directly owned by
 the leaf variant's emitted root PrefabInstance. This preserves an unambiguous
 ownership chain without adding duplicate same-name source-root levels. Nested
 source cycles and ambiguous direct-owner metadata fail closed. Expanded nested
-source-root/internal GameObjects can now be renamed, and string/number/boolean DETAILS on
+source-root/internal GameObjects can now be renamed, and scalar or object-reference DETAILS on
 their GameObjects/components can be added as property overrides, at any resolved
 nested depth. The compiler walks `prefabOwner` to the emitted leaf-variant
 PrefabInstance, then upserts an `m_Modification.m_Modifications` entry whose
-`target` reuses the edited identity's nested-source GUID/fileID, whose
-`propertyPath` is `m_Name` or the DETAILS key, and whose value is encoded into
-Unity's string-valued `value` field. Strings and numbers are stringified as-is;
-JSON booleans are normalized canonically to Unity scalar strings `"1"` for
-`true` and `"0"` for `false`. Every scalar override uses
-`objectReference: {fileID: 0}`. Unity YAML carries no property schema in these
-modification entries, so export cannot prove that a raw `0` or `1` was a
-boolean: canonical v3 export projects it as the JSON number `0` or `1`, not as
-`false` or `true`. A user may replace that projected number with a JSON boolean;
-compilation still emits canonical `0`/`1`. The exporter does not infer boolean
-schema from property names or scalar spelling.
+`target` reuses the edited identity's nested-source GUID/fileID and whose
+`propertyPath` is `m_Name` or the DETAILS key. Scalar values are encoded into
+Unity's string-valued `value` field: strings and numbers are stringified as-is,
+and JSON booleans normalize canonically to `"1"` for `true` and `"0"` for
+`false`; scalar overrides use `objectReference: {fileID:0}`. Unity YAML carries
+no property schema in these entries, so export cannot prove that raw `0` or `1`
+was boolean and projects it as the JSON number `0` or `1`, never by property-name
+or spelling inference.
+
+Reference-valued inherited nested DETAILS accept exactly these JSON forms:
+
+- `null`, compiled as `value:""` plus `objectReference:{fileID:0}`;
+- `{"$ref":"<machineId>"}` with no extra keys; an effective inherited target
+  compiles to its exact `{fileID:<sourceFileId>,guid:<sourceGuid>,type:3}`, while
+  an effective emitted local target compiles to its allocated local `{fileID}`;
+- `{ "fileID": <canonical integer string or safe integer>, "guid":
+  "<32 lowercase hex>", "type": 3 }` with exactly those three keys, normalized
+  to a string `fileID` and preserved as an explicit external/source reference.
+
+Every reference override uses `value:""`. Missing, omitted/tombstoned, or
+ambiguous `$ref` targets fail closed, as do arrays, arbitrary objects, malformed
+references, extra keys, noncanonical fileIDs/GUIDs, and external types other
+than `3`. Export turns a nonzero local object reference into `$ref` only when it
+has one stable local identity. An exact inherited source GUID/fileID becomes
+`$ref` only when one effective inherited identity matches; zero or multiple
+matches remain explicit `{fileID,guid,type}` rather than guessing. For a zero
+object reference with empty `value`, export emits JSON `null` only when the
+resolved source property's baseline value is an object containing `fileID`.
+Otherwise it deterministically preserves the scalar empty string. Existing
+reference overrides therefore export, cold-compile, can be replaced, and are
+removed when their DETAILS key is removed.
+
 It never emits the nested source GameObject/component or an inherited
 PrefabInstance source document. Missing/cyclic owner chains and ambiguous
-duplicate owner/source/property targets fail closed. Null, object/array, and
-object-reference DETAILS remain unsupported. Reparenting,
+duplicate owner/source/property targets fail closed. Reparenting,
 reordering, adding, or duplicating expanded internals still fails closed. Removing an
 expanded inherited nested source-root/internal GameObject from effective STRUCTURE, or
 marking it with an explicit tombstone, emits one `m_RemovedGameObjects` entry on the

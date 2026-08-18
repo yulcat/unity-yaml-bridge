@@ -206,7 +206,7 @@ function applyNestedInstancePlan(document, identity, plan, properties) {
     }
     return properties;
 }
-function upsertModification(modifications, target, propertyPath, value) {
+function upsertModification(modifications, target, propertyPath, value, objectReference = { fileID: 0 }) {
     const targetFileId = String(target.fileID ?? '0');
     const targetGuid = String(target.guid ?? '');
     const existing = modifications.find(entry => entry?.propertyPath === propertyPath &&
@@ -214,18 +214,19 @@ function upsertModification(modifications, target, propertyPath, value) {
         String(entry?.target?.guid ?? '') === targetGuid);
     if (existing) {
         existing.value = value;
-        existing.objectReference = { fileID: 0 };
+        existing.objectReference = clone(objectReference);
         return;
     }
     modifications.push({
         target: clone(target),
         propertyPath,
         value,
-        objectReference: { fileID: 0 },
+        objectReference: clone(objectReference),
     });
 }
 function compileVariant(document) {
     const allocated = allocateFileIds(document);
+    const effectiveReferenceIds = collectEffectiveReferenceIds(document);
     const emitted = new Set();
     const documents = [];
     const nestedPlans = new Map();
@@ -299,7 +300,7 @@ function compileVariant(document) {
             type: 3,
         });
     };
-    const queueInheritedNestedOverride = (identity, propertyPath, value) => {
+    const queueInheritedNestedOverride = (identity, propertyPath, value, objectReference = { fileID: 0 }) => {
         const ownerId = requireEmittedPrefabOwner(identity, 'override');
         const duplicate = inheritedNestedOverrides.find(override => override.ownerId === ownerId && override.propertyPath === propertyPath &&
             String(override.target.fileID) === identity.sourceFileId &&
@@ -314,6 +315,7 @@ function compileVariant(document) {
             target: { fileID: identity.sourceFileId, guid: identity.sourceGuid, type: 3 },
             propertyPath,
             value,
+            objectReference,
         });
     };
     const queueInheritedNestedDetails = (identity) => {
@@ -324,8 +326,37 @@ function compileVariant(document) {
             if (INHERITED_OVERRIDE_STRUCTURAL_FIELDS.has(propertyPath)) {
                 throw new Error(`Inherited nested DETAILS ${identity.machineId}.${propertyPath} is structural and not supported.`);
             }
+            if (value === null) {
+                queueInheritedNestedOverride(identity, propertyPath, '', { fileID: 0 });
+                continue;
+            }
+            if (typeof value === 'object') {
+                const objectReference = (0, references_1.resolveV3OverrideReference)(value, machineId => {
+                    const target = document.identity.get(machineId);
+                    if (!target || !effectiveReferenceIds.has(machineId))
+                        return undefined;
+                    if (target.origin === 'inherited') {
+                        if (!target.sourceGuid || !target.sourceFileId)
+                            return undefined;
+                        const matches = [...effectiveReferenceIds].filter(candidateId => {
+                            const candidate = document.identity.get(candidateId);
+                            return candidate?.origin === 'inherited' &&
+                                candidate.sourceGuid === target.sourceGuid &&
+                                candidate.sourceFileId === target.sourceFileId;
+                        });
+                        if (matches.length !== 1) {
+                            throw new Error(`Ambiguous inherited v3 reference at ${identity.machineId}.${propertyPath}: ${machineId}.`);
+                        }
+                        return { fileID: target.sourceFileId, guid: target.sourceGuid, type: 3 };
+                    }
+                    const fileID = allocated.get(machineId);
+                    return fileID ? { fileID } : undefined;
+                }, `${identity.machineId}.${propertyPath}`);
+                queueInheritedNestedOverride(identity, propertyPath, '', objectReference);
+                continue;
+            }
             if (typeof value !== 'string' && typeof value !== 'number' && typeof value !== 'boolean') {
-                throw new Error(`Inherited nested DETAILS ${identity.machineId}.${propertyPath} requires a string, number, or boolean value.`);
+                throw new Error(`Inherited nested DETAILS ${identity.machineId}.${propertyPath} requires a scalar, null, stable reference, or explicit external reference.`);
             }
             queueInheritedNestedOverride(identity, propertyPath, typeof value === 'boolean' ? (value ? '1' : '0') : String(value));
         }
@@ -979,7 +1010,7 @@ function compileVariant(document) {
                     continue;
                 if (!Array.isArray(modification.m_Modifications))
                     modification.m_Modifications = [];
-                upsertModification(modification.m_Modifications, override.target, override.propertyPath, override.value);
+                upsertModification(modification.m_Modifications, override.target, override.propertyPath, override.value, override.objectReference);
             }
         }
         if (identity.kind === 'prefabInstance' && nestedPlans.has(identity.machineId)) {
@@ -1002,6 +1033,43 @@ function compileVariant(document) {
             ? { fileID: '100100000', guid: document.baseGuid, type: 3 }
             : undefined,
     };
+}
+function collectEffectiveReferenceIds(document) {
+    const result = new Set();
+    const visit = (node) => {
+        if (node.tombstone)
+            return;
+        result.add(node.machineId);
+        if (node.prefabInstanceId)
+            result.add(node.prefabInstanceId);
+        for (const component of node.components)
+            result.add(component.machineId);
+        for (const identity of document.identity.values()) {
+            if (identity.kind === 'transform' && identity.ownerId === node.machineId) {
+                result.add(identity.machineId);
+            }
+        }
+        node.children.forEach(visit);
+    };
+    if (document.structure)
+        visit(document.structure);
+    document.variantRoots?.forEach(visit);
+    if (document.variantRootId)
+        result.add(document.variantRootId);
+    let changed = true;
+    while (changed) {
+        changed = false;
+        for (const identity of document.identity.values()) {
+            if (identity.origin === 'inherited' || result.has(identity.machineId))
+                continue;
+            const emittedRawRoot = identity.kind === 'owned' && !identity.ownerId;
+            if (emittedRawRoot || (identity.ownerId && result.has(identity.ownerId))) {
+                result.add(identity.machineId);
+                changed = true;
+            }
+        }
+    }
+    return result;
 }
 function pruneAbsentAddedObjects(properties, emitted) {
     const modification = properties.m_Modification;

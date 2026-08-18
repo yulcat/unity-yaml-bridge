@@ -363,6 +363,7 @@ function writeVariantV3(file: UnityFile, options: V3WriterOptions): string {
     });
   }
   applySourceFingerprints(identities, options);
+  normalizeProjectedOverrideReferences(projectedDetails, identities, documentIds);
 
   const lines = [
     `# ubridge v3 | variant | profile:${options.profile || 'unity-generic-v1'}${options.assetGuid ? ` | asset-guid:${options.assetGuid}` : ''}`,
@@ -390,6 +391,37 @@ function writeVariantV3(file: UnityFile, options: V3WriterOptions): string {
   lines.push('', '--- IDENTITY');
   for (const identity of identities.values()) lines.push(writeIdentity(identity));
   return lines.join('\n') + '\n';
+}
+
+function normalizeProjectedOverrideReferences(
+  projectedDetails: Map<string, Record<string, unknown>>,
+  identities: ReadonlyMap<string, V3IdentityRecord>,
+  documentIds: ReadonlyMap<string, string>
+): void {
+  for (const properties of projectedDetails.values()) {
+    for (const [propertyPath, value] of Object.entries(properties)) {
+      if (!value || typeof value !== 'object' || Array.isArray(value) ||
+          !Object.prototype.hasOwnProperty.call(value, 'fileID')) continue;
+      const reference = value as Record<string, unknown>;
+      const fileId = String(reference.fileID);
+      const guid = String(reference.guid ?? '');
+      if (!guid) {
+        const machineId = documentIds.get(fileId);
+        if (!machineId || !identities.has(machineId)) {
+          throw new Error(
+            `Variant nested override ${propertyPath} has no stable local identity for fileID ${fileId}.`
+          );
+        }
+        properties[propertyPath] = { $ref: machineId };
+        continue;
+      }
+      const matches = [...identities.values()].filter(identity =>
+        identity.origin === 'inherited' && identity.sourceGuid === guid &&
+        identity.sourceFileId === fileId
+      );
+      if (matches.length === 1) properties[propertyPath] = { $ref: matches[0].machineId };
+    }
+  }
 }
 
 function identityFor(
@@ -638,7 +670,8 @@ function buildInheritedVariantRoots(
     machineId: string,
     guid: string,
     fileId: string,
-    sourceName?: string
+    sourceName?: string,
+    baselineProperties?: Record<string, unknown>
   ): string | undefined => {
     let name = sourceName;
     for (const [key, modification] of nestedOverrides) {
@@ -648,16 +681,35 @@ function buildInheritedVariantRoots(
         name = modification.value;
         continue;
       }
-      if (STRUCTURAL_FIELDS.has(modification.propertyPath) ||
-          String(modification.objectReference?.fileID ?? '0') !== '0') {
+      if (STRUCTURAL_FIELDS.has(modification.propertyPath)) {
         throw new Error(
           `Variant nested override ${guid}:${fileId}.${modification.propertyPath} is not a scalar semantic override.`
         );
       }
+      const objectReferenceFileId = String(modification.objectReference?.fileID ?? '0');
+      if (objectReferenceFileId !== '0') {
+        const details = projectedDetails.get(machineId) ?? {};
+        details[modification.propertyPath] = {
+          fileID: objectReferenceFileId,
+          ...(modification.objectReference.guid
+            ? { guid: String(modification.objectReference.guid) }
+            : {}),
+          ...(modification.objectReference.type !== undefined
+            ? { type: Number(modification.objectReference.type) }
+            : {}),
+        };
+        projectedDetails.set(machineId, details);
+        continue;
+      }
+      const baseline = baselineProperties?.[modification.propertyPath];
+      const baselineIsReference = !!baseline && typeof baseline === 'object' &&
+        !Array.isArray(baseline) && Object.prototype.hasOwnProperty.call(baseline, 'fileID');
       const numeric = Number(modification.value);
-      const value = modification.value.trim() !== '' && Number.isFinite(numeric)
-        ? numeric
-        : modification.value;
+      const value = modification.value === '' && baselineIsReference
+        ? null
+        : modification.value.trim() !== '' && Number.isFinite(numeric)
+          ? numeric
+          : modification.value;
       const details = projectedDetails.get(machineId) ?? {};
       details[modification.propertyPath] = value;
       projectedDetails.set(machineId, details);
@@ -757,7 +809,8 @@ function buildInheritedVariantRoots(
         new Set([...resolvingSources, childSourceGuid])
       );
       root.name = projectNestedOverrides(
-        root.machineId, childSourceGuid, childSource.hierarchy.fileId, node.name
+        root.machineId, childSourceGuid, childSource.hierarchy.fileId, node.name,
+        childSource.documents.get(childSource.hierarchy.fileId)?.properties
       )!;
       identities.get(root.machineId)!.displayName = node.name;
       root.nestedSourceGuid = childSourceGuid;
@@ -788,7 +841,9 @@ function buildInheritedVariantRoots(
       sourceGuid: nestedSourceGuid,
       sourceFileId: node.fileId,
     });
-    const effectiveName = projectNestedOverrides(goId, nestedSourceGuid, node.fileId, node.name)!;
+    const effectiveName = projectNestedOverrides(
+      goId, nestedSourceGuid, node.fileId, node.name, gameObjectDocument.properties
+    )!;
     identities.set(transformId, {
       machineId: transformId,
       kind: 'transform',
@@ -824,7 +879,9 @@ function buildInheritedVariantRoots(
         sourceGuid: nestedSourceGuid,
         sourceFileId: component.fileId,
       });
-      projectNestedOverrides(componentId, nestedSourceGuid, component.fileId);
+      projectNestedOverrides(
+        componentId, nestedSourceGuid, component.fileId, undefined, sourceDocument.properties
+      );
       if (matchRemoval(
         removedComponentIds, matchedRemovedComponentIds,
         nestedSourceGuid, component.fileId, 'removed-component'
@@ -890,7 +947,8 @@ function buildInheritedVariantRoots(
               new Set([sourceGuid, nestedSourceGuid])
             );
             root.name = projectNestedOverrides(
-              root.machineId, nestedSourceGuid, nestedSource.hierarchy.fileId, node.name
+              root.machineId, nestedSourceGuid, nestedSource.hierarchy.fileId, node.name,
+              nestedSource.documents.get(nestedSource.hierarchy.fileId)?.properties
             )!;
             identities.get(root.machineId)!.displayName = node.name;
             return root;

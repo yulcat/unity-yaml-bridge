@@ -752,6 +752,151 @@ console.log('\n=== v3 ownership cold-boundary edits ===');
             modification.target.guid === innerRoot.sourceGuid);
         assert(gameObjectBooleanDelta?.value === '0' &&
             String(gameObjectBooleanDelta.objectReference.fileID) === '0', 'false boolean DETAILS on an inherited nested GameObject emits canonical Unity scalar 0');
+        document.details.set(innerRoot.machineId, { m_Icon: null });
+        const nullEdited = (0, unity_yaml_parser_1.parseUnityYaml)((0, unity_yaml_writer_1.writeUnityYaml)((0, compiler_1.compileV3)(document)));
+        const nullDelta = nullEdited.prefabInstances[0].modifications.find(modification => modification.propertyPath === 'm_Icon' &&
+            String(modification.target.fileID) === innerRoot.sourceFileId &&
+            modification.target.guid === innerRoot.sourceGuid);
+        assert(nullDelta?.value === '' &&
+            String(nullDelta.objectReference.fileID) === '0', 'null DETAILS override compiles as an explicit null object reference at arbitrary nested depth');
+        const exportedNull = (0, reader_1.readV3)((0, writer_1.writeV3)(nullEdited, {
+            sourceResolver: {
+                resolveFilePath: guid => guid === outerGuid ? outerPath :
+                    guid === middleGuid ? middlePath : guid === innerGuid ? innerPath : undefined,
+            },
+        }));
+        const exportedNullIdentity = [...exportedNull.identity.values()].find(identity => identity.kind === 'gameObject' && identity.sourceGuid === innerRoot.sourceGuid &&
+            identity.sourceFileId === innerRoot.sourceFileId);
+        assert(exportedNull.details.get(exportedNullIdentity.machineId)?.m_Icon === null, 'existing null reference override exports as JSON null when the source baseline is a reference');
+        document.details.set(innerRoot.machineId, { m_CustomEmpty: '' });
+        const emptyScalarEdited = (0, unity_yaml_parser_1.parseUnityYaml)((0, unity_yaml_writer_1.writeUnityYaml)((0, compiler_1.compileV3)(document)));
+        const exportedEmptyScalar = (0, reader_1.readV3)((0, writer_1.writeV3)(emptyScalarEdited, {
+            sourceResolver: {
+                resolveFilePath: guid => guid === outerGuid ? outerPath :
+                    guid === middleGuid ? middlePath : guid === innerGuid ? innerPath : undefined,
+            },
+        }));
+        const exportedEmptyScalarIdentity = [...exportedEmptyScalar.identity.values()].find(identity => identity.kind === 'gameObject' && identity.sourceGuid === innerRoot.sourceGuid &&
+            identity.sourceFileId === innerRoot.sourceFileId);
+        assert(exportedEmptyScalar.details.get(exportedEmptyScalarIdentity.machineId)?.m_CustomEmpty === '', 'empty scalar override remains an empty string when the source baseline is not a reference');
+        const externalReference = {
+            fileID: 21300000,
+            guid: 'abcdefabcdefabcdefabcdefabcdefab',
+            type: 3,
+        };
+        document.details.set(innerRoot.machineId, { m_Icon: externalReference });
+        const externalEdited = (0, unity_yaml_parser_1.parseUnityYaml)((0, unity_yaml_writer_1.writeUnityYaml)((0, compiler_1.compileV3)(document)));
+        const externalDelta = externalEdited.prefabInstances[0].modifications.find(modification => modification.propertyPath === 'm_Icon' &&
+            String(modification.target.fileID) === innerRoot.sourceFileId &&
+            modification.target.guid === innerRoot.sourceGuid);
+        assert(externalDelta?.value === '' &&
+            String(externalDelta.objectReference.fileID) === '21300000' &&
+            externalDelta.objectReference.guid === externalReference.guid &&
+            externalDelta.objectReference.type === 3, 'explicit external DETAILS reference compiles unchanged at arbitrary nested depth');
+        const exportedExternal = (0, reader_1.readV3)((0, writer_1.writeV3)(externalEdited, {
+            sourceResolver: {
+                resolveFilePath: guid => guid === outerGuid ? outerPath :
+                    guid === middleGuid ? middlePath : guid === innerGuid ? innerPath : undefined,
+            },
+        }));
+        const exportedExternalIdentity = [...exportedExternal.identity.values()].find(identity => identity.kind === 'gameObject' && identity.sourceGuid === innerRoot.sourceGuid &&
+            identity.sourceFileId === innerRoot.sourceFileId);
+        assert(JSON.stringify(exportedExternal.details.get(exportedExternalIdentity.machineId)?.m_Icon) ===
+            JSON.stringify({ fileID: '21300000', guid: externalReference.guid, type: 3 }), 'existing external reference override exports explicitly without guessing an identity');
+        document.details.set(innerRoot.machineId, {
+            m_Icon: { ...externalReference, fileID: '21300000' },
+        });
+        const stringFileIdExternal = (0, unity_yaml_parser_1.parseUnityYaml)((0, unity_yaml_writer_1.writeUnityYaml)((0, compiler_1.compileV3)(document)));
+        const stringFileIdDelta = stringFileIdExternal.prefabInstances[0].modifications.find(modification => modification.propertyPath === 'm_Icon' &&
+            String(modification.target.fileID) === innerRoot.sourceFileId &&
+            modification.target.guid === innerRoot.sourceGuid);
+        assert(String(stringFileIdDelta?.objectReference.fileID) === '21300000', 'explicit external reference accepts a canonical string fileID');
+        document.details.set(innerRoot.machineId, { m_Icon: { $ref: deepComponent.machineId } });
+        const inheritedReferenceEdited = (0, unity_yaml_parser_1.parseUnityYaml)((0, unity_yaml_writer_1.writeUnityYaml)((0, compiler_1.compileV3)(document)));
+        const inheritedReferenceDelta = inheritedReferenceEdited.prefabInstances[0].modifications.find(modification => modification.propertyPath === 'm_Icon' &&
+            String(modification.target.fileID) === innerRoot.sourceFileId &&
+            modification.target.guid === innerRoot.sourceGuid);
+        assert(inheritedReferenceDelta?.value === '' &&
+            String(inheritedReferenceDelta.objectReference.fileID) === deepComponent.sourceFileId &&
+            inheritedReferenceDelta.objectReference.guid === deepComponent.sourceGuid &&
+            inheritedReferenceDelta.objectReference.type === 3, 'stable reference to an inherited identity uses its exact source GUID and fileID');
+        const exportedInheritedReference = (0, reader_1.readV3)((0, writer_1.writeV3)(inheritedReferenceEdited, {
+            sourceResolver: {
+                resolveFilePath: guid => guid === outerGuid ? outerPath :
+                    guid === middleGuid ? middlePath : guid === innerGuid ? innerPath : undefined,
+            },
+        }));
+        const exportedInheritedOwner = [...exportedInheritedReference.identity.values()].find(identity => identity.kind === 'gameObject' && identity.sourceGuid === innerRoot.sourceGuid &&
+            identity.sourceFileId === innerRoot.sourceFileId);
+        const exportedInheritedTarget = [...exportedInheritedReference.identity.values()].find(identity => identity.kind === 'component' && identity.sourceGuid === deepComponent.sourceGuid &&
+            identity.sourceFileId === deepComponent.sourceFileId);
+        assert(JSON.stringify(exportedInheritedReference.details.get(exportedInheritedOwner.machineId)?.m_Icon) ===
+            JSON.stringify({ $ref: exportedInheritedTarget.machineId }), 'existing inherited object reference exports as one unambiguous stable machine reference');
+        const coldInheritedReference = (0, unity_yaml_parser_1.parseUnityYaml)((0, unity_yaml_writer_1.writeUnityYaml)((0, compiler_1.compileV3)(exportedInheritedReference)));
+        const coldInheritedDelta = coldInheritedReference.prefabInstances[0].modifications.find(modification => modification.propertyPath === 'm_Icon' &&
+            String(modification.target.fileID) === exportedInheritedOwner.sourceFileId &&
+            modification.target.guid === exportedInheritedOwner.sourceGuid);
+        assert(String(coldInheritedDelta?.objectReference.fileID) === exportedInheritedTarget.sourceFileId &&
+            coldInheritedDelta?.objectReference.guid === exportedInheritedTarget.sourceGuid, 'exported inherited stable reference cold-roundtrips without nested source documents');
+        exportedInheritedReference.details.set(exportedInheritedOwner.machineId, {
+            m_Icon: { fileID: 21300000, guid: externalReference.guid, type: 3 },
+        });
+        const replacedInheritedReference = (0, unity_yaml_parser_1.parseUnityYaml)((0, unity_yaml_writer_1.writeUnityYaml)((0, compiler_1.compileV3)(exportedInheritedReference)));
+        const replacedInheritedDelta = replacedInheritedReference.prefabInstances[0].modifications.find(modification => modification.propertyPath === 'm_Icon' &&
+            String(modification.target.fileID) === exportedInheritedOwner.sourceFileId &&
+            modification.target.guid === exportedInheritedOwner.sourceGuid);
+        assert(replacedInheritedDelta?.objectReference.guid === externalReference.guid, 'exported inherited reference can be replaced by an explicit external reference');
+        exportedInheritedReference.details.delete(exportedInheritedOwner.machineId);
+        const removedInheritedReference = (0, unity_yaml_parser_1.parseUnityYaml)((0, unity_yaml_writer_1.writeUnityYaml)((0, compiler_1.compileV3)(exportedInheritedReference)));
+        assert(!removedInheritedReference.prefabInstances[0].modifications.some(modification => modification.propertyPath === 'm_Icon' &&
+            String(modification.target.fileID) === exportedInheritedOwner.sourceFileId &&
+            modification.target.guid === exportedInheritedOwner.sourceGuid), 'removing exported reference DETAILS removes the leaf modification');
+        document.details.set(innerRoot.machineId, { m_Icon: { $ref: document.variantRootId } });
+        const localReferenceEdited = (0, unity_yaml_parser_1.parseUnityYaml)((0, unity_yaml_writer_1.writeUnityYaml)((0, compiler_1.compileV3)(document)));
+        const localReferenceDelta = localReferenceEdited.prefabInstances[0].modifications.find(modification => modification.propertyPath === 'm_Icon' &&
+            String(modification.target.fileID) === innerRoot.sourceFileId &&
+            modification.target.guid === innerRoot.sourceGuid);
+        assert(localReferenceDelta?.value === '' &&
+            String(localReferenceDelta.objectReference.fileID) ===
+                document.identity.get(document.variantRootId).fileId &&
+            !localReferenceDelta.objectReference.guid, 'stable reference to an emitted local identity uses its allocated local fileID');
+        const exportedLocalReference = (0, reader_1.readV3)((0, writer_1.writeV3)(localReferenceEdited, {
+            sourceResolver: {
+                resolveFilePath: guid => guid === outerGuid ? outerPath :
+                    guid === middleGuid ? middlePath : guid === innerGuid ? innerPath : undefined,
+            },
+        }));
+        const exportedLocalOwner = [...exportedLocalReference.identity.values()].find(identity => identity.kind === 'gameObject' && identity.sourceGuid === innerRoot.sourceGuid &&
+            identity.sourceFileId === innerRoot.sourceFileId);
+        assert(JSON.stringify(exportedLocalReference.details.get(exportedLocalOwner.machineId)?.m_Icon) ===
+            JSON.stringify({ $ref: exportedLocalReference.variantRootId }), 'existing local object reference exports as its unique stable machine identity');
+        document.details.set(innerRoot.machineId, {
+            m_Icon: { fileID: 21300000, guid: externalReference.guid, type: 3, extra: true },
+        });
+        expectThrow(() => (0, compiler_1.compileV3)(document), 'Invalid v3 object reference', 'external reference override rejects extra keys');
+        document.details.set(innerRoot.machineId, {
+            m_Icon: { $ref: deepComponent.machineId, extra: true },
+        });
+        expectThrow(() => (0, compiler_1.compileV3)(document), 'Invalid v3 machine reference', 'stable reference override rejects extra keys');
+        document.details.set(innerRoot.machineId, { m_Icon: [] });
+        expectThrow(() => (0, compiler_1.compileV3)(document), 'Invalid v3 object reference', 'nested override rejects array values as unsupported references');
+        document.details.set(innerRoot.machineId, { m_Icon: { arbitrary: 'object' } });
+        expectThrow(() => (0, compiler_1.compileV3)(document), 'Invalid v3 object reference', 'nested override rejects unsupported arbitrary object values');
+        document.details.set(innerRoot.machineId, { m_Icon: { $ref: 'missingIdentity' } });
+        expectThrow(() => (0, compiler_1.compileV3)(document), 'not an effective identity', 'nested override rejects dangling stable references');
+        document.details.set(innerRoot.machineId, { m_Icon: { $ref: deepComponent.machineId } });
+        const deepComponentEntry = innerBoundary.components.find(component => component.machineId === deepComponent.machineId);
+        innerBoundary.components = innerBoundary.components.filter(component => component.machineId !== deepComponent.machineId);
+        expectThrow(() => (0, compiler_1.compileV3)(document), 'not an effective identity', 'nested override rejects references to omitted inherited targets');
+        innerBoundary.components.unshift(deepComponentEntry);
+        const ambiguousReferenceTarget = document.identity.get(innerBoundary.components[1].machineId);
+        const originalAmbiguousSourceGuid = ambiguousReferenceTarget.sourceGuid;
+        const originalAmbiguousSourceFileId = ambiguousReferenceTarget.sourceFileId;
+        ambiguousReferenceTarget.sourceGuid = deepComponent.sourceGuid;
+        ambiguousReferenceTarget.sourceFileId = deepComponent.sourceFileId;
+        expectThrow(() => (0, compiler_1.compileV3)(document), 'Ambiguous inherited v3 reference', 'nested override rejects ambiguous inherited stable references');
+        ambiguousReferenceTarget.sourceGuid = originalAmbiguousSourceGuid;
+        ambiguousReferenceTarget.sourceFileId = originalAmbiguousSourceFileId;
         document.details.delete(innerRoot.machineId);
         document.details.delete(deepComponent.machineId);
         innerBoundary.name = 'DeepNestedRenamed';

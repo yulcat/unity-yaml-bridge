@@ -720,6 +720,137 @@ console.log('\n=== v3 ownership cold-boundary edits ===');
         assert(deepRenameDelta?.value === 'DeepNestedRenamed' &&
             deepPropertyDelta?.value === '0' &&
             deeplyEdited.documents.length === variant.documents.length, 'rename and DETAILS overrides follow the PrefabInstance owner chain at arbitrary nested depth');
+        document.identity.set('gDeepAdded', {
+            machineId: 'gDeepAdded', kind: 'gameObject', typeId: 1, typeName: 'GameObject',
+            prefabOwnerId: document.variantRootId,
+        });
+        document.identity.set('tDeepAdded', {
+            machineId: 'tDeepAdded', kind: 'transform', typeId: 224, typeName: 'RectTransform',
+            ownerId: 'gDeepAdded', prefabOwnerId: document.variantRootId,
+        });
+        const deepAdded = {
+            name: 'DeepAdded', machineId: 'gDeepAdded', components: [], children: [],
+        };
+        innerBoundary.children.push(deepAdded);
+        const deepAddedFirst = (0, unity_yaml_parser_1.parseUnityYaml)((0, unity_yaml_writer_1.writeUnityYaml)((0, compiler_1.compileV3)(document)));
+        const deepAddedSecond = (0, unity_yaml_parser_1.parseUnityYaml)((0, unity_yaml_writer_1.writeUnityYaml)((0, compiler_1.compileV3)(document)));
+        const deepAddedModification = deepAddedFirst.documents.find(item => item.typeId === 1001)
+            .properties.m_Modification;
+        const deepAddedDelta = deepAddedModification.m_AddedGameObjects[0];
+        const deepAddedGameObject = deepAddedFirst.documents.find(item => item.properties.m_Name === 'DeepAdded');
+        const deepAddedTransform = deepAddedFirst.documents.find(item => String(item.properties.m_GameObject?.fileID) === deepAddedGameObject.fileId);
+        const deepParentTransform = [...document.identity.values()].find(identity => identity.kind === 'transform' && identity.ownerId === innerBoundary.machineId);
+        const deepParentStub = deepAddedFirst.documents.find(item => item.stripped && (item.typeId === 4 || item.typeId === 224) &&
+            item.fileId === String(deepAddedTransform.properties.m_Father.fileID));
+        assert(String(deepAddedDelta.targetCorrespondingSourceObject.fileID) === deepParentTransform.sourceFileId &&
+            deepAddedDelta.targetCorrespondingSourceObject.guid === deepParentTransform.sourceGuid &&
+            String(deepAddedDelta.addedObject.fileID) === deepAddedTransform.fileId &&
+            deepParentStub.properties.m_CorrespondingSourceObject.guid === deepParentTransform.sourceGuid &&
+            String(deepParentStub.properties.m_CorrespondingSourceObject.fileID) === deepParentTransform.sourceFileId &&
+            String(deepParentStub.properties.m_PrefabInstance.fileID) ===
+                document.identity.get(document.variantRootId).fileId &&
+            deepAddedSecond.documents.some(item => item.fileId === deepAddedGameObject.fileId) &&
+            !deepAddedFirst.documents.some(item => item.fileId === innerRoot.sourceFileId), 'adding a GameObject below a recursively expanded inherited parent emits a deterministic leaf-owned delta and stripped parent proxy');
+        const exportedDeepGameObject = (0, reader_1.readV3)((0, writer_1.writeV3)(deepAddedFirst, {
+            sourceResolver: {
+                resolveFilePath: guid => guid === outerGuid ? outerPath :
+                    guid === middleGuid ? middlePath : guid === innerGuid ? innerPath : undefined,
+            },
+        }));
+        const exportedOuterBoundary = exportedDeepGameObject.variantRoots[0].children.find(node => node.nestedSourceGuid === middleGuid);
+        const exportedInnerBoundary = exportedOuterBoundary.children.find(node => node.nestedSourceGuid === innerGuid);
+        const exportedDeepAdded = exportedInnerBoundary.children.find(node => node.name === 'DeepAdded');
+        const exportedDeepAddedIdentity = exportedDeepGameObject.identity.get(exportedDeepAdded.machineId);
+        const exportedDeepAddedTransform = [...exportedDeepGameObject.identity.values()].find(identity => identity.kind === 'transform' && identity.ownerId === exportedDeepAdded.machineId);
+        const recompiledDeepGameObject = (0, unity_yaml_parser_1.parseUnityYaml)((0, unity_yaml_writer_1.writeUnityYaml)((0, compiler_1.compileV3)(exportedDeepGameObject)));
+        const recompiledDeepGameObjectDelta = recompiledDeepGameObject.documents.find(item => item.typeId === 1001)
+            .properties.m_Modification.m_AddedGameObjects[0];
+        assert(exportedDeepAddedIdentity.origin !== 'inherited' &&
+            exportedDeepAddedIdentity.fileId === deepAddedGameObject.fileId &&
+            exportedDeepAddedIdentity.prefabOwnerId === exportedDeepGameObject.variantRootId &&
+            exportedDeepAddedTransform.fileId === deepAddedTransform.fileId &&
+            String(recompiledDeepGameObjectDelta.targetCorrespondingSourceObject.fileID) ===
+                deepParentTransform.sourceFileId &&
+            recompiledDeepGameObjectDelta.targetCorrespondingSourceObject.guid ===
+                deepParentTransform.sourceGuid, 'an existing deep m_AddedGameObjects delta projects into the same effective STRUCTURE and cold-roundtrips');
+        exportedInnerBoundary.children = exportedInnerBoundary.children.filter(node => node.machineId !== exportedDeepAdded.machineId);
+        const removedExportedDeepGameObject = (0, unity_yaml_parser_1.parseUnityYaml)((0, unity_yaml_writer_1.writeUnityYaml)((0, compiler_1.compileV3)(exportedDeepGameObject)));
+        assert(removedExportedDeepGameObject.documents.find(item => item.typeId === 1001)
+            .properties.m_Modification.m_AddedGameObjects.length === 0 &&
+            !removedExportedDeepGameObject.documents.some(item => item.fileId === exportedDeepAddedIdentity.fileId ||
+                item.fileId === exportedDeepAddedTransform.fileId), 'removing an exported deep added GameObject removes its delta and local documents');
+        innerBoundary.children.pop();
+        document.identity.set('cDeepAdded', {
+            machineId: 'cDeepAdded', kind: 'component', typeId: 65, typeName: 'BoxCollider',
+            displayName: 'BoxCollider', ownerId: innerBoundary.machineId,
+            prefabOwnerId: document.variantRootId,
+        });
+        document.details.set('cDeepAdded', {
+            m_Enabled: 1,
+            serializedVersion: 3,
+            m_Size: { x: 1, y: 1, z: 1 },
+            m_Center: { x: 0, y: 0, z: 0 },
+        });
+        innerBoundary.components.push({ typeName: 'BoxCollider', machineId: 'cDeepAdded' });
+        const deepComponentFirst = (0, unity_yaml_parser_1.parseUnityYaml)((0, unity_yaml_writer_1.writeUnityYaml)((0, compiler_1.compileV3)(document)));
+        const deepComponentSecond = (0, unity_yaml_parser_1.parseUnityYaml)((0, unity_yaml_writer_1.writeUnityYaml)((0, compiler_1.compileV3)(document)));
+        const addedComponentDelta = deepComponentFirst.prefabInstances[0].addedComponents[0];
+        const addedComponentDocument = deepComponentFirst.documents.find(item => item.typeId === 65 && !item.stripped);
+        const addedComponentStub = deepComponentFirst.documents.find(item => item.typeId === 1 && item.stripped &&
+            item.fileId === String(addedComponentDocument.properties.m_GameObject.fileID));
+        assert(String(addedComponentDelta.targetGameObject.fileID) === innerRoot.sourceFileId &&
+            addedComponentDelta.targetGameObject.guid === innerRoot.sourceGuid &&
+            String(addedComponentDelta.addedComponent.fileID) === addedComponentDocument.fileId &&
+            String(addedComponentStub.properties.m_CorrespondingSourceObject.fileID) === innerRoot.sourceFileId &&
+            addedComponentStub.properties.m_CorrespondingSourceObject.guid === innerRoot.sourceGuid &&
+            String(addedComponentStub.properties.m_PrefabInstance.fileID) ===
+                document.identity.get(document.variantRootId).fileId &&
+            deepComponentSecond.documents.some(item => item.fileId === addedComponentDocument.fileId) &&
+            !deepComponentFirst.documents.some(item => item.fileId === innerRoot.sourceFileId), 'adding a component to a recursively expanded inherited GameObject emits a deterministic leaf-owned delta and stripped GameObject proxy');
+        const exportedDeepComponent = (0, reader_1.readV3)((0, writer_1.writeV3)(deepComponentFirst, {
+            sourceResolver: {
+                resolveFilePath: guid => guid === outerGuid ? outerPath :
+                    guid === middleGuid ? middlePath : guid === innerGuid ? innerPath : undefined,
+            },
+        }));
+        const exportedComponentOuter = exportedDeepComponent.variantRoots[0].children.find(node => node.nestedSourceGuid === middleGuid);
+        const exportedComponentInner = exportedComponentOuter.children.find(node => node.nestedSourceGuid === innerGuid);
+        const exportedAddedComponent = exportedComponentInner.components.find(component => exportedDeepComponent.identity.get(component.machineId)?.fileId === addedComponentDocument.fileId);
+        const exportedAddedComponentIdentity = exportedDeepComponent.identity.get(exportedAddedComponent.machineId);
+        const recompiledDeepComponent = (0, unity_yaml_parser_1.parseUnityYaml)((0, unity_yaml_writer_1.writeUnityYaml)((0, compiler_1.compileV3)(exportedDeepComponent)));
+        const recompiledDeepComponentDelta = recompiledDeepComponent.prefabInstances[0].addedComponents[0];
+        assert(exportedAddedComponentIdentity.origin !== 'inherited' &&
+            exportedAddedComponentIdentity.ownerId === exportedComponentInner.machineId &&
+            exportedAddedComponentIdentity.prefabOwnerId === exportedDeepComponent.variantRootId &&
+            exportedAddedComponentIdentity.fileId === addedComponentDocument.fileId &&
+            String(recompiledDeepComponentDelta.targetGameObject.fileID) === innerRoot.sourceFileId &&
+            recompiledDeepComponentDelta.targetGameObject.guid === innerRoot.sourceGuid, 'an existing deep m_AddedComponents delta projects into the same effective STRUCTURE and cold-roundtrips');
+        exportedComponentInner.components = exportedComponentInner.components.filter(component => component.machineId !== exportedAddedComponent.machineId);
+        const removedExportedDeepComponent = (0, unity_yaml_parser_1.parseUnityYaml)((0, unity_yaml_writer_1.writeUnityYaml)((0, compiler_1.compileV3)(exportedDeepComponent)));
+        assert(removedExportedDeepComponent.prefabInstances[0].addedComponents.length === 0 &&
+            !removedExportedDeepComponent.documents.some(item => item.fileId === exportedAddedComponentIdentity.fileId) &&
+            !removedExportedDeepComponent.documents.some(item => item.stripped && item.typeId === 1 &&
+                String(item.properties.m_CorrespondingSourceObject?.fileID) === innerRoot.sourceFileId &&
+                item.properties.m_CorrespondingSourceObject?.guid === innerRoot.sourceGuid), 'removing an exported deep added component removes its delta, document, and stripped proxy');
+        innerBoundary.components.pop();
+        document.details.delete('cDeepAdded');
+        innerBoundary.components.push({ typeName: 'BoxCollider', machineId: 'cDeepAdded' });
+        document.details.set('cDeepAdded', { m_Enabled: 1 });
+        document.identity.set('ambiguousDeepTargetGo', {
+            ...innerRoot,
+            machineId: 'ambiguousDeepTargetGo',
+        });
+        const innerTransform = [...document.identity.values()].find(identity => identity.kind === 'transform' && identity.ownerId === innerBoundary.machineId);
+        document.identity.set('ambiguousDeepTargetTransform', {
+            ...innerTransform,
+            machineId: 'ambiguousDeepTargetTransform',
+            ownerId: 'ambiguousDeepTargetGo',
+        });
+        expectThrow(() => (0, compiler_1.compileV3)(document), 'ambiguous owner/source path', 'deep component addition rejects an ambiguous repeated nested-source GameObject target');
+        innerBoundary.components.pop();
+        document.details.delete('cDeepAdded');
+        document.identity.delete('ambiguousDeepTargetGo');
+        document.identity.delete('ambiguousDeepTargetTransform');
         innerBoundary.name = innerRoot.displayName;
         document.details.delete(deepComponent.machineId);
         const removedDeepComponent = innerBoundary.components.pop();

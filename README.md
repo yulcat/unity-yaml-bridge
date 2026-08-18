@@ -183,10 +183,12 @@ ubridge compile Input.ubridge -o Rebuilt.prefab
 The v3 compiler does not accept `--yaml`. It supports standalone regular-prefab
 reconstruction plus source-backed variant and nested-prefab effective trees,
 including ownership-aware inherited additions/removals, variant chains, recursive
-nested-source expansion, and scalar property overrides. Operations that cannot yet
-be mapped to an unambiguous Unity ownership delta fail closed instead of silently
-falling back to the original YAML. See the v3 specification for the exact current
-boundary.
+nested-source expansion, and scalar property overrides. Local GameObjects and components
+can be added beneath recursively expanded inherited nested source roots/internals at any
+resolved depth; v3 emits leaf-owned Unity addition deltas and stripped proxies while
+preserving local IDs across cold roundtrips. Operations that cannot yet be mapped to an
+unambiguous Unity ownership delta fail closed instead of silently falling back to the
+original YAML. See the v3 specification for the exact current boundary.
 
 ## Usage
 

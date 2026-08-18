@@ -42,7 +42,9 @@ export function readV3(content: string): V3Document {
 
   if (structure) validateBindings(structure, details, identity);
   const variantBindings = new Set<string>();
-  for (const root of variantRoots ?? []) validateBindings(root, details, identity, variantBindings);
+  for (const root of variantRoots ?? []) {
+    validateBindings(root, details, identity, variantBindings, variantRootId);
+  }
   if (kind === 'variant') {
     const root = identity.get(variantRootId!);
     if (!root || root.kind !== 'prefabInstance' || root.typeId !== 1001) {
@@ -240,7 +242,8 @@ function validateBindings(
   root: V3StructureNode,
   details: Map<string, Record<string, unknown>>,
   identity: Map<string, V3IdentityRecord>,
-  used = new Set<string>()
+  used = new Set<string>(),
+  leafPrefabOwnerId?: string
 ): void {
   const visit = (
     node: V3StructureNode,
@@ -300,9 +303,17 @@ function validateBindings(
     if (!go || go.kind !== 'gameObject' || go.typeId !== 1) {
       throw new Error(`STRUCTURE ${node.machineId} is not bound to a GameObject identity.`);
     }
-    if (directPrefabOwnerId &&
-        (go.prefabOwnerId !== directPrefabOwnerId || go.sourceGuid !== directSourceGuid)) {
-      throw new Error(`Inherited nested GameObject ${node.machineId} is not directly owned by ${directPrefabOwnerId}.`);
+    if (directPrefabOwnerId) {
+      const validInheritedOwner = go?.origin === 'inherited' &&
+        go.prefabOwnerId === directPrefabOwnerId && go.sourceGuid === directSourceGuid;
+      const validLeafLocalOwner = go?.origin !== 'inherited' && !!leafPrefabOwnerId &&
+        go?.prefabOwnerId === leafPrefabOwnerId && !go?.sourceGuid && !go?.sourceFileId;
+      if (!validInheritedOwner && !validLeafLocalOwner) {
+        throw new Error(
+          `GameObject ${node.machineId} is not owned by nested PrefabInstance ` +
+          `${directPrefabOwnerId} or emitted leaf ${leafPrefabOwnerId}.`
+        );
+      }
     }
     const transforms = [...identity.values()].filter(record =>
       record.kind === 'transform' && record.ownerId === node.machineId
@@ -310,19 +321,29 @@ function validateBindings(
     if (transforms.length !== 1 || ![4, 224].includes(transforms[0].typeId)) {
       throw new Error(`GameObject ${node.machineId} requires exactly one Transform identity.`);
     }
-    if (directPrefabOwnerId &&
-        (transforms[0].prefabOwnerId !== directPrefabOwnerId ||
-         transforms[0].sourceGuid !== directSourceGuid)) {
-      throw new Error(`Inherited nested Transform ${transforms[0].machineId} is not directly owned by ${directPrefabOwnerId}.`);
+    if (directPrefabOwnerId) {
+      const transform = transforms[0];
+      const validInheritedOwner = transform.origin === 'inherited' &&
+        transform.prefabOwnerId === directPrefabOwnerId && transform.sourceGuid === directSourceGuid;
+      const validLeafLocalOwner = go.origin !== 'inherited' && !!leafPrefabOwnerId &&
+        transform.origin !== 'inherited' && transform.prefabOwnerId === leafPrefabOwnerId &&
+        !transform.sourceGuid && !transform.sourceFileId;
+      if (!validInheritedOwner && !validLeafLocalOwner) {
+        throw new Error(`Transform ${transform.machineId} has ambiguous nested addition ownership.`);
+      }
     }
     for (const component of node.components) {
       if (used.has(component.machineId)) throw new Error(`Duplicate STRUCTURE machine identity ${component.machineId}.`);
       used.add(component.machineId);
       const record = identity.get(component.machineId);
-      if (!record || record.kind !== 'component' || record.ownerId !== node.machineId ||
-          (record.displayName || record.typeName) !== component.typeName ||
-          (directPrefabOwnerId &&
-           (record.prefabOwnerId !== directPrefabOwnerId || record.sourceGuid !== directSourceGuid))) {
+      const validBase = !!record && record.kind === 'component' && record.ownerId === node.machineId &&
+        (record.displayName || record.typeName) === component.typeName;
+      const validNestedOwner = !directPrefabOwnerId ||
+        record?.origin === 'inherited' && record.prefabOwnerId === directPrefabOwnerId &&
+          record.sourceGuid === directSourceGuid ||
+        record?.origin !== 'inherited' && !!leafPrefabOwnerId &&
+          record?.prefabOwnerId === leafPrefabOwnerId && !record?.sourceGuid && !record?.sourceFileId;
+      if (!validBase || !validNestedOwner) {
         throw new Error(`Invalid component binding ${component.typeName} @${component.machineId}.`);
       }
     }

@@ -150,8 +150,17 @@ not replay intermediate addition deltas. Added-root parent stubs and added-compo
 targets must resolve to exactly one direct PrefabInstance owner; ambiguous, indirect,
 missing, or duplicate ownership fails closed. Recursively expanded inherited nested
 internals support the rename/string-or-number-DETAILS override and GameObject/component
-removal slices above; their reparent/reorder/add/duplicate structural edits remain
-fail-closed. Without
+removal slices above. A new local GameObject below any resolved nested source-root or
+internal GameObject emits leaf-owned `m_AddedGameObjects` targeting that parent's nested
+source Transform GUID/fileID; its local Transform uses a leaf-owned stripped parent proxy.
+A new local component on any such GameObject emits its component document, a leaf-owned
+stripped GameObject proxy, and leaf-owned `m_AddedComponents` targeting the nested source
+GameObject GUID/fileID. Both operations follow the recursive `prefabOwner` chain, are
+deterministic, export existing deltas back into the same effective tree, preserve local
+fileIDs on cold roundtrip, and disappear cleanly when the exported addition is removed.
+Missing, cyclic, duplicate, or ambiguous target/owner/proxy paths fail closed, and no
+nested source document is emitted. Reparenting or reordering inherited nested nodes and
+broad complex-value overrides remain unsupported. Without
 a source resolver, nested and variant baseline ownership documents remain standalone,
 and existing PrefabInstance delta values can be edited in DETAILS. Local objects not yet
 exposed in the effective STRUCTURE are kept as explicit `owned` identity/details records

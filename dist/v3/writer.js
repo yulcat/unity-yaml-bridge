@@ -395,23 +395,24 @@ function attachVariantAddedRoots(localRoots, inheritedRoots, rootInstance, byId,
     const additionsByObject = new Map();
     for (const addition of additions) {
         const target = addition?.targetCorrespondingSourceObject;
+        const targetGuid = String(target?.guid ?? '');
         const addedFileId = String(addition?.addedObject?.fileID ?? '0');
-        if (String(target?.guid ?? '') !== rootInstance.sourcePrefab.guid ||
-            String(target?.fileID ?? '0') === '0' || addedFileId === '0' ||
+        if (!targetGuid || String(target?.fileID ?? '0') === '0' || addedFileId === '0' ||
             additionsByObject.has(addedFileId)) {
-            throw new Error(`Variant m_AddedGameObjects has ambiguous direct ownership for ${addedFileId}.`);
+            throw new Error(`Variant m_AddedGameObjects has ambiguous leaf ownership for ${addedFileId}.`);
         }
         additionsByObject.set(addedFileId, addition);
     }
     const inheritedNodesByTransform = new Map();
     const collectInherited = (node) => {
         const transforms = [...identities.values()].filter(identity => identity.kind === 'transform' && identity.origin === 'inherited' &&
-            identity.ownerId === node.machineId && identity.sourceGuid === rootInstance.sourcePrefab.guid);
-        if (transforms.length === 1 && transforms[0].sourceFileId) {
-            if (inheritedNodesByTransform.has(transforms[0].sourceFileId)) {
-                throw new Error(`Variant direct source has ambiguous Transform ${transforms[0].sourceFileId}.`);
+            identity.ownerId === node.machineId && identity.sourceGuid && identity.sourceFileId);
+        if (transforms.length === 1) {
+            const key = `${transforms[0].sourceGuid}:${transforms[0].sourceFileId}`;
+            if (inheritedNodesByTransform.has(key)) {
+                throw new Error(`Variant effective source has ambiguous Transform ${key}.`);
             }
-            inheritedNodesByTransform.set(transforms[0].sourceFileId, node);
+            inheritedNodesByTransform.set(key, node);
         }
         node.children.forEach(collectInherited);
     };
@@ -432,22 +433,38 @@ function attachVariantAddedRoots(localRoots, inheritedRoots, rootInstance, byId,
             throw new Error(`Variant-added root ${localRoot.machineId} is missing direct m_AddedGameObjects ownership.`);
         }
         additionsByObject.delete(transformIdentity.fileId);
-        const sourceTransformFileId = String(addition.targetCorrespondingSourceObject.fileID);
-        const parentNode = inheritedNodesByTransform.get(sourceTransformFileId);
+        const target = addition.targetCorrespondingSourceObject;
+        const sourceTransformFileId = String(target.fileID);
+        const sourceTransformGuid = String(target.guid);
+        const parentNode = inheritedNodesByTransform.get(`${sourceTransformGuid}:${sourceTransformFileId}`);
         if (!parentNode) {
-            throw new Error(`Variant-added root ${localRoot.machineId} targets Transform ${sourceTransformFileId} ` +
-                'outside the direct source effective tree.');
+            throw new Error(`Variant-added root ${localRoot.machineId} targets Transform ` +
+                `${sourceTransformGuid}:${sourceTransformFileId} outside the direct source effective tree ` +
+                'or recursively expanded nested sources.');
         }
-        const parentTransform = [...identities.values()].find(identity => identity.kind === 'transform' && identity.origin === 'inherited' &&
+        const parentTransforms = [...identities.values()].filter(identity => identity.kind === 'transform' && identity.origin === 'inherited' &&
             identity.ownerId === parentNode.machineId && identity.sourceFileId === sourceTransformFileId &&
-            identity.sourceGuid === rootInstance.sourcePrefab.guid);
-        transformIdentity.baselineParentId = parentTransform.machineId;
+            identity.sourceGuid === sourceTransformGuid);
+        if (parentTransforms.length !== 1) {
+            throw new Error(`Variant-added root ${localRoot.machineId} has ambiguous inherited parent Transform ownership.`);
+        }
+        const transformDocument = byId.get(transformIdentity.fileId);
+        const parentStub = byId.get(String(transformDocument?.properties.m_Father?.fileID ?? '0'));
+        const stubSource = parentStub?.properties.m_CorrespondingSourceObject;
+        if (!parentStub?.stripped || parentStub.typeId !== parentTransforms[0].typeId ||
+            String(stubSource?.fileID ?? '0') !== sourceTransformFileId ||
+            String(stubSource?.guid ?? '') !== sourceTransformGuid ||
+            String(parentStub.properties.m_PrefabInstance?.fileID ?? '0') !== rootInstance.fileId) {
+            throw new Error(`Variant-added root ${localRoot.machineId} has ambiguous leaf-owned stripped parent identity.`);
+        }
+        transformIdentity.baselineParentId = parentTransforms[0].machineId;
         const requestedIndex = Number(addition.insertIndex ?? -1);
         const insertionIndex = requestedIndex < 0
             ? parentNode.children.length
             : Math.min(requestedIndex, parentNode.children.length);
         parentNode.children.splice(insertionIndex, 0, localRoot);
         (_a = identities.get(localRoot.machineId)).prefabOwnerId ?? (_a.prefabOwnerId = rootId);
+        transformIdentity.prefabOwnerId ?? (transformIdentity.prefabOwnerId = rootId);
     }
     if (additionsByObject.size > 0) {
         throw new Error(`Variant m_AddedGameObjects addedObject ${additionsByObject.keys().next().value} ` +
@@ -546,6 +563,36 @@ function buildInheritedVariantRoots(rootInstance, sourceGuid, options, identitie
         }
         return name;
     };
+    const projectAddedComponents = (goId, sourceGuid, sourceFileId, components) => {
+        const key = `${sourceGuid}:${sourceFileId}`;
+        const localAddedComponents = addedComponentsBySourceGameObject.get(key) ?? [];
+        if (localAddedComponents.length > 0)
+            addedComponentsBySourceGameObject.delete(key);
+        for (const addedDocument of localAddedComponents) {
+            const componentId = `ac${++addedComponentIndex}`;
+            documentIds.set(addedDocument.fileId, componentId);
+            identities.set(componentId, {
+                machineId: componentId,
+                kind: 'component',
+                fileId: addedDocument.fileId,
+                typeId: addedDocument.typeId,
+                typeName: addedDocument.typeName,
+                displayName: addedDocument.typeName,
+                ownerId: goId,
+                prefabOwnerId: rootId,
+                scriptGuid: addedDocument.typeId === 114
+                    ? String(addedDocument.properties.m_Script?.guid ?? '') || undefined
+                    : undefined,
+                scriptFileId: addedDocument.typeId === 114
+                    ? String(addedDocument.properties.m_Script?.fileID ?? 11500000)
+                    : undefined,
+                scriptType: addedDocument.typeId === 114
+                    ? Number(addedDocument.properties.m_Script?.type ?? 3)
+                    : undefined,
+            });
+            components.push({ typeName: addedDocument.typeName, machineId: componentId });
+        }
+    };
     const buildNestedInternal = (node, nestedSourceGuid, prefabOwnerId, nestedDocuments, parentTransformMachineId, siblingIndex, resolvingSources) => {
         if (node.nestedPrefab) {
             if (node.components.length > 0 || node.children.length > 0) {
@@ -643,6 +690,7 @@ function buildInheritedVariantRoots(rootInstance, sourceGuid, options, identitie
             projectNestedOverrides(componentId, nestedSourceGuid, component.fileId);
             return { typeName: component.typeName, machineId: componentId };
         });
+        projectAddedComponents(goId, nestedSourceGuid, node.fileId, components);
         return {
             name: effectiveName,
             machineId: goId,
@@ -753,33 +801,7 @@ function buildInheritedVariantRoots(rootInstance, sourceGuid, options, identitie
             }
             return { typeName: component.typeName, machineId: componentId };
         });
-        const localAddedComponents = addedComponentsBySourceGameObject.get(node.fileId) ?? [];
-        if (localAddedComponents.length > 0)
-            addedComponentsBySourceGameObject.delete(node.fileId);
-        for (const addedDocument of localAddedComponents) {
-            const componentId = `ac${++addedComponentIndex}`;
-            documentIds.set(addedDocument.fileId, componentId);
-            identities.set(componentId, {
-                machineId: componentId,
-                kind: 'component',
-                fileId: addedDocument.fileId,
-                typeId: addedDocument.typeId,
-                typeName: addedDocument.typeName,
-                displayName: addedDocument.typeName,
-                ownerId: goId,
-                prefabOwnerId: rootId,
-                scriptGuid: addedDocument.typeId === 114
-                    ? String(addedDocument.properties.m_Script?.guid ?? '') || undefined
-                    : undefined,
-                scriptFileId: addedDocument.typeId === 114
-                    ? String(addedDocument.properties.m_Script?.fileID ?? 11500000)
-                    : undefined,
-                scriptType: addedDocument.typeId === 114
-                    ? Number(addedDocument.properties.m_Script?.type ?? 3)
-                    : undefined,
-            });
-            components.push({ typeName: addedDocument.typeName, machineId: componentId });
-        }
+        projectAddedComponents(goId, sourceGuid, node.fileId, components);
         const children = node.children.map((child, index) => build(child, transformId, index));
         return {
             name: nameOverrides.get(node.fileId) ?? node.name,
@@ -817,8 +839,8 @@ function collectVariantAddedComponents(rootInstance, byId) {
     for (const entry of rootInstance.addedComponents) {
         const targetFileId = String(entry.targetGameObject.fileID ?? '0');
         const targetGuid = String(entry.targetGameObject.guid ?? '');
-        if (targetFileId === '0' || targetGuid !== rootInstance.sourcePrefab.guid) {
-            throw new Error('Variant m_AddedComponents target is not owned by the direct source PrefabInstance.');
+        if (targetFileId === '0' || !targetGuid) {
+            throw new Error('Variant m_AddedComponents target has incomplete leaf ownership.');
         }
         const addedFileId = String(entry.addedComponent.fileID ?? '0');
         if (addedFileId === '0' || seenAddedObjects.has(addedFileId)) {
@@ -839,9 +861,10 @@ function collectVariantAddedComponents(rootInstance, byId) {
             String(source?.guid ?? '') !== targetGuid || ownerFileId !== rootInstance.fileId) {
             throw new Error(`Variant added component ${addedFileId} has no unambiguous direct-owner stripped GameObject.`);
         }
-        const additions = result.get(targetFileId) ?? [];
+        const key = `${targetGuid}:${targetFileId}`;
+        const additions = result.get(key) ?? [];
         additions.push(addedDocument);
-        result.set(targetFileId, additions);
+        result.set(key, additions);
     }
     return result;
 }
@@ -972,10 +995,15 @@ function applyVariantChainAddedComponents(effective, instance, variant, variantG
         node.children.forEach(collect);
     };
     collect(effective.hierarchy);
-    for (const [targetFileId, additions] of additionsByGameObject) {
-        const matches = owners.get(targetFileId) ?? [];
+    for (const [targetKey, additions] of additionsByGameObject) {
+        const separator = targetKey.indexOf(':');
+        const targetGuid = targetKey.slice(0, separator);
+        const targetFileId = targetKey.slice(separator + 1);
+        const matches = targetGuid === instance.sourcePrefab.guid
+            ? owners.get(targetFileId) ?? []
+            : [];
         if (matches.length !== 1) {
-            throw new Error(`Variant source chain ${variantGuid} added-component target ${targetFileId} ` +
+            throw new Error(`Variant source chain ${variantGuid} added-component target ${targetKey} ` +
                 'is not uniquely owned by its direct source.');
         }
         const owner = matches[0];

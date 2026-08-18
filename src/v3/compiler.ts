@@ -282,6 +282,7 @@ function compileVariant(document: V3Document): UnityFile {
   const addedGameObjects: Array<Record<string, unknown>> = [];
   const addedComponents: Array<Record<string, unknown>> = [];
   const inheritedGameObjectStubs = new Map<string, string>();
+  const inheritedTransformStubs = new Map<string, string>();
   const usedInheritedStubIds = new Set<string>();
   const desiredInheritedNestedInstances = new Set<string>();
   const desiredInheritedNestedInternals = new Set<string>();
@@ -406,6 +407,128 @@ function compileVariant(document: V3Document): UnityFile {
     }
   };
 
+  const assertUniqueInheritedSourceTarget = (
+    identity: V3IdentityRecord,
+    operation: string
+  ): void => {
+    const matches = [...document.identity.values()].filter(candidate =>
+      candidate.kind === identity.kind && candidate.origin === 'inherited' &&
+      candidate.sourceGuid === identity.sourceGuid &&
+      candidate.sourceFileId === identity.sourceFileId
+    );
+    if (matches.length !== 1 || matches[0].machineId !== identity.machineId) {
+      throw new Error(
+        `Inherited nested ${operation} target ${identity.sourceGuid}:${identity.sourceFileId} ` +
+        'has an ambiguous owner/source path.'
+      );
+    }
+  };
+
+  const requireLeafOwnedTransformStub = (transform: V3IdentityRecord): string => {
+    requireEmittedPrefabOwner(transform, 'addition');
+    assertUniqueInheritedSourceTarget(transform, 'GameObject addition');
+    const cached = inheritedTransformStubs.get(transform.machineId);
+    if (cached) return cached;
+    const existing = findInheritedTransformStub(document, transform);
+    if (existing) {
+      const fileId = allocated.get(existing.machineId)!;
+      inheritedTransformStubs.set(transform.machineId, fileId);
+      return fileId;
+    }
+    const leafOwner = requireIdentity(document, document.variantRootId!, 'prefabInstance');
+    const fileId = allocateSyntheticFileId(
+      document, `inherited-transform:${transform.machineId}`, allocated
+    );
+    documents.push({
+      typeId: transform.typeId,
+      typeName: transform.typeName,
+      fileId,
+      stripped: true,
+      properties: {
+        m_CorrespondingSourceObject: {
+          fileID: transform.sourceFileId,
+          guid: transform.sourceGuid,
+          type: 3,
+        },
+        m_PrefabInstance: { fileID: allocated.get(leafOwner.machineId)! },
+        m_PrefabAsset: { fileID: 0 },
+      },
+    });
+    inheritedTransformStubs.set(transform.machineId, fileId);
+    return fileId;
+  };
+
+  const emitLocalComponentOnInheritedGameObject = (
+    gameObject: V3IdentityRecord,
+    component: V3IdentityRecord
+  ): void => {
+    if (component.ownerId !== gameObject.machineId ||
+        component.prefabOwnerId !== document.variantRootId) {
+      throw new Error(
+        `Local component ${component.machineId} on inherited GameObject ${gameObject.machineId} ` +
+        'requires the emitted leaf PrefabInstance owner.'
+      );
+    }
+    requireEmittedPrefabOwner(gameObject, 'component addition');
+    assertUniqueInheritedSourceTarget(gameObject, 'component addition');
+    const leafOwner = requireIdentity(document, document.variantRootId!, 'prefabInstance');
+    let strippedGameObjectId = inheritedGameObjectStubs.get(gameObject.machineId);
+    if (!strippedGameObjectId) {
+      const existingStub = findInheritedGameObjectStub(document, gameObject, leafOwner);
+      if (existingStub) {
+        strippedGameObjectId = allocated.get(existingStub.machineId)!;
+        usedInheritedStubIds.add(existingStub.machineId);
+      } else {
+        strippedGameObjectId = allocateSyntheticFileId(
+          document, `inherited-game-object:${gameObject.machineId}`, allocated
+        );
+        documents.push({
+          typeId: 1,
+          typeName: 'GameObject',
+          fileId: strippedGameObjectId,
+          stripped: true,
+          properties: {
+            m_CorrespondingSourceObject: {
+              fileID: gameObject.sourceFileId,
+              guid: gameObject.sourceGuid,
+              type: 3,
+            },
+            m_PrefabInstance: { fileID: allocated.get(leafOwner.machineId)! },
+            m_PrefabAsset: { fileID: 0 },
+          },
+        });
+      }
+      inheritedGameObjectStubs.set(gameObject.machineId, strippedGameObjectId);
+    }
+    const properties = mergeDetails(COMMON_LOCAL_ENVELOPE, document.details.get(component.machineId));
+    properties.m_GameObject = { fileID: strippedGameObjectId };
+    if (component.typeId === 114) {
+      if (!component.scriptGuid) {
+        throw new Error(`MonoBehaviour ${component.machineId} requires script GUID identity.`);
+      }
+      properties.m_Enabled ??= 1;
+      properties.m_EditorHideFlags ??= 0;
+      properties.m_Script = {
+        fileID: component.scriptFileId ?? 11500000,
+        guid: component.scriptGuid,
+        type: component.scriptType ?? 3,
+      };
+      properties.m_Name ??= '';
+      properties.m_EditorClassIdentifier ??= '';
+    }
+    documents.push(makeDocument(component, allocated.get(component.machineId)!, properties));
+    emitted.add(component.machineId);
+    addedComponents.push({
+      targetCorrespondingSourceObject: {
+        fileID: gameObject.sourceFileId,
+        guid: gameObject.sourceGuid,
+        type: 3,
+      },
+      insertIndex: -1,
+      addedObject: { $ref: component.machineId },
+    });
+  };
+
   const validateInheritedNestedInternal = (
     node: V3StructureNode,
     prefabOwnerId: string,
@@ -495,17 +618,29 @@ function compileVariant(document: V3Document): UnityFile {
         `Structural editing of inherited nested PrefabInstance ${prefabOwnerId} internals is not implemented.`
       );
     }
+    const desiredInheritedComponents = node.components.filter(component =>
+      document.identity.get(component.machineId)?.origin === 'inherited'
+    );
     const desiredBaselineComponents = baselineComponents.filter(identity =>
       desiredComponentIds.has(identity.machineId)
     );
-    if (desiredBaselineComponents.length !== node.components.length) {
+    if (desiredBaselineComponents.length !== desiredInheritedComponents.length) {
       throw new Error(
         `Structural editing of inherited nested PrefabInstance ${prefabOwnerId} internals is not implemented.`
       );
     }
-    node.components.forEach((component, index) => {
+    let inheritedComponentIndex = 0;
+    node.components.forEach(component => {
       const identity = requireIdentity(document, component.machineId, 'component');
-      if (identity !== desiredBaselineComponents[index] || identity.ownerId !== gameObject.machineId ||
+      if (identity.origin !== 'inherited') {
+        if ((identity.displayName || identity.typeName) !== component.typeName) {
+          throw new Error(`Invalid component binding ${component.typeName} @${component.machineId}.`);
+        }
+        emitLocalComponentOnInheritedGameObject(gameObject, identity);
+        return;
+      }
+      if (identity !== desiredBaselineComponents[inheritedComponentIndex++] ||
+          identity.ownerId !== gameObject.machineId ||
           identity.prefabOwnerId !== prefabOwnerId || identity.sourceGuid !== nestedSourceGuid ||
           !identity.sourceFileId ||
           (identity.displayName || identity.typeName) !== component.typeName) {
@@ -521,9 +656,35 @@ function compileVariant(document: V3Document): UnityFile {
         queueInheritedNestedComponentRemoval(identity);
       }
     }
-    node.children.forEach((child, index) => validateInheritedNestedInternal(
-      child, prefabOwnerId, nestedSourceGuid, transform.machineId, index
-    ));
+    let inheritedChildIndex = 0;
+    node.children.forEach((child, index) => {
+      const childIdentity = document.identity.get(child.machineId);
+      if (!childIdentity) throw new Error(`Missing identity ${child.machineId}.`);
+      if (childIdentity.origin === 'inherited' || child.nestedSourceGuid) {
+        validateInheritedNestedInternal(
+          child, prefabOwnerId, nestedSourceGuid, transform.machineId, inheritedChildIndex++
+        );
+        return;
+      }
+      if (childIdentity.kind !== 'gameObject' ||
+          childIdentity.prefabOwnerId !== document.variantRootId) {
+        throw new Error(
+          `Local GameObject ${child.machineId} below inherited nested ${node.machineId} ` +
+          'requires the emitted leaf PrefabInstance owner.'
+        );
+      }
+      const childTransform = findOwnedTransform(document, child.machineId);
+      if (childTransform.origin === 'inherited' ||
+          childTransform.prefabOwnerId !== document.variantRootId) {
+        throw new Error(`Local GameObject ${child.machineId} has ambiguous Transform ownership.`);
+      }
+      buildNode(
+        child,
+        requireLeafOwnedTransformStub(transform),
+        index,
+        transform.machineId
+      );
+    });
   };
 
   const buildNode = (

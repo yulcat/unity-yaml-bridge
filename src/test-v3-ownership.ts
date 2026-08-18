@@ -2431,6 +2431,84 @@ console.log('\n=== v3 ownership cold-boundary edits ===');
 
 {
   const document = readV3(sourceBackedVariantText());
+  const component = document.variantRoots![0].children[0].components[0];
+  const identity = document.identity.get(component.machineId)!;
+  identity.baselineDetails = { m_Overlap: 1 };
+  document.details.set(component.machineId, { m_Overlap: 1 });
+  const rootDetails: any = document.details.get(document.variantRootId!)!;
+  rootDetails.m_Modification.m_Modifications.push({
+    target: { fileID: identity.sourceFileId, guid: identity.sourceGuid, type: 3 },
+    propertyPath: 'm_Overlap', value: 'raw', objectReference: { fileID: 0 },
+  });
+  expectThrow(
+    () => compileV3(document),
+    'overlaps newly authored semantic modification',
+    'baseline-equal direct DETAILS rejects an exact preserved raw modification conflict'
+  );
+}
+
+{
+  const document = readV3(sourceBackedVariantText());
+  const component = document.variantRoots![0].children[0].components[0];
+  const identity = document.identity.get(component.machineId)!;
+  identity.baselineDetails = { m_Overlap: { x: 1 } };
+  document.details.set(component.machineId, { 'm_Overlap.x': 1 });
+  const rootDetails: any = document.details.get(document.variantRootId!)!;
+  rootDetails.m_Modification.m_Modifications.push({
+    target: { fileID: identity.sourceFileId, guid: identity.sourceGuid, type: 3 },
+    propertyPath: 'm_Overlap', value: 'raw-parent', objectReference: { fileID: 0 },
+  });
+  expectThrow(
+    () => compileV3(document),
+    'overlaps newly authored semantic modification',
+    'baseline-equal direct DETAILS rejects a preserved raw parent conflict'
+  );
+}
+
+{
+  const document = readV3(sourceBackedVariantText());
+  const component = document.variantRoots![0].children[0].components[0];
+  const identity = document.identity.get(component.machineId)!;
+  identity.baselineDetails = { m_Overlap: 1 };
+  document.details.set(component.machineId, { m_Overlap: 1 });
+  const rootDetails: any = document.details.get(document.variantRootId!)!;
+  rootDetails.m_Modification.m_Modifications.unshift({
+    target: { fileID: identity.sourceFileId, guid: identity.sourceGuid, type: 3 },
+    propertyPath: 'm_Overlap.x', value: 'raw-child', objectReference: { fileID: 0 },
+  });
+  expectThrow(
+    () => compileV3(document),
+    'overlaps newly authored semantic modification',
+    'baseline-equal direct DETAILS rejects a preserved raw child conflict'
+  );
+}
+
+{
+  const document = readV3(sourceBackedVariantText());
+  const component = document.variantRoots![0].children[0].components[0];
+  const identity = document.identity.get(component.machineId)!;
+  identity.baselineDetails = { m_Equal: 1, m_Changed: 1 };
+  document.details.set(component.machineId, { m_Equal: 1, m_Changed: 2 });
+  const rootDetails: any = document.details.get(document.variantRootId!)!;
+  rootDetails.m_Modification.m_Modifications.unshift({
+    target: { fileID: identity.sourceFileId, guid: identity.sourceGuid, type: 3 },
+    propertyPath: 'm_RawOnly', value: 'preserved', objectReference: { fileID: 0 },
+  });
+  const compiled = parseUnityYaml(writeUnityYaml(compileV3(document)));
+  const targetDeltas = compiled.prefabInstances[0].modifications.filter(modification =>
+    String(modification.target.fileID) === identity.sourceFileId &&
+    modification.target.guid === identity.sourceGuid
+  );
+  assert(!targetDeltas.some(modification => modification.propertyPath === 'm_Equal') &&
+         targetDeltas.some(modification =>
+           modification.propertyPath === 'm_Changed' && modification.value === '2') &&
+         targetDeltas.some(modification =>
+           modification.propertyPath === 'm_RawOnly' && modification.value === 'preserved'),
+    'nonconflicting baseline-equal semantic values suppress while changed values emit beside preserved raw modifications');
+}
+
+{
+  const document = readV3(sourceBackedVariantText());
   const child = document.variantRoots![0].children[0];
   const component = child.components[0];
   const identity = document.identity.get(component.machineId)!;

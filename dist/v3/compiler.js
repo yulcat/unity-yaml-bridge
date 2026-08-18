@@ -305,6 +305,7 @@ function compileVariant(document) {
     const effectiveDirectInheritedGameObjects = new Set();
     const explicitRemovedDirectInheritedGameObjects = new Set();
     const inheritedNestedOverrides = [];
+    const authoredSemanticPaths = [];
     const hasInheritedStructure = [...document.identity.values()].some(identity => identity.origin === 'inherited');
     const requireEmittedPrefabOwner = (identity, operation) => {
         if (!identity.sourceGuid || !identity.sourceFileId) {
@@ -368,22 +369,8 @@ function compileVariant(document) {
             type: 3,
         });
     };
-    const queueInheritedNestedOverride = (identity, propertyPath, value, objectReference = { fileID: 0 }) => {
+    const emitInheritedNestedOverride = (identity, propertyPath, value, objectReference = { fileID: 0 }) => {
         const ownerId = requireEmittedPrefabOwner(identity, 'override');
-        const duplicate = inheritedNestedOverrides.find(override => override.ownerId === ownerId && override.propertyPath === propertyPath &&
-            String(override.target.fileID) === identity.sourceFileId &&
-            String(override.target.guid) === identity.sourceGuid);
-        if (duplicate) {
-            throw new Error(`Inherited nested overrides ${duplicate.machineId} and ${identity.machineId} have an ambiguous owner/source path.`);
-        }
-        const overlap = inheritedNestedOverrides.find(override => override.ownerId === ownerId &&
-            String(override.target.fileID) === identity.sourceFileId &&
-            String(override.target.guid) === identity.sourceGuid &&
-            (0, override_validation_1.pathsHaveSegmentPrefixOverlap)(override.propertyPath, propertyPath));
-        if (overlap) {
-            throw new Error(`Inherited nested override ${identity.machineId}.${propertyPath} overlaps another property path ` +
-                `${overlap.propertyPath}.`);
-        }
         inheritedNestedOverrides.push({
             machineId: identity.machineId,
             ownerId,
@@ -392,6 +379,21 @@ function compileVariant(document) {
             value,
             objectReference,
         });
+    };
+    const registerAuthoredSemanticPath = (identity, propertyPath) => {
+        const ownerId = requireEmittedPrefabOwner(identity, 'override');
+        const targetKey = `${identity.sourceGuid}:${identity.sourceFileId}`;
+        const conflict = authoredSemanticPaths.find(path => path.ownerId === ownerId && path.targetKey === targetKey &&
+            (path.propertyPath === propertyPath ||
+                (0, override_validation_1.pathsHaveSegmentPrefixOverlap)(path.propertyPath, propertyPath)));
+        if (conflict?.propertyPath === propertyPath) {
+            throw new Error(`Inherited nested overrides ${conflict.machineId} and ${identity.machineId} have an ambiguous owner/source path.`);
+        }
+        if (conflict) {
+            throw new Error(`Inherited nested override ${identity.machineId}.${propertyPath} overlaps another property path ` +
+                `${conflict.propertyPath}.`);
+        }
+        authoredSemanticPaths.push({ machineId: identity.machineId, ownerId, targetKey, propertyPath });
     };
     const queueInheritedNestedDetails = (identity) => {
         const details = document.details.get(identity.machineId);
@@ -444,17 +446,6 @@ function compileVariant(document) {
             return authoredKeys.length === baselineKeys.length &&
                 authoredKeys.every((key, index) => key === baselineKeys[index] && Object.is(authoredReference[key], baselineReference[key]));
         };
-        const authoredPaths = [];
-        const registerAuthoredPath = (propertyPath) => {
-            const conflict = authoredPaths.find(existing => existing === propertyPath || (0, override_validation_1.pathsHaveSegmentPrefixOverlap)(existing, propertyPath));
-            if (conflict === propertyPath) {
-                throw new Error(`Inherited nested overrides ${identity.machineId} and ${identity.machineId} have an ambiguous owner/source path.`);
-            }
-            if (conflict) {
-                throw new Error(`Inherited nested override ${identity.machineId}.${propertyPath} overlaps another property path ${conflict}.`);
-            }
-            authoredPaths.push(propertyPath);
-        };
         for (const [propertyPath, value] of Object.entries(details).sort(([left], [right]) => left.localeCompare(right))) {
             if (propertyPath.length === 0) {
                 throw new Error(`Inherited nested DETAILS ${identity.machineId} has an empty property path.`);
@@ -465,11 +456,11 @@ function compileVariant(document) {
                 throw new Error(`Inherited nested DETAILS ${identity.machineId}.${propertyPath} is structural and not supported.`);
             }
             if (value === null) {
-                registerAuthoredPath(propertyPath);
+                registerAuthoredSemanticPath(identity, propertyPath);
                 const baseline = baselineAt(propertyPath);
                 if (baseline.found && Object.is(baseline.value, null))
                     continue;
-                queueInheritedNestedOverride(identity, propertyPath, '', { fileID: 0 });
+                emitInheritedNestedOverride(identity, propertyPath, '', { fileID: 0 });
                 continue;
             }
             if (typeof value === 'object') {
@@ -484,21 +475,22 @@ function compileVariant(document) {
                 const isReferenceShape = keys.includes('$ref') || keys.includes('fileID');
                 if (!isReferenceShape) {
                     const leaves = flattenPrimitiveOverrideObject(propertyPath, value, `${identity.machineId}.${propertyPath}`);
-                    for (const leaf of leaves)
-                        registerAuthoredPath(leaf.propertyPath);
+                    for (const leaf of leaves) {
+                        registerAuthoredSemanticPath(identity, leaf.propertyPath);
+                    }
                     for (const leaf of leaves) {
                         const baseline = baselineAt(leaf.propertyPath);
                         if (baseline.found && Object.is(baseline.value, leaf.canonicalValue))
                             continue;
-                        queueInheritedNestedOverride(identity, leaf.propertyPath, leaf.value);
+                        emitInheritedNestedOverride(identity, leaf.propertyPath, leaf.value);
                     }
                     continue;
                 }
                 const objectReference = resolveReference(value, `${identity.machineId}.${propertyPath}`);
-                registerAuthoredPath(propertyPath);
+                registerAuthoredSemanticPath(identity, propertyPath);
                 if (referencesEqual(propertyPath, objectReference))
                     continue;
-                queueInheritedNestedOverride(identity, propertyPath, '', objectReference);
+                emitInheritedNestedOverride(identity, propertyPath, '', objectReference);
                 continue;
             }
             if (typeof value !== 'string' && typeof value !== 'number' && typeof value !== 'boolean') {
@@ -507,11 +499,11 @@ function compileVariant(document) {
             if (typeof value === 'number' && !Number.isFinite(value)) {
                 throw new Error(`Inherited nested DETAILS ${identity.machineId}.${propertyPath} requires a finite number.`);
             }
-            registerAuthoredPath(propertyPath);
+            registerAuthoredSemanticPath(identity, propertyPath);
             const baseline = baselineAt(propertyPath);
             if (baseline.found && Object.is(baseline.value, value))
                 continue;
-            queueInheritedNestedOverride(identity, propertyPath, typeof value === 'boolean' ? (value ? '1' : '0') : String(value));
+            emitInheritedNestedOverride(identity, propertyPath, typeof value === 'boolean' ? (value ? '1' : '0') : String(value));
         }
     };
     const assertUniqueInheritedSourceTarget = (identity, operation) => {
@@ -671,7 +663,8 @@ function compileVariant(document) {
             throw new Error(`Structural editing of inherited nested PrefabInstance ${prefabOwnerId} internals is not implemented.`);
         }
         if (gameObject.displayName !== node.name) {
-            queueInheritedNestedOverride(gameObject, 'm_Name', node.name);
+            registerAuthoredSemanticPath(gameObject, 'm_Name');
+            emitInheritedNestedOverride(gameObject, 'm_Name', node.name);
         }
         queueInheritedNestedDetails(gameObject);
         desiredInheritedNestedInternals.add(gameObject.machineId);
@@ -821,7 +814,8 @@ function compileVariant(document) {
                 throw new Error(`Structural editing of direct inherited GameObject ${goIdentity.machineId} is not implemented.`);
             }
             if (!goIdentity.prefabOwnerId && goIdentity.displayName !== node.name) {
-                queueInheritedNestedOverride(goIdentity, 'm_Name', node.name);
+                registerAuthoredSemanticPath(goIdentity, 'm_Name');
+                emitInheritedNestedOverride(goIdentity, 'm_Name', node.name);
             }
             if (!goIdentity.prefabOwnerId) {
                 queueInheritedNestedDetails(goIdentity);
@@ -1219,16 +1213,19 @@ function compileVariant(document) {
                     return false;
                 });
             }
+            for (const semanticPath of authoredSemanticPaths) {
+                if (semanticPath.ownerId !== identity.machineId)
+                    continue;
+                const rawConflict = (preservedRawSourcePaths.get(semanticPath.targetKey) ?? []).find(propertyPath => propertyPath === semanticPath.propertyPath ||
+                    (0, override_validation_1.pathsHaveSegmentPrefixOverlap)(propertyPath, semanticPath.propertyPath));
+                if (rawConflict) {
+                    throw new Error(`Preserved raw modification ${semanticPath.targetKey}.${rawConflict} overlaps newly authored semantic ` +
+                        `modification ${semanticPath.propertyPath}.`);
+                }
+            }
             for (const override of inheritedNestedOverrides) {
                 if (override.ownerId !== identity.machineId)
                     continue;
-                const targetKey = `${String(override.target.guid)}:${String(override.target.fileID)}`;
-                const rawConflict = (preservedRawSourcePaths.get(targetKey) ?? []).find(propertyPath => propertyPath === override.propertyPath ||
-                    (0, override_validation_1.pathsHaveSegmentPrefixOverlap)(propertyPath, override.propertyPath));
-                if (rawConflict) {
-                    throw new Error(`Preserved raw modification ${targetKey}.${rawConflict} overlaps newly authored semantic ` +
-                        `modification ${override.propertyPath}.`);
-                }
                 if (!Array.isArray(modification.m_Modifications))
                     modification.m_Modifications = [];
                 upsertModification(modification.m_Modifications, override.target, override.propertyPath, override.value, override.objectReference);

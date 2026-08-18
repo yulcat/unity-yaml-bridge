@@ -708,6 +708,93 @@ console.log('\n=== v3 ownership cold-boundary edits ===');
         assert(ambiguousOwnershipText !== text, 'nested-in-nested ownership ambiguity fixture changes the direct owner');
         expectThrow(() => (0, reader_1.readV3)(ambiguousOwnershipText), 'is not directly owned by', 'nested-in-nested PrefabInstance metadata rejects an ambiguous direct owner');
         const deepComponent = document.identity.get(innerBoundary.components[0].machineId);
+        const colorComponent = innerBoundary.components
+            .map(component => document.identity.get(component.machineId))
+            .find(identity => identity.sourceFileId === '4831563456679647078');
+        document.details.set(colorComponent.machineId, {
+            m_RaycastPadding: { x: 1, w: 4 },
+            m_Color: { b: 0.25, a: 0.5 },
+        });
+        const objectEdited = (0, unity_yaml_parser_1.parseUnityYaml)((0, unity_yaml_writer_1.writeUnityYaml)((0, compiler_1.compileV3)(document)));
+        const objectDeltas = objectEdited.prefabInstances[0].modifications.filter(modification => String(modification.target.fileID) === colorComponent.sourceFileId &&
+            modification.target.guid === colorComponent.sourceGuid);
+        assert(JSON.stringify(objectDeltas.map(modification => [
+            modification.propertyPath, modification.value, String(modification.objectReference.fileID),
+        ])) === JSON.stringify([
+            ['m_Color.a', '0.5', '0'],
+            ['m_Color.b', '0.25', '0'],
+            ['m_RaycastPadding.w', '4', '0'],
+            ['m_RaycastPadding.x', '1', '0'],
+        ]), 'primitive Color and Vector DETAILS objects flatten into deterministic scalar leaf modifications at arbitrary inherited depth');
+        const exportedObject = (0, reader_1.readV3)((0, writer_1.writeV3)(objectEdited, {
+            sourceResolver: {
+                resolveFilePath: guid => guid === outerGuid ? outerPath :
+                    guid === middleGuid ? middlePath : guid === innerGuid ? innerPath : undefined,
+            },
+        }));
+        const exportedColorComponent = [...exportedObject.identity.values()].find(identity => identity.kind === 'component' && identity.sourceGuid === colorComponent.sourceGuid &&
+            identity.sourceFileId === colorComponent.sourceFileId);
+        const exportedColorDetails = exportedObject.details.get(exportedColorComponent.machineId);
+        assert(JSON.stringify(exportedColorDetails.m_Color) === JSON.stringify({ a: 0.5, b: 0.25 }) &&
+            JSON.stringify(exportedColorDetails.m_RaycastPadding) === JSON.stringify({ w: 4, x: 1 }), 'existing scalar leaf modifications export as partial Color and Vector objects without baseline leaves');
+        const coldObject = (0, unity_yaml_parser_1.parseUnityYaml)((0, unity_yaml_writer_1.writeUnityYaml)((0, compiler_1.compileV3)(exportedObject)));
+        const coldObjectPaths = coldObject.prefabInstances[0].modifications
+            .filter(modification => String(modification.target.fileID) === colorComponent.sourceFileId &&
+            modification.target.guid === colorComponent.sourceGuid)
+            .map(modification => modification.propertyPath);
+        assert(JSON.stringify(coldObjectPaths) === JSON.stringify([
+            'm_Color.a', 'm_Color.b', 'm_RaycastPadding.w', 'm_RaycastPadding.x',
+        ]), 'partial object export cold-roundtrips the exact leaf override set');
+        const unprovenFlat = (0, unity_yaml_parser_1.parseUnityYaml)((0, unity_yaml_writer_1.writeUnityYaml)(objectEdited));
+        unprovenFlat.prefabInstances[0].modifications.push({
+            target: { fileID: colorComponent.sourceFileId, guid: colorComponent.sourceGuid, type: 3 },
+            propertyPath: 'm_Unproven.x', value: '7', objectReference: { fileID: '0' },
+        });
+        const exportedFlat = (0, reader_1.readV3)((0, writer_1.writeV3)(unprovenFlat, {
+            sourceResolver: {
+                resolveFilePath: guid => guid === outerGuid ? outerPath :
+                    guid === middleGuid ? middlePath : guid === innerGuid ? innerPath : undefined,
+            },
+        }));
+        const exportedFlatIdentity = [...exportedFlat.identity.values()].find(identity => identity.kind === 'component' && identity.sourceGuid === colorComponent.sourceGuid &&
+            identity.sourceFileId === colorComponent.sourceFileId);
+        assert(exportedFlat.details.get(exportedFlatIdentity.machineId)?.['m_Unproven.x'] === 7, 'an unproven scalar leaf modification remains a deterministic flat property path');
+        const coldFlat = (0, unity_yaml_parser_1.parseUnityYaml)((0, unity_yaml_writer_1.writeUnityYaml)((0, compiler_1.compileV3)(exportedFlat)));
+        assert(coldFlat.prefabInstances[0].modifications.some(modification => modification.propertyPath === 'm_Unproven.x' && modification.value === '7' &&
+            String(modification.target.fileID) === colorComponent.sourceFileId &&
+            modification.target.guid === colorComponent.sourceGuid), 'an unproven flat property path survives export and cold compilation');
+        const overlappingExport = (0, unity_yaml_parser_1.parseUnityYaml)((0, unity_yaml_writer_1.writeUnityYaml)(objectEdited));
+        overlappingExport.prefabInstances[0].modifications.push({
+            target: { fileID: colorComponent.sourceFileId, guid: colorComponent.sourceGuid, type: 3 },
+            propertyPath: 'm_Color', value: '',
+            objectReference: {
+                fileID: '21300000', guid: 'abcdefabcdefabcdefabcdefabcdefab', type: 3,
+            },
+        });
+        expectThrow(() => (0, writer_1.writeV3)(overlappingExport, {
+            sourceResolver: {
+                resolveFilePath: guid => guid === outerGuid ? outerPath :
+                    guid === middleGuid ? middlePath : guid === innerGuid ? innerPath : undefined,
+            },
+        }), 'overlaps another projected property path', 'export rejects overlapping object-reference and scalar leaf property paths');
+        exportedObject.details.set(exportedColorComponent.machineId, {
+            m_Color: { a: 0.125, nested: { enabled: true } },
+        });
+        const replacedObject = (0, unity_yaml_parser_1.parseUnityYaml)((0, unity_yaml_writer_1.writeUnityYaml)((0, compiler_1.compileV3)(exportedObject)));
+        const replacedObjectDeltas = replacedObject.prefabInstances[0].modifications.filter(modification => String(modification.target.fileID) === colorComponent.sourceFileId &&
+            modification.target.guid === colorComponent.sourceGuid);
+        assert(JSON.stringify(replacedObjectDeltas.map(modification => [
+            modification.propertyPath, modification.value,
+        ])) === JSON.stringify([
+            ['m_Color.a', '0.125'],
+            ['m_Color.nested.enabled', '1'],
+        ]), 'editing a partial object replaces its exact scalar and boolean leaf modifications');
+        exportedObject.details.delete(exportedColorComponent.machineId);
+        const removedObject = (0, unity_yaml_parser_1.parseUnityYaml)((0, unity_yaml_writer_1.writeUnityYaml)((0, compiler_1.compileV3)(exportedObject)));
+        assert(!removedObject.prefabInstances[0].modifications.some(modification => String(modification.target.fileID) === colorComponent.sourceFileId &&
+            modification.target.guid === colorComponent.sourceGuid &&
+            modification.propertyPath.startsWith('m_Color.')), 'removing a partial object removes all corresponding leaf modifications');
+        document.details.delete(colorComponent.machineId);
         document.details.set(deepComponent.machineId, { m_Enabled: true });
         const booleanEdited = (0, unity_yaml_parser_1.parseUnityYaml)((0, unity_yaml_writer_1.writeUnityYaml)((0, compiler_1.compileV3)(document)));
         const booleanDelta = booleanEdited.prefabInstances[0].modifications.find(modification => modification.propertyPath === 'm_Enabled' &&
@@ -878,10 +965,54 @@ console.log('\n=== v3 ownership cold-boundary edits ===');
             m_Icon: { $ref: deepComponent.machineId, extra: true },
         });
         expectThrow(() => (0, compiler_1.compileV3)(document), 'Invalid v3 machine reference', 'stable reference override rejects extra keys');
+        document.details.set(innerRoot.machineId, { m_Custom: { guid: 'label', type: 3 } });
+        const ordinaryGuidTypeObject = (0, unity_yaml_parser_1.parseUnityYaml)((0, unity_yaml_writer_1.writeUnityYaml)((0, compiler_1.compileV3)(document)));
+        const ordinaryGuidTypeDeltas = ordinaryGuidTypeObject.prefabInstances[0].modifications.filter(modification => String(modification.target.fileID) === innerRoot.sourceFileId &&
+            modification.target.guid === innerRoot.sourceGuid &&
+            modification.propertyPath.startsWith('m_Custom.'));
+        assert(JSON.stringify(ordinaryGuidTypeDeltas.map(modification => [
+            modification.propertyPath, modification.value,
+        ])) === JSON.stringify([
+            ['m_Custom.guid', 'label'], ['m_Custom.type', '3'],
+        ]), 'ordinary primitive object keys named guid and type are not misclassified as references');
         document.details.set(innerRoot.machineId, { m_Icon: [] });
-        expectThrow(() => (0, compiler_1.compileV3)(document), 'Invalid v3 object reference', 'nested override rejects array values as unsupported references');
-        document.details.set(innerRoot.machineId, { m_Icon: { arbitrary: 'object' } });
-        expectThrow(() => (0, compiler_1.compileV3)(document), 'Invalid v3 object reference', 'nested override rejects unsupported arbitrary object values');
+        expectThrow(() => (0, compiler_1.compileV3)(document), 'requires a nonempty primitive object', 'primitive object override rejects arrays');
+        document.details.set(innerRoot.machineId, { m_Custom: {} });
+        expectThrow(() => (0, compiler_1.compileV3)(document), 'requires a nonempty primitive object', 'primitive object override rejects empty objects');
+        document.details.set(innerRoot.machineId, { m_Custom: { nested: null } });
+        expectThrow(() => (0, compiler_1.compileV3)(document), 'requires a primitive leaf', 'primitive object override rejects null leaves');
+        document.details.set(innerRoot.machineId, { m_Custom: { nested: [1] } });
+        expectThrow(() => (0, compiler_1.compileV3)(document), 'requires a primitive leaf', 'primitive object override rejects nested arrays');
+        document.details.set(innerRoot.machineId, { m_Custom: { nested: { fileID: 1 } } });
+        expectThrow(() => (0, compiler_1.compileV3)(document), 'reference shape', 'primitive object override rejects nested fileID reference shapes');
+        document.details.set(innerRoot.machineId, { m_Custom: { nested: { $ref: deepComponent.machineId } } });
+        expectThrow(() => (0, compiler_1.compileV3)(document), 'reference shape', 'primitive object override rejects nested stable reference shapes');
+        document.details.set(innerRoot.machineId, { m_Custom: { nested: Number.POSITIVE_INFINITY } });
+        expectThrow(() => (0, compiler_1.compileV3)(document), 'requires a finite number', 'primitive object override rejects nonfinite number leaves');
+        document.details.set(innerRoot.machineId, { m_Custom: { 'bad.key': 1 } });
+        expectThrow(() => (0, compiler_1.compileV3)(document), 'unsafe object key', 'primitive object override rejects path-delimiter keys');
+        document.details.set(innerRoot.machineId, { m_Custom: { '': 1 } });
+        expectThrow(() => (0, compiler_1.compileV3)(document), 'unsafe object key', 'primitive object override rejects empty nested keys');
+        document.details.set(innerRoot.machineId, { '': 1 });
+        expectThrow(() => (0, compiler_1.compileV3)(document), 'empty property path', 'nested DETAILS rejects an empty root property path');
+        class NonPlainOverride {
+            constructor() {
+                this.leaf = 1;
+            }
+        }
+        document.details.set(innerRoot.machineId, { m_Custom: new NonPlainOverride() });
+        expectThrow(() => (0, compiler_1.compileV3)(document), 'plain JSON object', 'primitive object override rejects non-plain object instances');
+        document.details.set(innerRoot.machineId, { m_Custom: { constructor: 1 } });
+        expectThrow(() => (0, compiler_1.compileV3)(document), 'unsafe object key', 'primitive object override rejects unsafe prototype keys');
+        document.details.set(innerRoot.machineId, { m_GameObject: { local: 1 } });
+        expectThrow(() => (0, compiler_1.compileV3)(document), 'is structural and not supported', 'primitive object override rejects a structural property root');
+        document.details.set(innerRoot.machineId, { 'm_GameObject.fileID': 1 });
+        expectThrow(() => (0, compiler_1.compileV3)(document), 'is structural and not supported', 'primitive object override rejects structural descendant paths');
+        document.details.set(innerRoot.machineId, {
+            m_Color: { r: 1 },
+            'm_Color.r': 0.5,
+        });
+        expectThrow(() => (0, compiler_1.compileV3)(document), 'ambiguous owner/source path', 'primitive object override rejects overlapping object and flat property paths');
         document.details.set(innerRoot.machineId, { m_Icon: { $ref: 'missingIdentity' } });
         expectThrow(() => (0, compiler_1.compileV3)(document), 'not an effective identity', 'nested override rejects dangling stable references');
         document.details.set(innerRoot.machineId, { m_Icon: { $ref: deepComponent.machineId } });

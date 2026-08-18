@@ -97,9 +97,10 @@ the containing boundary; the outermost inherited boundary is directly owned by
 the leaf variant's emitted root PrefabInstance. This preserves an unambiguous
 ownership chain without adding duplicate same-name source-root levels. Nested
 source cycles and ambiguous direct-owner metadata fail closed. Expanded nested
-source-root/internal GameObjects can now be renamed, and scalar or object-reference DETAILS on
-their GameObjects/components can be added as property overrides, at any resolved
-nested depth. The compiler walks `prefabOwner` to the emitted leaf-variant
+source-root/internal GameObjects can now be renamed, and scalar, primitive-leaf
+partial-object, or object-reference DETAILS on their GameObjects/components can
+be added as property overrides, at any resolved nested depth. The compiler walks
+`prefabOwner` to the emitted leaf-variant
 PrefabInstance, then upserts an `m_Modification.m_Modifications` entry whose
 `target` reuses the edited identity's nested-source GUID/fileID and whose
 `propertyPath` is `m_Name` or the DETAILS key. Scalar values are encoded into
@@ -109,6 +110,25 @@ and JSON booleans normalize canonically to `"1"` for `true` and `"0"` for
 no property schema in these entries, so export cannot prove that raw `0` or `1`
 was boolean and projects it as the JSON number `0` or `1`, never by property-name
 or spelling inference.
+
+A primitive-leaf partial object is a nonempty plain JSON object whose recursively
+nested leaves are only strings, finite numbers, or booleans. For example,
+`m_Color = {"r":1,"a":0.5}` compiles to exactly `m_Color.a` and `m_Color.r`;
+it does not create overrides for the omitted `g` or `b` leaves. Object keys and
+leaf paths are sorted before delta emission. Booleans use the same canonical
+`"1"`/`"0"` scalar encoding and every emitted leaf has
+`objectReference:{fileID:0}`. Empty objects, arrays, null leaves, nested `$ref`
+or `fileID` reference shapes, nonfinite numbers, empty/unsafe/path-delimiter
+keys, structural roots or descendants, and overlapping object/flat paths fail
+closed. Arrays remain explicitly deferred rather than being interpreted as
+partial objects.
+
+On export, scalar leaf modifications are grouped back into a partial nested
+object only when the resolved source baseline proves every parent path is a
+plain non-reference object. The exporter includes only modified leaves and
+never copies untouched baseline values. Without that proof it preserves the
+flat `propertyPath`. Export, cold compilation, leaf edits, and leaf removal
+therefore preserve and reconcile the exact override set.
 
 Reference-valued inherited nested DETAILS accept exactly these JSON forms:
 
@@ -121,8 +141,8 @@ Reference-valued inherited nested DETAILS accept exactly these JSON forms:
   to a string `fileID` and preserved as an explicit external/source reference.
 
 Every reference override uses `value:""`. Missing, omitted/tombstoned, or
-ambiguous `$ref` targets fail closed, as do arrays, arbitrary objects, malformed
-references, extra keys, noncanonical fileIDs/GUIDs, and external types other
+ambiguous `$ref` targets fail closed, as do arrays, malformed or extra-key
+reference shapes, noncanonical fileIDs/GUIDs, and external types other
 than `3`. Export turns a nonzero local object reference into `$ref` only when it
 has one stable local identity. An exact inherited source GUID/fileID becomes
 `$ref` only when one effective inherited identity matches; zero or multiple
@@ -178,7 +198,8 @@ fileIDs, while untouched leaf compilation emits only the leaf PrefabInstance and
 not replay intermediate addition deltas. Added-root parent stubs and added-component
 targets must resolve to exactly one direct PrefabInstance owner; ambiguous, indirect,
 missing, or duplicate ownership fails closed. Recursively expanded inherited nested
-internals support the rename/string-or-number-DETAILS override and GameObject/component
+internals support the rename/scalar/primitive-leaf-partial-object/reference DETAILS
+slices and GameObject/component
 removal slices above. A new local GameObject below any resolved nested source-root or
 internal GameObject emits leaf-owned `m_AddedGameObjects` targeting that parent's nested
 source Transform GUID/fileID; its local Transform uses a leaf-owned stripped parent proxy.

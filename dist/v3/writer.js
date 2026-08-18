@@ -577,8 +577,53 @@ function buildInheritedVariantRoots(rootInstance, sourceGuid, options, identitie
         nestedOverrides.set(key, modification);
     }
     const projectNestedOverrides = (machineId, guid, fileId, sourceName, baselineProperties) => {
+        const assignProjectedValue = (propertyPath, value) => {
+            const details = projectedDetails.get(machineId) ?? {};
+            const segments = propertyPath.split('.');
+            let baseline = baselineProperties;
+            let groupable = segments.length > 1;
+            for (const segment of segments.slice(0, -1)) {
+                if (!baseline || typeof baseline !== 'object' || Array.isArray(baseline) ||
+                    Object.prototype.hasOwnProperty.call(baseline, 'fileID') ||
+                    !Object.prototype.hasOwnProperty.call(baseline, segment)) {
+                    groupable = false;
+                    break;
+                }
+                baseline = baseline[segment];
+            }
+            if (groupable && (!baseline || typeof baseline !== 'object' || Array.isArray(baseline) ||
+                Object.prototype.hasOwnProperty.call(baseline, 'fileID'))) {
+                groupable = false;
+            }
+            if (!groupable) {
+                if (Object.keys(details).some(existing => existing.startsWith(`${propertyPath}.`) || propertyPath.startsWith(`${existing}.`))) {
+                    throw new Error(`Variant nested override ${guid}:${fileId}.${propertyPath} overlaps another projected property path.`);
+                }
+                details[propertyPath] = value;
+                projectedDetails.set(machineId, details);
+                return;
+            }
+            const root = segments[0];
+            if (Object.prototype.hasOwnProperty.call(details, root) &&
+                (!details[root] || typeof details[root] !== 'object' || Array.isArray(details[root]) ||
+                    Object.prototype.hasOwnProperty.call(details[root], 'fileID'))) {
+                throw new Error(`Variant nested override ${guid}:${fileId}.${propertyPath} overlaps another projected property path.`);
+            }
+            const partial = (details[root] ?? (details[root] = {}));
+            let cursor = partial;
+            for (const segment of segments.slice(1, -1)) {
+                const existing = cursor[segment];
+                if (existing !== undefined && (!existing || typeof existing !== 'object' || Array.isArray(existing))) {
+                    throw new Error(`Variant nested override ${guid}:${fileId}.${propertyPath} overlaps another projected property path.`);
+                }
+                cursor = (cursor[segment] ?? (cursor[segment] = {}));
+            }
+            const leaf = segments[segments.length - 1];
+            cursor[leaf] = value;
+            projectedDetails.set(machineId, details);
+        };
         let name = sourceName;
-        for (const [key, modification] of nestedOverrides) {
+        for (const [key, modification] of [...nestedOverrides].sort(([left], [right]) => left.localeCompare(right))) {
             if (!key.startsWith(`${guid}:${fileId}:`))
                 continue;
             matchedNestedOverrides.add(key);
@@ -613,9 +658,7 @@ function buildInheritedVariantRoots(rootInstance, sourceGuid, options, identitie
                 : modification.value.trim() !== '' && Number.isFinite(numeric)
                     ? numeric
                     : modification.value;
-            const details = projectedDetails.get(machineId) ?? {};
-            details[modification.propertyPath] = value;
-            projectedDetails.set(machineId, details);
+            assignProjectedValue(modification.propertyPath, value);
         }
         return name;
     };

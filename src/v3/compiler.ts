@@ -18,6 +18,58 @@ const INHERITED_OVERRIDE_STRUCTURAL_FIELDS = new Set([
   'm_Name', 'm_Script',
 ]);
 
+const SAFE_OBJECT_KEY = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const UNSAFE_OBJECT_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
+
+function flattenPrimitiveOverrideObject(
+  propertyPath: string,
+  value: unknown,
+  context: string
+): Array<{ propertyPath: string; value: string }> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`Inherited nested DETAILS ${context} requires a nonempty primitive object.`);
+  }
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw new Error(`Inherited nested DETAILS ${context} requires a plain JSON object.`);
+  }
+  const object = value as Record<string, unknown>;
+  const keys = Object.keys(object).sort();
+  if (keys.length === 0) {
+    throw new Error(`Inherited nested DETAILS ${context} requires a nonempty primitive object.`);
+  }
+  if (keys.includes('$ref') || keys.includes('fileID')) {
+    throw new Error(`Inherited nested DETAILS ${context} cannot contain a reference shape.`);
+  }
+  const leaves: Array<{ propertyPath: string; value: string }> = [];
+  for (const key of keys) {
+    if (!SAFE_OBJECT_KEY.test(key) || UNSAFE_OBJECT_KEYS.has(key)) {
+      throw new Error(`Inherited nested DETAILS ${context} has an unsafe object key ${JSON.stringify(key)}.`);
+    }
+    const childPath = `${propertyPath}.${key}`;
+    const childContext = `${context}.${key}`;
+    const child = object[key];
+    if (child === null || Array.isArray(child)) {
+      throw new Error(`Inherited nested DETAILS ${childContext} requires a primitive leaf.`);
+    }
+    if (typeof child === 'object') {
+      leaves.push(...flattenPrimitiveOverrideObject(childPath, child, childContext));
+      continue;
+    }
+    if (typeof child !== 'string' && typeof child !== 'number' && typeof child !== 'boolean') {
+      throw new Error(`Inherited nested DETAILS ${childContext} requires a primitive leaf.`);
+    }
+    if (typeof child === 'number' && !Number.isFinite(child)) {
+      throw new Error(`Inherited nested DETAILS ${childContext} requires a finite number.`);
+    }
+    leaves.push({
+      propertyPath: childPath,
+      value: typeof child === 'boolean' ? (child ? '1' : '0') : String(child),
+    });
+  }
+  return leaves;
+}
+
 export function compileV3(document: V3Document, options: V3CompileOptions = {}): UnityFile {
   if (document.version !== 3) throw new Error('compileV3 accepts v3 documents only.');
   validateSourceFingerprints(document, options);
@@ -378,8 +430,7 @@ function compileVariant(document: V3Document): UnityFile {
     const duplicate = inheritedNestedOverrides.find(override =>
       override.ownerId === ownerId && override.propertyPath === propertyPath &&
       String(override.target.fileID) === identity.sourceFileId &&
-      String(override.target.guid) === identity.sourceGuid &&
-      override.machineId !== identity.machineId
+      String(override.target.guid) === identity.sourceGuid
     );
     if (duplicate) {
       throw new Error(
@@ -399,8 +450,13 @@ function compileVariant(document: V3Document): UnityFile {
   const queueInheritedNestedDetails = (identity: V3IdentityRecord): void => {
     const details = document.details.get(identity.machineId);
     if (!details) return;
-    for (const [propertyPath, value] of Object.entries(details)) {
-      if (INHERITED_OVERRIDE_STRUCTURAL_FIELDS.has(propertyPath)) {
+    for (const [propertyPath, value] of Object.entries(details).sort(([left], [right]) =>
+      left.localeCompare(right))) {
+      if (propertyPath.length === 0) {
+        throw new Error(`Inherited nested DETAILS ${identity.machineId} has an empty property path.`);
+      }
+      if ([...INHERITED_OVERRIDE_STRUCTURAL_FIELDS].some(field =>
+        propertyPath === field || propertyPath.startsWith(`${field}.`))) {
         throw new Error(
           `Inherited nested DETAILS ${identity.machineId}.${propertyPath} is structural and not supported.`
         );
@@ -410,6 +466,17 @@ function compileVariant(document: V3Document): UnityFile {
         continue;
       }
       if (typeof value === 'object') {
+        const object = value as Record<string, unknown>;
+        const keys = Object.keys(object);
+        const isReferenceShape = keys.includes('$ref') || keys.includes('fileID');
+        if (!isReferenceShape) {
+          for (const leaf of flattenPrimitiveOverrideObject(
+            propertyPath, value, `${identity.machineId}.${propertyPath}`
+          )) {
+            queueInheritedNestedOverride(identity, leaf.propertyPath, leaf.value);
+          }
+          continue;
+        }
         const objectReference = resolveV3OverrideReference(
           value,
           machineId => {
@@ -441,6 +508,11 @@ function compileVariant(document: V3Document): UnityFile {
       if (typeof value !== 'string' && typeof value !== 'number' && typeof value !== 'boolean') {
         throw new Error(
           `Inherited nested DETAILS ${identity.machineId}.${propertyPath} requires a scalar, null, stable reference, or explicit external reference.`
+        );
+      }
+      if (typeof value === 'number' && !Number.isFinite(value)) {
+        throw new Error(
+          `Inherited nested DETAILS ${identity.machineId}.${propertyPath} requires a finite number.`
         );
       }
       queueInheritedNestedOverride(
